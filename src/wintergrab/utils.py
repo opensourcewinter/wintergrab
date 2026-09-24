@@ -10,8 +10,9 @@ import sys
 import time
 from collections.abc import Iterable, Mapping
 from email.utils import parsedate_to_datetime
+from functools import lru_cache
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit, urlunsplit
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -40,12 +41,28 @@ def add_params(url: str, params: Mapping[str, Any] | list[tuple[str, Any]] | Non
     return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
+# Already-canonical URLs (lower-case host, no default port, query or fragment, safe
+# path) are by far the most common; recognising them is much cheaper than rebuilding them.
+_CANONICAL = re.compile(r"(https?)://[a-z0-9.-]+(?::([1-9][0-9]{0,4}))?(?:/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?")
+_DEFAULT_PORT_TEXT = {"http": "80", "https": "443"}
+
+
 def canonicalize_url(url: str, *, keep_fragment: bool = False) -> str:
     """Normalize a URL so trivially different spellings compare equal.
 
     Lower-cases scheme and host, drops default ports and the fragment, sorts
     query parameters and percent-encodes unsafe characters.
     """
+    match = _CANONICAL.fullmatch(url)
+    if match is not None:
+        port = match.group(2)
+        if port is None or (port != _DEFAULT_PORT_TEXT[match.group(1)] and int(port) <= 65535):
+            return url if url.count("/") > 2 else url + "/"
+    return _canonicalize(url, keep_fragment)
+
+
+@lru_cache(maxsize=8192)
+def _canonicalize(url: str, keep_fragment: bool = False) -> str:
     parts = urlsplit(url.strip())
     scheme = parts.scheme.lower()
     host = (parts.hostname or "").lower()
@@ -61,9 +78,40 @@ def canonicalize_url(url: str, *, keep_fragment: bool = False) -> str:
     return urlunsplit((scheme, netloc, path, query, fragment))
 
 
+@lru_cache(maxsize=8192)
 def host_of(url: str) -> str:
     """Lower-case host name of a URL (``""`` if there is none)."""
     return (urlsplit(url).hostname or "").lower()
+
+
+# Links that urljoin() returns unchanged (absolute http(s)) or simply appends to the
+# base's origin (root-relative). Anything urljoin() would rewrite is left to it: dot
+# segments, characters urlsplit() strips, and empty params, queries or fragments.
+_PLAIN_HREF = re.compile(r"(?:https?://[^/?#\t\n\r\\;]|/(?!/))[^\t\n\r\\;]*(?<![?#])")
+
+
+@lru_cache(maxsize=4096)
+def _origin(base: str) -> str | None:
+    parts = urlsplit(base)
+    if parts.scheme in ("http", "https") and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return None
+
+
+def fast_urljoin(base: str, href: str) -> str:
+    """``urllib.parse.urljoin`` with fast paths for the two most common link shapes.
+
+    Absolute http(s) links come back unchanged and root-relative links without
+    dot segments are appended to the base's origin - exactly what ``urljoin``
+    returns for them, at a fraction of the cost. Everything else goes to ``urljoin``.
+    """
+    if "/." not in href and "?#" not in href and _PLAIN_HREF.fullmatch(href) is not None:
+        if href[0] == "h":
+            return href
+        origin = _origin(base)
+        if origin is not None:
+            return origin + href
+    return urljoin(base, href)
 
 
 def domain_matches(host: str, domains: Iterable[str]) -> bool:

@@ -19,7 +19,7 @@ from ..fetchers.cache import HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
-from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
+from ..utils import configure_logging, domain_matches, ensure_scheme, maybe_await, parse_retry_after
 from .checkpoint import Checkpoint
 from .exporters import Exporter, open_exporter, to_dict
 from .frontier import DiskScheduler
@@ -296,7 +296,7 @@ class Engine:
                 request, wait = self.scheduler.pop_ready(self.throttle, now)
             if request is None:
                 break
-            slot = self.throttle.slot(host_of(request.url))
+            slot = self.throttle.slot(request.host)
             self.throttle.on_start(slot, now)
             if request.retries == 0:
                 self.stats.inc("pages")
@@ -847,7 +847,7 @@ class Engine:
         if spider.max_depth is not None and depth > spider.max_depth:
             self.stats.inc("depth_filtered")
             return
-        if spider.allowed_domains and not domain_matches(host_of(request.url), spider.allowed_domains):
+        if spider.allowed_domains and not domain_matches(request.host, spider.allowed_domains):
             self.stats.inc("offsite_filtered")
             return
         self._check_serializable(request)

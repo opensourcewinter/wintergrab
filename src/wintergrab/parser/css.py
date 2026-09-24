@@ -73,14 +73,20 @@ _PSEUDO_RE = re.compile(r"^(?P<element>.*?)(?P<pseudo>::(?:text|attr\(\s*['\"]?[
 _XPATH_TAIL_RE = re.compile(r"^(?P<element>.*?)(?P<pseudo>/{1,2}(?:text\(\)|@[\w:.-]+))\s*$", re.S)
 
 
+# cssselect's class test normalises the whole class attribute for every element;
+# a plain substring test first rejects almost every element far more cheaply.
+_CLASS_TEST = re.compile(r"@class and (contains\(concat\(' ', normalize-space\(@class\), ' '\), ' ([^' ]+) '\))")
+
+
 @lru_cache(maxsize=2048)
 def css_to_xpath(query: str, xml: bool = False) -> str:
     """Translate a CSS selector (with optional ``::text``/``::attr()``) to XPath."""
     translator = _xml_translator if xml else _html_translator
     try:
-        return translator.css_to_xpath(query)
+        xpath = translator.css_to_xpath(query)
     except (SelectorError, ExpressionError) as exc:
         raise SelectorSyntaxError(f"Invalid CSS selector {query!r}: {exc}") from None
+    return _CLASS_TEST.sub(r"@class and contains(@class, '\2') and \1", xpath)
 
 
 def split_css_pseudo(query: str) -> tuple[str, str | None]:

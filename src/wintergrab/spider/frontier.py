@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any
 
 from ..errors import CheckpointError
 from ..request import Request
-from ..utils import host_of
 from .throttle import AutoThrottle
 
 if TYPE_CHECKING:
@@ -503,7 +502,7 @@ class DiskScheduler:
         blob = pickle.dumps(request.to_dict(self.spider), protocol=pickle.HIGHEST_PROTOCOL)  # may raise: no changes yet
         if hashes is not None and self._seen._add_absent(hashes):
             self._new_fps.append(fp)
-        domain = host_of(request.url)
+        domain = request.host
         row_id = self._next_id
         self._next_id += 1
         retries = request.retries

@@ -15,6 +15,7 @@ from lxml import etree
 from ..adaptive.fingerprint import VOLATILE_ATTRS, fingerprint, relocate, similar_elements
 from ..adaptive.storage import AdaptiveStorage, default_storage, storage_key
 from ..errors import SelectorSyntaxError
+from ..utils import fast_urljoin
 from . import text as _text
 from .css import css_to_xpath, looks_like_xpath, split_css_pseudo, split_xpath_tail
 
@@ -54,6 +55,20 @@ def parse_document(markup: str | bytes, kind: str = "html", base_url: str | None
     if root is None:
         root = etree.fromstring(b"<html/>" if kind == "html" else b"<root/>", parser=_parser(kind))
     return root
+
+
+def _compiled_xpath(query: str, namespaces: Mapping[str, str] | None) -> etree.XPath:
+    """A compiled XPath, cached per thread (compiling is a large share of a simple query's cost)."""
+    cache: dict[Any, etree.XPath] | None = getattr(_local, "xpath_cache", None)
+    if cache is None:
+        cache = _local.xpath_cache = {}
+    key = (query, tuple(sorted(namespaces.items())) if namespaces else None)
+    compiled = cache.get(key)
+    if compiled is None:
+        if len(cache) > 2048:
+            cache.clear()
+        compiled = cache[key] = etree.XPath(query, namespaces=namespaces, smart_strings=False)
+    return compiled
 
 
 class _Document:
@@ -336,7 +351,7 @@ class Selector:
     ) -> SelectorList:
         assert self._root is not None
         try:
-            result = self._root.xpath(xpath, namespaces=namespaces, smart_strings=False, **(variables or {}))
+            result = _compiled_xpath(xpath, namespaces)(self._root, **(variables or {}))
         except etree.XPathError as exc:
             raise SelectorSyntaxError(f"Invalid XPath {original!r}: {exc}") from None
         if not isinstance(result, list):
@@ -568,7 +583,7 @@ class Selector:
     def urljoin(self, url: str) -> str:
         """Resolve a (possibly relative) URL against the page URL / ``<base>``."""
         base = self._doc.base_url(self._top()) if self._root is not None else self._doc.url
-        return urljoin(base or "", url.strip())
+        return fast_urljoin(base or "", url.strip())
 
     def links(
         self,

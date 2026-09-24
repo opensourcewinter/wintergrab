@@ -7,7 +7,6 @@ import itertools
 from collections.abc import Iterable
 
 from ..request import Request
-from ..utils import host_of
 from .throttle import AutoThrottle
 
 _Entry = tuple[int, int, Request]
@@ -48,7 +47,7 @@ class Scheduler:
                 self.duplicates += 1
                 return False
             self._seen.add(fp)
-        domain = host_of(request.url)
+        domain = request.host
         heapq.heappush(self._queues.setdefault(domain, []), (-request.priority, next(self._counter), request))
         self._size += 1
         if request.retries:

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlencode
 
 from .errors import CheckpointError
-from .utils import add_params, canonicalize_url
+from .utils import add_params, canonicalize_url, host_of
 
 if TYPE_CHECKING:
     from .spider.spider import Spider
@@ -70,6 +70,15 @@ class Request:
             raise ValueError(f"Request URL must be absolute http(s): {self.url!r}")
 
     @property
+    def host(self) -> str:
+        """Lower-case host name of :attr:`url` (computed once per URL)."""
+        url = self.url
+        cached = self.__dict__.get("_host")
+        if cached is None or cached[0] is not url:
+            cached = self.__dict__["_host"] = (url, host_of(url))
+        return cached[1]  # type: ignore[no-any-return]
+
+    @property
     def depth(self) -> int:
         """How many links away from a start URL this request is."""
         return int(self.meta.get("depth", 0))
@@ -99,13 +108,29 @@ class Request:
         return repr(self.data).encode()
 
     def fingerprint(self) -> bytes:
-        """Identity used for duplicate filtering (method + canonical URL + body)."""
+        """Identity used for duplicate filtering (method + canonical URL + body).
+
+        Cached while the URL, method and an immutable body (none, ``str`` or
+        ``bytes``) stay the same; dict and JSON bodies are hashed every time.
+        """
+        cached = self.__dict__.get("_fingerprint")
+        if (
+            cached is not None
+            and cached[0] is self.url
+            and cached[1] is self.method
+            and cached[2] is self.data
+            and self.json is None
+        ):
+            return cached[3]  # type: ignore[no-any-return]
         h = hashlib.sha1(self.method.encode())
         h.update(b"\0")
         h.update(canonicalize_url(self.url).encode())
         h.update(b"\0")
         h.update(self.body_bytes())
-        return h.digest()
+        digest = h.digest()
+        if self.json is None and (self.data is None or isinstance(self.data, (str, bytes))):
+            self.__dict__["_fingerprint"] = (self.url, self.method, self.data, digest)
+        return digest
 
     # ------------------------------------------------------------------ #
     # checkpoint serialization
