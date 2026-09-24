@@ -282,7 +282,8 @@ class Fetcher(_HTTPBase):
                 raw = self._session.request(**kwargs)
             except Exception as exc:  # curl_cffi raises many exception types
                 err = self._wrap_error(exc, req.url, chosen)
-                self._report(chosen, rotated, ok=False)
+                if err.retryable:  # bad URLs/arguments are not the proxy's fault
+                    self._report(chosen, rotated, ok=False)
                 if attempt + 1 < attempts and err.retryable:
                     delay = self._retry_delay(attempt)
                     log.info("retrying %s in %.1fs (%s)", req.url, delay, describe(exc))
@@ -356,7 +357,11 @@ class AsyncFetcher(_HTTPBase):
     def _get_session(self) -> curl_requests.AsyncSession:
         loop = asyncio.get_running_loop()
         if self._session is None or self._loop is not loop:
-            # AsyncSessions are bound to the loop they were created on.
+            # AsyncSessions are bound to the loop they were created on. Close a
+            # session from another loop if that loop can still run it.
+            old, old_loop = self._session, self._loop
+            if old is not None and old_loop is not None and old_loop.is_running() and not old_loop.is_closed():
+                asyncio.run_coroutine_threadsafe(old.close(), old_loop)
             self._session = curl_requests.AsyncSession(max_clients=self.max_connections, **self._session_kwargs())
             self._loop = loop
         return self._session
@@ -405,7 +410,8 @@ class AsyncFetcher(_HTTPBase):
                 raise
             except Exception as exc:
                 err = self._wrap_error(exc, req.url, chosen)
-                self._report(chosen, rotated, ok=False)
+                if err.retryable:  # bad URLs/arguments are not the proxy's fault
+                    self._report(chosen, rotated, ok=False)
                 if attempt + 1 < attempts and err.retryable:
                     delay = self._retry_delay(attempt)
                     log.info("retrying %s in %.1fs (%s)", req.url, delay, describe(exc))

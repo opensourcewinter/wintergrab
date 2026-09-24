@@ -28,6 +28,7 @@ class Scheduler:
         self._counter = itertools.count()
         self._size = 0
         self.duplicates = 0
+        self.retry_count = 0  # queued requests that are retries
 
     def __len__(self) -> int:
         return self._size
@@ -50,16 +51,30 @@ class Scheduler:
         domain = host_of(request.url)
         heapq.heappush(self._queues.setdefault(domain, []), (-request.priority, next(self._counter), request))
         self._size += 1
+        if request.retries:
+            self.retry_count += 1
         return True
 
-    def pop_ready(self, throttle: AutoThrottle, now: float) -> tuple[Request | None, float | None]:
-        """Next request that may start now, or ``(None, seconds_until_one_might)``."""
-        best: tuple[int, int] | None = None
+    def pop_ready(
+        self, throttle: AutoThrottle, now: float, *, retries_only: bool = False
+    ) -> tuple[Request | None, float | None]:
+        """Next request that may start now, or ``(None, seconds_until_one_might)``.
+
+        With ``retries_only`` only requests that are retries are considered
+        (used to finish off work once ``max_pages`` is reached).
+        """
+        best: _Entry | None = None
         best_domain = ""
         wait: float | None = None
         for domain, queue in self._queues.items():
             if not queue:
                 continue
+            if retries_only:
+                head = min((e for e in queue if e[2].retries), default=None)
+                if head is None:
+                    continue
+            else:
+                head = queue[0]
             slot = throttle.slot(domain)
             if slot.active >= slot.concurrency:
                 continue  # woken up again when a request finishes
@@ -67,16 +82,22 @@ class Scheduler:
             if now < ready:
                 wait = ready - now if wait is None else min(wait, ready - now)
                 continue
-            key = (queue[0][0], queue[0][1])
-            if best is None or key < best:
-                best, best_domain = key, domain
+            if best is None or head[:2] < best[:2]:
+                best, best_domain = head, domain
         if best is None:
             return None, wait
         queue = self._queues[best_domain]
-        _, _, request = heapq.heappop(queue)
+        if queue[0] is best:
+            heapq.heappop(queue)
+        else:
+            queue.remove(best)
+            heapq.heapify(queue)
         if not queue:
             del self._queues[best_domain]
         self._size -= 1
+        request = best[2]
+        if request.retries:
+            self.retry_count -= 1
         return request, None
 
     def pending(self) -> list[Request]:
@@ -88,3 +109,4 @@ class Scheduler:
     def clear(self) -> None:
         self._queues.clear()
         self._size = 0
+        self.retry_count = 0

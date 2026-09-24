@@ -190,6 +190,8 @@ BooksSpider(crawl_dir=".crawl/books", output="books.jsonl").run()
 - The state is also checkpointed every `checkpoint_interval` seconds (60) so
   a crash loses little. If the crawl dies with an error, the queue is saved
   as well. Fix the bug and run again.
+- Reaching `max_pages` or `max_items` also keeps the unvisited queue, so you
+  can raise the limit and run again to continue (limits count across runs).
 - When the crawl finishes, the state file is removed and a `summary.json` is
   left behind.
 
@@ -246,7 +248,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `autothrottle` | `True` | Adapt speed per domain (see above). |
 | `max_delay` | `60` | Upper bound for back-off delays. |
 | `throttle` | `None` | A custom `AutoThrottle` instance. |
-| `max_pages` / `max_items` / `max_depth` | `None` | Stop after this many pages / items; don't follow deeper than this. |
+| `max_pages` / `max_items` / `max_depth` | `None` | Stop after this many pages / items; don't follow deeper than this. With `max_pages`, retries of pages already started still finish. |
 | `impersonate` | `"chrome"` | Browser fingerprint for the default HTTP session. |
 | `default_headers` | `{}` | Headers for the default HTTP session. |
 | `timeout` | `30` | Seconds per request. |

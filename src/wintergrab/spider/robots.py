@@ -42,6 +42,7 @@ class RobotsPolicy:
         future: asyncio.Future[RobotFileParser | None] = asyncio.get_running_loop().create_future()
         self._pending[origin] = future
         parser: RobotFileParser | None = None
+        completed = False
         try:
             response = await self._fetch(origin + "/robots.txt")
             if response.status == 200:
@@ -50,11 +51,18 @@ class RobotsPolicy:
                 parser.modified()
             elif response.status >= 500:
                 log.warning("robots.txt for %s returned %s; treating the site as allowed", origin, response.status)
+            completed = True
         except Exception as exc:
             log.warning("could not fetch robots.txt for %s (%s); treating the site as allowed", origin, describe(exc))
-        self._parsers[origin] = parser
-        self._pending.pop(origin, None)
-        future.set_result(parser)
+            completed = True
+        finally:
+            # Always release requests waiting on this fetch. If it was cancelled,
+            # don't cache the result so the next request tries again.
+            if completed:
+                self._parsers[origin] = parser
+            self._pending.pop(origin, None)
+            if not future.done():
+                future.set_result(parser)
         return parser
 
     async def allowed(self, url: str) -> bool:

@@ -94,11 +94,20 @@ def split_css_pseudo(query: str) -> tuple[str, str | None]:
     if not match or "," in match.group("element") or "::" in match.group("element"):
         return query, None
     element, pseudo = match.group("element"), match.group("pseudo")
-    # "div ::text" / "div *::text" mean "inside div, at any depth" (parsel semantics).
-    deep = bool(re.search(r"(\s|\s\*|^\*)$", element))
-    element = re.sub(r"\s*\*?$", "", element) if deep else element
-    if not element.strip():
-        return query, None
+    # "div ::text" / "div *::text" mean "inside div, at any depth" (parsel
+    # semantics), while "div > *::text" means "in div's children".
+    stripped = element.rstrip()
+    star = stripped.endswith("*") and (len(stripped) == 1 or stripped[-2].isspace() or stripped[-2] in ">+~")
+    before = stripped[:-1] if star else element
+    deep = False
+    if before != before.rstrip() or (star and not before):
+        base = before.rstrip()
+        if not base:
+            return query, None  # "*::text": nothing to fingerprint
+        if base[-1] in ">+~":
+            element = base + " *"
+        else:
+            element, deep = base, True
     if pseudo == "::text":
         return element, "/descendant-or-self::text()" if deep else "/text()"
     attr = re.search(r"\(\s*['\"]?([\w:.-]+)['\"]?\s*\)", pseudo)

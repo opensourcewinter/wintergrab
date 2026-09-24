@@ -132,6 +132,8 @@ class AutoThrottle:
         slot.delay = min(
             self.max_delay, max(slot.delay * self.backoff_factor, self.min_backoff_delay, retry_after or 0.0)
         )
+        # Apply the new delay right away, not only after the next request starts.
+        slot.next_start = max(slot.next_start, time.monotonic() + slot.delay)
 
     def on_error(self, domain: str) -> None:
         """A timeout or connection error: back off gently."""

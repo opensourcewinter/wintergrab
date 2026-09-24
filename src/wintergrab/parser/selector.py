@@ -374,7 +374,9 @@ class Selector:
         if elements:
             storage.save(domain, key, _record(elements))
             return result
-        if not adaptive:
+        if not adaptive or result:
+            # Nothing to relocate - or the query matched text/values we cannot
+            # fingerprint (e.g. "*::text"), which is still a valid answer.
             return result
 
         record = storage.load(domain, key)

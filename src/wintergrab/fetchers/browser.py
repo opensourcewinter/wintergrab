@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import glob
 import logging
 import os
 import platform
+import sys
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from pathlib import Path
@@ -30,6 +33,7 @@ log = logging.getLogger("wintergrab.browser")
 T = TypeVar("T")
 
 DEFAULT_BLOCKED_RESOURCES = ("image", "media", "font")
+MAX_IDLE_CONTEXTS = 16  # browser contexts (one per proxy) kept open when idle
 
 INSTALL_HINT = (
     "Browser fetching needs Playwright and a Chromium build:\n"
@@ -222,6 +226,8 @@ class AsyncBrowserFetcher:
         self._pw: Any = None
         self._browser: Any = None
         self._contexts: OrderedDict[str, Any] = OrderedDict()
+        self._context_users: dict[str, int] = {}
+        self._context_lock: asyncio.Lock | None = None
         self._persistent: Any = None
         self._lock: asyncio.Lock | None = None
         self._sem: asyncio.Semaphore | None = None
@@ -236,6 +242,7 @@ class AsyncBrowserFetcher:
         loop = asyncio.get_running_loop()
         if self._loop is not loop:
             self._lock, self._sem, self._loop = asyncio.Lock(), asyncio.Semaphore(self.max_pages), loop
+            self._context_lock = asyncio.Lock()
         assert self._lock is not None
         async with self._lock:
             if self._browser is not None or self._persistent is not None:
@@ -344,21 +351,39 @@ class AsyncBrowserFetcher:
         if self.cookies and not isinstance(self.cookies, Mapping):
             await context.add_cookies([dict(c) for c in self.cookies])
 
-    async def _context(self, proxy: str | None) -> Any:
+    async def _acquire_context(self, proxy: str | None) -> tuple[str | None, Any]:
+        """The browser context for ``proxy`` (created once, even under concurrency)."""
         if self._persistent is not None:
-            return self._persistent
+            return None, self._persistent
+        assert self._context_lock is not None
         key = proxy or ""
-        ctx = self._contexts.get(key)
-        if ctx is not None:
-            self._contexts.move_to_end(key)
-            return ctx
-        ctx = await self._browser.new_context(**self._context_options(proxy))
-        await self._prepare_context(ctx)
-        self._contexts[key] = ctx
-        while len(self._contexts) > 16:  # keep the number of open profiles bounded
-            _, old = self._contexts.popitem(last=False)
-            await old.close()
-        return ctx
+        async with self._context_lock:
+            ctx = self._contexts.get(key)
+            if ctx is None:
+                ctx = await self._browser.new_context(**self._context_options(proxy))
+                await self._prepare_context(ctx)
+                self._contexts[key] = ctx
+            else:
+                self._contexts.move_to_end(key)
+            self._context_users[key] = self._context_users.get(key, 0) + 1
+            # Keep the number of open profiles bounded, closing only idle ones.
+            excess = len(self._contexts) - MAX_IDLE_CONTEXTS
+            for old_key in list(self._contexts):
+                if excess <= 0:
+                    break
+                if self._context_users.get(old_key, 0) == 0:
+                    old = self._contexts.pop(old_key)
+                    self._context_users.pop(old_key, None)
+                    excess -= 1
+                    try:
+                        await old.close()
+                    except Exception:
+                        pass
+        return key, ctx
+
+    def _release_context(self, key: str | None) -> None:
+        if key is not None and key in self._context_users:
+            self._context_users[key] = max(0, self._context_users[key] - 1)
 
     async def aclose(self) -> None:
         """Close every tab, context and the browser itself."""
@@ -368,6 +393,7 @@ class AsyncBrowserFetcher:
             except Exception:
                 pass
         self._contexts.clear()
+        self._context_users.clear()
         for obj in (self._persistent, self._browser):
             if obj is not None:
                 try:
@@ -495,8 +521,12 @@ class AsyncBrowserFetcher:
         screenshot: str | Path | None,
     ) -> Response:
         timeout_ms = (timeout or self.timeout) * 1000
-        context = await self._context(proxy)
-        page = await context.new_page()
+        context_key, context = await self._acquire_context(proxy)
+        try:
+            page = await context.new_page()
+        except BaseException:
+            self._release_context(context_key)
+            raise
         started = time.monotonic()
         try:
             if headers:
@@ -560,6 +590,7 @@ class AsyncBrowserFetcher:
                 await page.close()
             except Exception:
                 pass
+            self._release_context(context_key)
 
     async def _wait_out_challenge(self, page: Any) -> None:
         async def challenged() -> bool:
@@ -626,8 +657,13 @@ class _LoopThread:
         asyncio.set_event_loop(self._loop)
         self._loop.run_forever()
 
-    def run(self, coro: Coroutine[Any, Any, T]) -> T:
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
+    def run(self, coro: Coroutine[Any, Any, T], timeout: float | None = None) -> T:
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return future.result(timeout)
+        except BaseException:
+            future.cancel()
+            raise
 
     def stop(self) -> None:
         if self._loop.is_closed():
@@ -635,6 +671,19 @@ class _LoopThread:
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=10)
         self._loop.close()
+
+
+_OPEN_BROWSERS: weakref.WeakSet[BrowserFetcher] = weakref.WeakSet()
+
+
+@atexit.register
+def _close_open_browsers() -> None:
+    """Close browsers left open at exit (their loop thread is still alive here)."""
+    for browser in list(_OPEN_BROWSERS):
+        try:
+            browser.close(timeout=10)
+        except Exception:  # pragma: no cover - best effort
+            pass
 
 
 class BrowserFetcher:
@@ -657,6 +706,7 @@ class BrowserFetcher:
     def _run(self, coro_factory: Callable[[], Awaitable[T]]) -> T:
         if self._runner is None:
             self._runner = _LoopThread()
+            _OPEN_BROWSERS.add(self)
 
         async def wrapper() -> T:
             return await coro_factory()
@@ -674,13 +724,17 @@ class BrowserFetcher:
         urls = list(urls)
         return self._run(lambda: self._async.get_many(urls, **kwargs))
 
-    def close(self) -> None:
-        if self._runner is not None:
+    def close(self, timeout: float | None = 30) -> None:
+        """Close the browser and its background thread."""
+        runner, self._runner = self._runner, None
+        _OPEN_BROWSERS.discard(self)
+        if runner is not None:
             try:
-                self._runner.run(self._async.aclose())
+                runner.run(self._async.aclose(), timeout=timeout)
+            except Exception as exc:
+                log.debug("error while closing the browser: %s", describe(exc))
             finally:
-                self._runner.stop()
-                self._runner = None
+                runner.stop()
 
     def __enter__(self) -> BrowserFetcher:
         return self
@@ -689,8 +743,11 @@ class BrowserFetcher:
         self.close()
 
     def __del__(self) -> None:  # pragma: no cover - best effort cleanup
+        # During interpreter shutdown the loop thread is frozen; waiting on it
+        # would hang forever (the atexit hook has already closed us anyway).
+        if getattr(self, "_runner", None) is None or sys.is_finalizing():
+            return
         try:
-            if self._runner is not None:
-                self.close()
+            self.close(timeout=10)
         except Exception:
             pass

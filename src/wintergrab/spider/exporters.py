@@ -75,19 +75,39 @@ class JsonExporter(Exporter):
         super().__init__(path, append=append)
         self._first = True
         if append and path.exists() and path.stat().st_size > 0:
-            self._fh = open(path, "r+", encoding="utf-8")  # noqa: SIM115 - closed in close()
-            content = self._fh.read()
-            end = content.rstrip().rfind("]")
-            if end == -1:
-                raise ValueError(f"{path} is not a JSON array; cannot append")
-            self._first = content[:end].strip() == "["
-            self._fh.seek(0)
-            self._fh.truncate()
-            self._fh.write(content[:end].rstrip())
+            body, count = self._reopen(path)
+            self._first = count == 0
+            self._fh = open(path, "w", encoding="utf-8")  # noqa: SIM115 - closed in close()
+            self._fh.write(body)
         else:
             self._fh = open(path, "w", encoding="utf-8")  # noqa: SIM115 - closed in close()
             self._fh.write("[")
         self._fh.flush()
+
+    @staticmethod
+    def _reopen(path: Path) -> tuple[str, int]:
+        """The existing array without its closing ``]``, and how many items it holds.
+
+        Handles files left unterminated by a crash (no ``]``, or a half-written
+        last item, which is dropped). Refuses anything that isn't recognisably
+        a JSON array we wrote, rather than risk corrupting it.
+        """
+        content = path.read_text(encoding="utf-8").rstrip()
+        candidates = []
+        if content.endswith("]"):
+            candidates.append(content[:-1].rstrip())
+        candidates.append(content)  # crashed before "]" was written
+        cut = content.rfind(",\n")
+        if cut != -1:
+            candidates.append(content[:cut])  # crashed in the middle of an item
+        for body in candidates:
+            try:
+                data = json.loads(body + "\n]")
+            except ValueError:
+                continue
+            if isinstance(data, list):
+                return body, len(data)
+        raise ValueError(f"{path} is not a JSON array wintergrab can extend; move it away or use .jsonl output")
 
     def write(self, item: Any) -> None:
         self._fh.write(("\n" if self._first else ",\n") + dumps(item))

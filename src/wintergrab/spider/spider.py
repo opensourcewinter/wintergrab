@@ -254,8 +254,20 @@ class Spider:
         except RuntimeError:
             return asyncio.run(self.arun(resume=resume))
         # Already inside an event loop (e.g. Jupyter): run in a helper thread.
+        # Signal handlers only work in the main thread, so turn Ctrl+C
+        # (KeyboardInterrupt here) into pause / force-stop requests ourselves.
         with concurrent.futures.ThreadPoolExecutor(1) as pool:
-            return pool.submit(asyncio.run, self.arun(resume=resume)).result()
+            future = pool.submit(asyncio.run, self.arun(resume=resume))
+            interrupts = 0
+            while True:
+                try:
+                    return future.result()
+                except KeyboardInterrupt:
+                    interrupts += 1
+                    if interrupts == 1:
+                        self.pause()  # stops instead when there is no crawl_dir
+                    elif self._engine is not None:
+                        self._engine.force_stop()
 
     async def stream(self, *, resume: bool = True) -> AsyncIterator[Any]:
         """Run the crawl and yield items as they are scraped::
@@ -269,12 +281,17 @@ class Spider:
         sentinel = object()
         engine = Engine(self, install_signal_handlers=False, item_queue=queue)
         self._engine = engine
+        if self._pending_command:
+            engine.request_stop(self._pending_command)
+            self._pending_command = None
+        consumer_active = True
 
         async def runner() -> None:
             try:
                 await engine.run(resume=resume)
             finally:
-                await queue.put(sentinel)
+                if consumer_active:
+                    await queue.put(sentinel)
 
         task = asyncio.create_task(runner())
         try:
@@ -285,11 +302,21 @@ class Spider:
                 yield item
             await task  # surface errors
         finally:
+            consumer_active = False
             if not task.done():
+                # The consumer stopped early: stop feeding the queue, unblock any
+                # pending put, and let the crawl shut down cleanly.
+                engine.item_queue = None
                 engine.request_stop("stopped")
-                await asyncio.wait({task}, timeout=30)
-                if not task.done():
-                    task.cancel()
+                deadline = asyncio.get_running_loop().time() + 60
+                while not task.done():
+                    while not queue.empty():
+                        queue.get_nowait()
+                    if asyncio.get_running_loop().time() > deadline:
+                        task.cancel()
+                    await asyncio.wait({task}, timeout=0.1)
+            if task.done() and not task.cancelled():
+                task.exception()  # mark as retrieved; errors after an early exit are not raised
             self._engine = None
 
     def pause(self) -> None:
