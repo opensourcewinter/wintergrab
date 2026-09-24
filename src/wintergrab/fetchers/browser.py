@@ -529,11 +529,17 @@ class AsyncBrowserFetcher:
             raise ValueError("Browser fetchers only support GET requests")
         url = ensure_scheme(url)
         req = request or Request(url)
-        use_cache = self._cache_layer is not None and not capture and not screenshot
+        layer = self._cache_layer
+        offline = layer is not None and layer.cache.mode == "offline"
+        # Captures and screenshots need a live page, so they bypass the cache -
+        # except offline, where the network is never used.
+        use_cache = layer is not None and (offline or (not capture and not screenshot))
         if use_cache:
-            assert self._cache_layer is not None
-            cached, _, _ = self._cache_layer.before(req, self.adaptive_storage)
+            assert layer is not None
+            cached, _, _ = layer.before(req, self.adaptive_storage)
             if cached is not None:
+                if capture or screenshot:
+                    log.warning("offline: %s served from cache without captures/screenshot", url)
                 return cached
         await self.start()
         assert self._sem is not None
@@ -634,6 +640,11 @@ class AsyncBrowserFetcher:
                 except Exception:  # redirects and aborted requests have no body
                     body = b""
                 request = resp.request
+                try:
+                    post_data = request.post_data
+                except Exception:  # binary bodies are not valid text
+                    buffer = request.post_data_buffer
+                    post_data = buffer.decode("latin-1") if buffer else None
                 captured.append(
                     CapturedResponse(
                         url=resp.url,
@@ -642,7 +653,7 @@ class AsyncBrowserFetcher:
                         headers=dict(resp.headers),
                         body=body,
                         resource_type=request.resource_type,
-                        request_body=request.post_data,
+                        request_body=post_data,
                         order=order,
                     )
                 )

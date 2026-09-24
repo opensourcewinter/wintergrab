@@ -10,7 +10,7 @@ import sys
 import threading
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -240,7 +240,8 @@ class Spider:
                 continue
             if since is not None:
                 modified = entry.lastmod_datetime
-                if modified is None or modified < (since if since.tzinfo else since.astimezone()):
+                cutoff = since if since.tzinfo else since.replace(tzinfo=timezone.utc)  # naive = UTC, like wg.sitemap()
+                if modified is None or modified < cutoff:
                     continue
             callback = self._sitemap_callback(entry.loc)
             if callback is not None:

@@ -147,8 +147,8 @@ def _value(sel: Selector, fmt: str) -> str:
 def _cache_options(args: argparse.Namespace) -> dict[str, Any]:
     """``--cache [DIR]`` / ``--cache-mode`` / ``--offline`` as fetcher keyword arguments."""
     mode = "offline" if getattr(args, "offline", False) else getattr(args, "cache_mode", None)
-    location = getattr(args, "cache", None)
-    if location is None and mode:
+    location: Any = getattr(args, "cache_dir", None) or getattr(args, "cache", False)
+    if not location and mode:
         location = True
     if not location:
         return {}
@@ -184,7 +184,7 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
         if args.screenshot:
             options["screenshot"] = args.screenshot
         if args.capture:
-            options["capture"] = True if args.capture == "json" else args.capture
+            options["capture"] = args.capture_filter or True
             options.setdefault("wait_until", "networkidle")
     else:
         impersonate = None if args.impersonate in ("none", "") else args.impersonate
@@ -214,6 +214,8 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
 
 def cmd_get(args: argparse.Namespace) -> int:
     urls = [ensure_scheme(u) for u in args.urls]
+    if args.capture_filter:
+        args.capture = True
     fields = _fields(args)
     if fields and not args.each:
         args.each = ["html"]  # one record for the whole page
@@ -265,7 +267,11 @@ def cmd_get(args: argparse.Namespace) -> int:
             continue
         if examples or schema:
             if schema is None:
-                schema = page.learn(examples)
+                try:
+                    schema = page.learn(examples)
+                except ValueError as exc:
+                    print(f"error: {exc}", file=sys.stderr)
+                    return 1
                 print(f"learned: {json.dumps(schema.to_dict(), ensure_ascii=False)}", file=sys.stderr)
                 if args.save_schema:
                     Path(args.save_schema).write_text(json.dumps(schema.to_dict(), indent=2, ensure_ascii=False))
@@ -481,25 +487,14 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     overrides["log_level"] = "DEBUG" if args.verbose > 0 else ("WARNING" if args.verbose < 0 else "INFO")
     to_stdout = not overrides.get("output") and not getattr(cls, "output", None)
     if to_stdout:
+        # JSON Lines on stdout, written after pipelines and de-duplication.
+        overrides["output"] = "-"
         overrides["keep_items"] = False
     try:
         spider = cls(**overrides)
     except TypeError as exc:
         raise SystemExit(f"error: {exc}") from None
 
-    if to_stdout:
-        original = spider.process_item
-
-        async def print_item(item: Any) -> Any:
-            from .utils import maybe_await
-
-            item = await maybe_await(original(item))
-            if item is not None:
-                sys.stdout.write(dumps(item) + "\n")
-                sys.stdout.flush()
-            return item
-
-        spider.process_item = print_item  # type: ignore[method-assign]
     try:
         result = spider.run(resume=not args.fresh)
     except WintergrabError as exc:
@@ -509,7 +504,7 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     print(
         f"{result.status}: {stats.get('pages', 0)} pages, {stats.get('items', 0)} items, "
         f"{stats.get('errors', 0)} errors in {stats.get('elapsed_seconds', 0):.1f}s"
-        + (f" -> {spider.output}" if spider.output else ""),
+        + (f" -> {spider.output}" if spider.output and spider.output != "-" else ""),
         file=sys.stderr,
     )
     if result.paused:
@@ -607,9 +602,8 @@ def _add_network_options(p: argparse.ArgumentParser) -> None:
 
 def _add_cache_options(p: argparse.ArgumentParser) -> None:
     group = p.add_argument_group("caching")
-    group.add_argument(
-        "--cache", nargs="?", const=True, metavar="DIR", help="cache responses on disk (default dir: .wintergrab-cache)"
-    )
+    group.add_argument("--cache", action="store_true", help="cache responses on disk (in .wintergrab-cache)")
+    group.add_argument("--cache-dir", metavar="DIR", help="cache directory (implies --cache)")
     group.add_argument(
         "--cache-mode", choices=["revalidate", "prefer", "offline", "refresh"], help="how to use the cache"
     )
@@ -672,12 +666,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--scroll", action="store_true", help="(browser) scroll to the bottom (infinite scroll)")
     g.add_argument("--headful", action="store_true", help="(browser) show the browser window")
     g.add_argument("--screenshot", metavar="FILE", help="(browser) save a full-page screenshot")
+    g.add_argument("--capture", action="store_true", help="(browser) record the page's own JSON API calls")
     g.add_argument(
-        "--capture",
-        nargs="?",
-        const="json",
+        "--capture-filter",
         metavar="URL_PATTERN",
-        help="(browser) record the page's own API calls (JSON by default, or those matching a URL glob)",
+        help="(browser) record the API calls whose URL matches this glob/substring (implies --capture)",
     )
     smart = g.add_argument_group("zero-selector extraction")
     smart.add_argument("--auto", action="store_true", help="find the page's repeating records and extract them")

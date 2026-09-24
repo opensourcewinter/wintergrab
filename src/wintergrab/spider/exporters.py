@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -203,10 +204,14 @@ class CsvExporter(Exporter):
 _IDENT = re.compile(r"[^0-9a-zA-Z_]")
 
 
-def _column(name: str) -> str:
-    """A safe, quoted SQLite column name."""
-    cleaned = _IDENT.sub("_", str(name)) or "_"
-    return '"' + cleaned.replace('"', "") + '"'
+def _sanitize(name: str) -> str:
+    cleaned = _IDENT.sub("_", str(name)).strip("_") or "field"
+    return cleaned if not cleaned[0].isdigit() else "f_" + cleaned
+
+
+def _q(name: str) -> str:
+    """Quote an identifier (already restricted to [0-9A-Za-z_])."""
+    return '"' + name + '"'
 
 
 class SqliteExporter(Exporter):
@@ -215,10 +220,15 @@ class SqliteExporter(Exporter):
     With ``unique_key`` the table gets a unique index on that column and
     items are *upserted*: re-running a crawl updates existing rows instead of
     duplicating them - handy for keeping a product catalogue current.
-    Nested values are stored as JSON text.
+    Nested values are stored as JSON text. Item keys are mapped to safe,
+    case-insensitively unique column names; the mapping is kept in the
+    database (``_wintergrab_columns``) so later runs reuse it. The exporter
+    only ever touches an ``items`` table it created itself.
     """
 
     table = "items"
+    meta_table = "_wintergrab_columns"
+    rowid = "_wg_rowid"
 
     def __init__(self, path: Path, *, append: bool, unique_key: str | None = None) -> None:
         super().__init__(path, append=append)
@@ -226,43 +236,76 @@ class SqliteExporter(Exporter):
         self._conn = sqlite3.connect(str(path))
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
-        if not append and not unique_key:
-            self._conn.execute(f"DROP TABLE IF EXISTS {self.table}")
-        self._conn.execute(f"CREATE TABLE IF NOT EXISTS {self.table} (_rowid INTEGER PRIMARY KEY AUTOINCREMENT)")
-        self._columns = {row[1] for row in self._conn.execute(f"PRAGMA table_info({self.table})")}
-        if unique_key:
-            self._ensure_columns([unique_key])
-            self._conn.execute(
-                f"CREATE UNIQUE INDEX IF NOT EXISTS idx_items_unique ON {self.table} ({_column(unique_key)})"
+        tables = {row[0] for row in self._conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if self.table in tables and self.meta_table not in tables:
+            self._conn.close()
+            raise ValueError(
+                f"{path} already has an '{self.table}' table that wintergrab did not create; use another output file"
             )
+        if self.table in tables and not append and not unique_key:
+            self._conn.execute(f"DROP TABLE {self.table}")  # a fresh crawl replaces its own previous output
+            self._conn.execute(f"DELETE FROM {self.meta_table}")
+        self._conn.execute(f"CREATE TABLE IF NOT EXISTS {self.meta_table} (key TEXT PRIMARY KEY, col TEXT NOT NULL)")
+        self._conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {self.table} ({_q(self.rowid)} INTEGER PRIMARY KEY AUTOINCREMENT)"
+        )
+        self._columns: dict[str, str] = dict(self._conn.execute(f"SELECT key, col FROM {self.meta_table}").fetchall())
+        self._used = {c.lower() for c in self._columns.values()} | {self.rowid.lower()}
+        self._used |= {row[1].lower() for row in self._conn.execute(f"PRAGMA table_info({self.table})")}
+        if unique_key:
+            column = self._column_for(unique_key)
+            for (name,) in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND name LIKE 'wg_unique_%'",
+                (self.table,),
+            ).fetchall():
+                if name != f"wg_unique_{column}":
+                    self._conn.execute(f"DROP INDEX {_q(name)}")  # unique_key changed since the last run
+            try:
+                self._conn.execute(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {_q('wg_unique_' + column)} ON {self.table} ({_q(column)})"
+                )
+            except sqlite3.IntegrityError:
+                self._conn.close()
+                raise ValueError(
+                    f"{path} already holds duplicate values of {unique_key!r}; it cannot become the unique key"
+                ) from None
         self._conn.commit()
 
-    def _ensure_columns(self, names: list[str]) -> None:
-        for name in names:
-            column = _column(name).strip('"')
-            if column not in self._columns:
-                self._conn.execute(f"ALTER TABLE {self.table} ADD COLUMN {_column(name)}")
-                self._columns.add(column)
+    def _column_for(self, key: str) -> str:
+        """The column storing item key ``key`` (created on first use)."""
+        column = self._columns.get(key)
+        if column is not None:
+            return column
+        base = _sanitize(key)
+        column, n = base, 2
+        while column.lower() in self._used:
+            column, n = f"{base}_{n}", n + 1
+        self._conn.execute(f"ALTER TABLE {self.table} ADD COLUMN {_q(column)}")
+        self._conn.execute(f"INSERT INTO {self.meta_table} (key, col) VALUES (?, ?)", (key, column))
+        self._columns[key] = column
+        self._used.add(column.lower())
+        return column
+
+    @staticmethod
+    def _value(v: Any) -> Any:
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, (str, int, float, bytes)) or v is None:
+            return v
+        return json.dumps(v, default=_json_default, ensure_ascii=False)
 
     def write(self, item: Any) -> None:
         row = to_dict(item)
         if not isinstance(row, Mapping):
             row = {"value": row}
-        values = {
-            _column(k): (
-                v
-                if isinstance(v, (str, int, float, bytes)) or v is None
-                else (int(v) if isinstance(v, bool) else json.dumps(v, default=_json_default, ensure_ascii=False))
-            )
-            for k, v in row.items()
-        }
-        self._ensure_columns(list(row))
-        columns = ", ".join(values)
+        values = {self._column_for(str(k)): self._value(v) for k, v in row.items()}
+        columns = ", ".join(_q(c) for c in values)
         marks = ", ".join("?" for _ in values)
         sql = f"INSERT INTO {self.table} ({columns}) VALUES ({marks})"
-        if self.unique_key and _column(self.unique_key) in values:
-            updates = ", ".join(f"{c} = excluded.{c}" for c in values if c != _column(self.unique_key))
-            sql += f" ON CONFLICT({_column(self.unique_key)}) DO " + (f"UPDATE SET {updates}" if updates else "NOTHING")
+        key_column = self._columns.get(self.unique_key) if self.unique_key else None
+        if key_column is not None and key_column in values:
+            updates = ", ".join(f"{_q(c)} = excluded.{_q(c)}" for c in values if c != key_column)
+            sql += f" ON CONFLICT({_q(key_column)}) DO " + (f"UPDATE SET {updates}" if updates else "NOTHING")
         self._conn.execute(sql, list(values.values()))
         self.count += 1
         self._maybe_flush()
@@ -273,6 +316,24 @@ class SqliteExporter(Exporter):
     def close(self) -> None:
         self._conn.commit()
         self._conn.close()
+
+
+class StdoutExporter(Exporter):
+    """JSON Lines on standard output (``output="-"``) - for piping crawls into other tools."""
+
+    def __init__(self, path: Path, *, append: bool) -> None:
+        super().__init__(path, append=append)
+
+    def write(self, item: Any) -> None:
+        sys.stdout.write(dumps(item) + "\n")
+        self.count += 1
+        self._maybe_flush()
+
+    def flush(self) -> None:
+        sys.stdout.flush()
+
+    def close(self) -> None:
+        sys.stdout.flush()
 
 
 EXPORTERS: dict[str, type[Exporter]] = {
@@ -288,7 +349,12 @@ EXPORTERS: dict[str, type[Exporter]] = {
 
 
 def open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter:
-    """Pick an exporter from the file extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``)."""
+    """Pick an exporter from the file extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``).
+
+    ``"-"`` writes JSON Lines to standard output.
+    """
+    if str(path) == "-":
+        return StdoutExporter(Path("-"), append=append)
     target = Path(path)
     cls = EXPORTERS.get(target.suffix.lower())
     if cls is None:

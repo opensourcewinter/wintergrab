@@ -375,6 +375,8 @@ class CacheLayer:
         """Returns ``(cached_response_to_serve, stale_entry, conditional_headers)``."""
         cache = self.cache
         if not cache.handles(request.method) or cache.mode == "refresh":
+            if cache.mode == "offline":
+                raise CacheMiss(request.url)  # offline means offline, whatever the method
             return None, None, {}
         entry = cache.get(request, self.namespace)
         if entry is None:

@@ -135,8 +135,8 @@ Browser fetchers cache rendered pages too (in their own namespace). Use
 `cache_mode="prefer"` to render each page only once.
 
 ```bash
-wintergrab crawl my_spider.py --cache .cache --cache-mode prefer     # record
-wintergrab crawl my_spider.py --cache .cache --offline               # replay, zero requests
+wintergrab crawl my_spider.py --cache-dir .cache --cache-mode prefer     # record
+wintergrab crawl my_spider.py --cache-dir .cache --offline               # replay, zero requests
 ```
 
 ## Capturing a page's API calls
@@ -153,7 +153,7 @@ page.captured_json("products")                                    # parsed bodie
 ```
 
 ```bash
-wintergrab get https://spa.example --capture "*graphql*"
+wintergrab get https://spa.example --capture-filter "*graphql*"
 ```
 
 ## Handing a browser session to fast HTTP

@@ -418,7 +418,8 @@ class AsyncFetcher(_HTTPBase):
         self.max_connections = max_connections
         self._session: curl_requests.AsyncSession | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._pending_cookies: list[dict[str, Any]] = []
+        # Cookies to (re)apply to new sessions, keyed by (domain, path, name).
+        self._pending_cookies: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     def _get_session(self) -> curl_requests.AsyncSession:
         loop = asyncio.get_running_loop()
@@ -430,7 +431,7 @@ class AsyncFetcher(_HTTPBase):
                 asyncio.run_coroutine_threadsafe(old.close(), old_loop)
             self._session = curl_requests.AsyncSession(max_clients=self.max_connections, **self._session_kwargs())
             self._loop = loop
-            for c in self._pending_cookies:
+            for c in self._pending_cookies.values():
                 self._session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"], secure=c["secure"])
         return self._session
 
@@ -443,7 +444,8 @@ class AsyncFetcher(_HTTPBase):
     ) -> None:
         """Load cookies into the session (see :meth:`Fetcher.add_cookies`)."""
         records = self._cookie_records(cookies, url, domain)
-        self._pending_cookies.extend(records)  # also applied if the session is recreated
+        for c in records:  # also applied if the session is recreated
+            self._pending_cookies[(c["domain"], c["path"], c["name"])] = c
         if self._session is not None:
             for c in records:
                 self._session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"], secure=c["secure"])

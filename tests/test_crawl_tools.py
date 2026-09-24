@@ -93,7 +93,9 @@ def test_sqlite_exporter_adds_columns(tmp_path) -> None:
     exporter.write({"a": 2, "b": {"nested": True}, "weird key!": "ok"})
     exporter.close()
     conn = sqlite3.connect(tmp_path / "x.sqlite")
-    assert conn.execute('SELECT a, b, "weird_key_" FROM items ORDER BY a').fetchall() == [
+    column = dict(conn.execute("SELECT key, col FROM _wintergrab_columns"))["weird key!"]
+    assert column == "weird_key"
+    assert conn.execute(f'SELECT a, b, "{column}" FROM items ORDER BY a').fetchall() == [
         (1, None, None),
         (2, '{"nested": true}', "ok"),
     ]

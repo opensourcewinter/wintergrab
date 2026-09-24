@@ -12,6 +12,7 @@ import sys
 import textwrap
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -270,3 +271,190 @@ async def test_one_browser_context_per_proxy_under_concurrency(site, proxies) ->
         assert all(p.status == 200 for p in pages)
         assert len(browser._contexts) == 1
         assert browser._context_users == {proxies[0].url: 0}
+
+
+# --------------------------------------------------------------------------- #
+# 0.2 review fixes
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def test_disk_frontier_crash_in_the_first_seconds_loses_nothing(site, tmp_path) -> None:
+    crawl_dir, out = tmp_path / "c", tmp_path / "items.jsonl"
+    script = tmp_path / "crawl.py"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            from wintergrab import Spider
+
+            class Slow(Spider):
+                name = "slow"
+                log_level = None
+                obey_robots_txt = False
+                concurrency = 2
+                frontier = "disk"
+                crawl_dir = {str(crawl_dir)!r}
+                output = {str(out)!r}
+                start_urls = [{site.url + "/links?n=30"!r}]   # default checkpoint_interval (60s)
+
+                def parse(self, response):
+                    if "links" in response.url:
+                        for link in response.css("a[href^='/item/']"):
+                            yield response.follow(link.attr("href") + "?delay=0.05")
+                    else:
+                        yield {{"url": response.url.split("?")[0]}}
+
+            Slow().run()
+            """
+        )
+    )
+    proc = subprocess.Popen([sys.executable, str(script)])
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline and not (out.exists() and len(out.read_text().splitlines()) >= 6):
+        time.sleep(0.05)
+    time.sleep(0.3)  # let at least one frontier commit happen
+    os.kill(proc.pid, signal.SIGKILL)
+    proc.wait()
+    subprocess.run([sys.executable, str(script)], check=True, timeout=120)
+    urls = {json.loads(line)["url"] for line in out.read_text().splitlines()}
+    assert urls == {site.url + f"/item/{i}" for i in range(30)}
+
+
+def test_disk_frontier_pause_with_only_delayed_retries(fresh_site, tmp_path) -> None:
+    class Flaky(Quiet):
+        frontier = "disk"
+        retries = 3
+
+        def start_requests(self):
+            yield Request(fresh_site.url + "/flaky/p?fail=1&code=500")
+
+        def parse(self, response):
+            yield {"ok": True}
+
+        def on_error(self, request, error):  # pragma: no cover - should not happen
+            raise AssertionError(error)
+
+    spider = Flaky(crawl_dir=str(tmp_path / "c"))
+
+    async def pause_while_retry_waits():
+        task = asyncio.ensure_future(spider.arun())
+        while not spider.stats.get("retries"):
+            await asyncio.sleep(0.01)
+        spider.pause()
+        return await task
+
+    first = asyncio.run(pause_while_retry_waits())
+    assert first.status == "paused"
+    second = Flaky(crawl_dir=str(tmp_path / "c")).run()
+    assert second.status == "finished" and second.items == [{"ok": True}] and second.stats["runs"] == 2
+
+
+def test_sqlite_exporter_handles_awkward_keys(tmp_path) -> None:
+    import sqlite3
+
+    db = tmp_path / "x.db"
+    exporter = open_exporter(db, unique_key="url")
+    exporter.write({"url": "u1", "Name": "A", "name": "a", "a-b": 1, "a b": 2, "a_b": 3, "_wg_rowid": 9, "1st": "x"})
+    exporter.write({"url": "u1", "Name": "B"})  # upsert
+    exporter.close()
+    conn = sqlite3.connect(db)
+    mapping = dict(conn.execute("SELECT key, col FROM _wintergrab_columns"))
+    assert len({c.lower() for c in mapping.values()}) == len(mapping)  # no collisions
+    rows = conn.execute("SELECT * FROM items").fetchall()
+    assert len(rows) == 1
+    cols = [d[0] for d in conn.execute("SELECT * FROM items").description]
+    record = dict(zip(cols, rows[0], strict=True))
+    assert record[mapping["Name"]] == "B" and record[mapping["name"]] == "a"
+    assert {record[mapping[k]] for k in ("a-b", "a b", "a_b")} == {1, 2, 3}
+    conn.close()
+
+    # unique_key can change between runs
+    exporter = open_exporter(db, append=True, unique_key="Name")
+    exporter.write({"url": "u2", "Name": "B"})
+    exporter.close()
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1
+
+
+def test_sqlite_exporter_refuses_foreign_tables(tmp_path) -> None:
+    import sqlite3
+
+    db = tmp_path / "mine.db"
+    sqlite3.connect(db).execute("CREATE TABLE items (x)")
+    with pytest.raises(ValueError, match="did not create"):
+        open_exporter(db)
+
+
+def test_sqlite_exporter_rejects_duplicate_unique_values(tmp_path) -> None:
+    db = tmp_path / "d.db"
+    exporter = open_exporter(db, unique_key=None)
+    exporter.write({"k": 1})
+    exporter.write({"k": 1})
+    exporter.close()
+    with pytest.raises(ValueError, match="duplicate values"):
+        open_exporter(db, append=True, unique_key="k")
+
+
+def test_blocked_responses_are_not_replayed_from_cache(fresh_site, tmp_path) -> None:
+    class SoftBlock(Quiet):
+        start_urls = [fresh_site.url + "/flaky/sb?fail=1&code=200"]
+        cache_mode = "prefer"
+        retries = 2
+
+        def is_blocked(self, response):
+            return "temporarily unavailable" in response.text
+
+        def parse(self, response):
+            yield {"attempt": response.css("#attempt::text").get()}
+
+    result = SoftBlock(cache=str(tmp_path / "cache")).run()
+    assert result.items == [{"attempt": "2"}]
+
+
+def test_crawl_unique_key_to_stdout_prints_each_item_once(site, capsys) -> None:
+    from wintergrab.cli import main
+
+    assert main(["-q", "crawl", site.url + "/products/page/1", "--each", ".product", "--field", "x=.nope::text",
+                 "--unique-key", "url", "--no-progress"]) == 0  # fmt: skip
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == len({json.loads(line)["url"] for line in lines})
+
+
+def test_offline_never_touches_the_network(fresh_site, tmp_path) -> None:
+    with pytest.raises(wg.CacheMiss):
+        wg.post(fresh_site.url + "/post", data={"a": 1}, cache=tmp_path / "c", cache_mode="offline")
+    assert sum(fresh_site.site.hits.values()) == 0
+
+
+def test_add_cookies_does_not_accumulate() -> None:
+    fetcher = wg.AsyncFetcher()
+    for _ in range(100):
+        fetcher.add_cookies({"a": "1", "b": "2"}, url="https://x.test/")
+    assert len(fetcher._pending_cookies) == 2
+
+
+def test_cli_cache_and_capture_flags_do_not_eat_urls(site, capsys) -> None:
+    from wintergrab.cli import build_parser, main
+
+    args = build_parser().parse_args(["get", "--cache", "--capture", site.url, "b"])
+    assert args.urls == [site.url, "b"] and args.cache is True and args.capture is True
+    args = build_parser().parse_args(["get", site.url, "--cache"])
+    assert args.urls == [site.url] and args.cache is True
+    assert main(["-q", "get", "--cache-dir", str(Path(os.getcwd()) / ".nope-never-used"), "--offline", site.url]) == 1
+
+
+def test_cli_learn_unknown_example_is_a_clean_error(site, capsys) -> None:
+    from wintergrab.cli import main
+
+    assert main(["-q", "get", site.url + "/books/", "--learn", "title=No such book anywhere"]) == 1
+    assert "error:" in capsys.readouterr().err
+
+
+@pytest.mark.browser
+def test_capture_keeps_binary_post_bodies(site) -> None:
+    async def post_binary(page):
+        await page.evaluate("fetch('/post', {method: 'POST', body: new Uint8Array([0xff, 0xfe, 0x00, 0x81])})")
+        await page.wait_for_timeout(300)
+
+    with wg.BrowserFetcher() as browser:
+        page = browser.get(site.url + "/product/1", capture="/post", page_action=post_binary)
+    assert len(page.captured) == 1 and page.captured[0].method == "POST"

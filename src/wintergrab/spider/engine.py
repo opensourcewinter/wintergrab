@@ -193,8 +193,9 @@ class Engine:
         restore_signals = self._install_signals()
         try:
             state = self._load_state(resume)
-            self._open_frontier(resume)
-            self._setup_output(append=state is not None)
+            frontier_existed = self._open_frontier(resume)
+            # A frontier that survived a crash means earlier output is part of this crawl.
+            self._setup_output(append=state is not None or frontier_existed)
             spider.configure_sessions(self.sessions)
             if not len(self.sessions):
                 raise RuntimeError("configure_sessions() registered no sessions")
@@ -212,11 +213,14 @@ class Engine:
                 self._restore(state)
             else:
                 await self._seed()
-            if isinstance(self.scheduler, DiskScheduler):
-                self.scheduler.commit()
             # Only now may shutdown save/clear the checkpoint: a failure above
             # must leave an existing state file untouched.
             self._state_ready = True
+            if isinstance(self.scheduler, DiskScheduler):
+                # The frontier starts recording acks right away, so the state it
+                # belongs to (stats, output mode) must exist from the start too.
+                self._save_state([])
+                self._last_checkpoint = time.monotonic()
             if self._pending_stop:
                 self._begin_stop(self._pending_stop)
             log.info(
@@ -374,10 +378,11 @@ class Engine:
             )
         return state
 
-    def _open_frontier(self, resume: bool) -> None:
+    def _open_frontier(self, resume: bool) -> bool:
+        """Open the disk frontier if configured. Returns whether an existing one was reopened."""
         kind = self.spider.frontier
         if kind == "memory":
-            return
+            return False
         if kind != "disk":
             raise ValueError(f"frontier must be 'memory' or 'disk', not {kind!r}")
         if self.checkpoint is None:
@@ -386,8 +391,15 @@ class Engine:
         if not resume:
             for suffix in ("", "-wal", "-shm"):
                 path.with_name(path.name + suffix).unlink(missing_ok=True)
-        self.scheduler = DiskScheduler(path, self.spider, dedupe=self.spider.dedupe)
+        existed = path.exists()
+        # The engine commits itself (after flushing output), so disable the
+        # frontier's own commit clock: acks must never become durable before
+        # the items produced for them.
+        self.scheduler = DiskScheduler(
+            path, self.spider, dedupe=self.spider.dedupe, commit_every=1 << 62, commit_interval=float("inf")
+        )
         self._persistent = True
+        return existed
 
     def _setup_output(self, append: bool) -> None:
         if self.spider.output:
@@ -432,7 +444,9 @@ class Engine:
         status = self._status if self._fatal is None else "stopped"
         disk = self.scheduler if isinstance(self.scheduler, DiskScheduler) else None
         pending: list[Request] = [] if disk is not None else self._pending_requests()
-        pending_count = len(self.scheduler) + len(self._delayed) + len(self._inflight) if disk else len(pending)
+        pending_count = (
+            len(self.scheduler) + len(self._delayed) + len(self._inflight) if disk is not None else len(pending)
+        )
         keep = status in ("paused", "limit") or self._fatal is not None
         if self.checkpoint is not None and self._state_ready:
             try:
@@ -518,6 +532,7 @@ class Engine:
         if isinstance(self.scheduler, DiskScheduler):
             # The queue and seen-filter live in the frontier database already.
             self.scheduler.commit()
+            self._last_commit = time.monotonic()
             state["frontier"] = "disk"
         else:
             state["pending"] = [r.to_dict(self.spider) for r in pending]
@@ -528,6 +543,9 @@ class Engine:
         now = time.monotonic()
         spider = self.spider
         if isinstance(self.scheduler, DiskScheduler) and now - self._last_commit >= 1.0:
+            # Output first, then the queue: a crash may redo work, never lose it.
+            if self.exporter is not None:
+                self.exporter.flush()
             self.scheduler.commit()  # bounds what a crash can lose to about a second of work
             self._last_commit = now
         if self.checkpoint is not None and now - self._last_checkpoint >= spider.checkpoint_interval:
@@ -645,6 +663,8 @@ class Engine:
                 log.error("is_blocked() failed: %s", describe(exc))
             if blocked:
                 self.stats.inc("blocked")
+            if (blocked or response.status in spider.retry_statuses) and response.cache_status is not None:
+                self._uncache(fetcher, request)  # never replay a block page or an error from the cache
             retry_after = parse_retry_after(response.headers.get("retry-after"), cap=600)
             if blocked or response.status in PUSHBACK_STATUSES:
                 self.throttle.on_pushback(domain, retry_after)
@@ -679,6 +699,12 @@ class Engine:
             if self._persistent and id(request) not in self._ack_deferred:
                 self._ack(request)  # children are queued by now: safe to forget the request
             self._wake()
+
+    @staticmethod
+    def _uncache(fetcher: Any, request: Request) -> None:
+        layer = getattr(fetcher, "_cache_layer", None)
+        if layer is not None:
+            layer.cache.delete(request, layer.namespace)
 
     def _share_cookies(self, response: Response) -> None:
         """Hand a browser session's cookies to every HTTP session."""
@@ -876,7 +902,11 @@ class Engine:
             return
         self.stats.inc("items")
         if self.exporter is not None:
-            self.exporter.write(processed)
+            try:
+                self.exporter.write(processed)
+            except Exception as exc:
+                self.stats.inc("export_errors")
+                log.error("could not write item to %s: %s", self.spider.output, describe(exc))
         if spider.keep_items:
             self.items.append(processed)
         if self.item_queue is not None:
