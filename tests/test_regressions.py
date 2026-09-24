@@ -457,3 +457,53 @@ def test_capture_keeps_binary_post_bodies(site) -> None:
     with wg.BrowserFetcher() as browser:
         page = browser.get(site.url + "/product/1", capture="/post", page_action=post_binary)
     assert len(page.captured) == 1 and page.captured[0].method == "POST"
+
+
+# The structure of Fastly's bot check as pypi.org served it (status 200, ~3 KB).
+FASTLY_CHALLENGE = b"""<!DOCTYPE html><html lang="en"><head>
+<link href="/_fs-ch-1T1wmsGaOgGaSxcX/assets/styles.css" rel="stylesheet" />
+<title>Client Challenge</title></head><body>
+<noscript><span>JavaScript is disabled in your browser.</span><p>Please enable JavaScript to proceed.</p></noscript>
+<div id="loading-error" role="alert">A required part of this site couldn't load.</div>
+<script src="/_fs-ch-1T1wmsGaOgGaSxcX/script.js"></script></body></html>"""
+
+
+def test_fastly_client_challenge_is_detected_as_blocked() -> None:
+    from wintergrab.fetchers import looks_blocked
+
+    page = wg.Response(
+        "https://pypi.org/search/?q=x", status=200, headers={"content-type": "text/html"}, body=FASTLY_CHALLENGE
+    )
+    assert looks_blocked(page)
+    # an ordinary page that merely asks for JavaScript is not a challenge
+    ordinary = FASTLY_CHALLENGE.replace(b"Client Challenge", b"Search results").replace(b"/_fs-ch-", b"/static-")
+    assert not looks_blocked(wg.Response("https://pypi.org/", headers={"content-type": "text/html"}, body=ordinary))
+
+
+def test_giving_up_on_a_block_page_says_why() -> None:
+    from wintergrab.errors import HTTPStatusError
+
+    page = wg.Response("https://a.test/", body=FASTLY_CHALLENGE)
+    assert str(HTTPStatusError(page)) == "HTTP 200 for https://a.test/"
+    assert str(HTTPStatusError(page, "looks like a bot-check page")).startswith(
+        "looks like a bot-check page (HTTP 200)"
+    )
+
+
+def test_redirects_off_the_allowed_domains_are_not_processed(site) -> None:
+    # 127.0.0.1 is allowed; "localhost" is the same server under a name that is not.
+    offsite = site.url.replace("127.0.0.1", "localhost") + "/quotes/"
+    seen: list[str] = []
+
+    class Hop(Spider):
+        start_urls = [site.url + "/redirect?to=" + offsite, site.url + "/redirect?to=/quotes/page/2/"]
+        allowed_domains = ["127.0.0.1"]
+        log_level = None
+
+        def parse(self, response):
+            seen.append(response.url)
+            yield {"url": response.url}
+
+    result = Hop().run()
+    assert seen == [site.url + "/quotes/page/2/"]  # the on-site redirect still works
+    assert result.stats["offsite_redirects"] == 1

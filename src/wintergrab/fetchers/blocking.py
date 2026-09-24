@@ -23,6 +23,9 @@ CHALLENGE_MARKERS: tuple[str, ...] = (
     "_incapsula_resource",
     "request unsuccessful. incapsula",
     "<title>access denied</title>",
+    "<title>client challenge</title>",  # Fastly (served with status 200)
+    "/_fs-ch-",  # Fastly challenge assets
+    "captcha-delivery.com",  # DataDome
 )
 
 BLOCK_STATUSES = frozenset({403, 429})

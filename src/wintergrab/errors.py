@@ -52,10 +52,12 @@ class FetchError(WintergrabError):
 class HTTPStatusError(WintergrabError):
     """Raised by :meth:`Response.raise_for_status` for 4xx/5xx responses."""
 
-    def __init__(self, response: Response) -> None:
-        super().__init__(f"HTTP {response.status} for {response.url}")
+    def __init__(self, response: Response, detail: str | None = None) -> None:
+        status = f"{detail} (HTTP {response.status})" if detail else f"HTTP {response.status}"
+        super().__init__(f"{status} for {response.url}")
         self.response = response
         self.status = response.status
+        self.detail = detail
 
 
 class BrowserNotAvailable(WintergrabError):

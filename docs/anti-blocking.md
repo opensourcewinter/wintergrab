@@ -127,8 +127,9 @@ The default (`wintergrab.fetchers.looks_blocked`) flags:
 
 - every 429;
 - 403/503 responses that are empty or contain common challenge markers
-  (Cloudflare, DDoS-Guard, PerimeterX, Incapsula…);
-- small 200 pages that are clearly challenge pages.
+  (Cloudflare, DDoS-Guard, PerimeterX, Incapsula, DataDome, Fastly…);
+- small 200 pages that are clearly challenge pages, such as Fastly's
+  "Client Challenge", which is served with status 200.
 
 Override it when a site signals blocks differently, e.g. a 200 page that
 says "unusual traffic":

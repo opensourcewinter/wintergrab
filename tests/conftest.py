@@ -60,6 +60,11 @@ def _browser_available() -> bool:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if not os.environ.get("WINTERGRAB_LIVE"):
+        skip_live = pytest.mark.skip(reason="talks to real websites; set WINTERGRAB_LIVE=1 to run")
+        for item in items:
+            if "live" in item.keywords:
+                item.add_marker(skip_live)
     if _browser_available():
         return
     skip = pytest.mark.skip(reason="Playwright/Chromium not available")

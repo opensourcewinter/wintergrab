@@ -19,7 +19,7 @@ from ..fetchers.cache import HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
-from ..utils import configure_logging, domain_matches, ensure_scheme, maybe_await, parse_retry_after
+from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
 from .checkpoint import Checkpoint
 from .exporters import Exporter, open_exporter, to_dict
 from .frontier import DiskScheduler
@@ -656,6 +656,18 @@ class Engine:
             self.stats.inc(f"status/{response.status}")
             self.stats.inc("bytes", len(response.body))
 
+            if (
+                spider.allowed_domains
+                and response.url != request.url
+                and domain_matches(request.host, spider.allowed_domains)
+                and not domain_matches(host_of(response.url), spider.allowed_domains)
+            ):
+                # An allowed page redirected somewhere else (possibly an internal
+                # address): never hand what it led to to the callbacks.
+                self.stats.inc("offsite_redirects")
+                log.info("dropped %s: it redirected off the allowed domains to %s", request.url, response.url)
+                return
+
             blocked = False
             try:
                 blocked = bool(spider.is_blocked(response))
@@ -686,7 +698,8 @@ class Engine:
                 ok_status = False
             if not ok_status:
                 self.stats.inc("http_errors")
-                await self._give_up(request, HTTPStatusError(response), quiet=response.status == 404)
+                detail = "looks like a bot-check page" if blocked else None
+                await self._give_up(request, HTTPStatusError(response, detail), quiet=response.status == 404)
                 return
             await self._run_callback(request, response)
         except asyncio.CancelledError:

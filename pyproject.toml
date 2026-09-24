@@ -69,6 +69,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "browser: needs Playwright and a Chromium binary (skipped when unavailable)",
+    "live: talks to real public websites; opt-in with WINTERGRAB_LIVE=1",
 ]
 filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
 

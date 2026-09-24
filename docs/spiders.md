@@ -241,7 +241,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 |---|---|---|
 | `name` | class name | Used in logs and checkpoints. |
 | `start_urls` | `()` | Where to start. |
-| `allowed_domains` | `()` | Only follow links to these domains (and subdomains). Empty = anywhere. |
+| `allowed_domains` | `()` | Only follow links to these domains (and subdomains). A page that redirects off them is dropped (`offsite_redirects` stat). Empty = anywhere. |
 | `concurrency` | `16` | Max requests in flight overall. |
 | `concurrency_per_domain` | `4` | Max requests in flight per domain. |
 | `download_delay` | `0.0` | Minimum delay between requests to one domain (jittered ±50%). |
