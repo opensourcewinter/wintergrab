@@ -106,3 +106,32 @@ def test_08_sessions_and_fallback(site) -> None:
     ).run()
     via = {item["via"] for item in result.items}
     assert via == {"fast", "browser"}
+
+
+def test_09_zero_selector(site) -> None:
+    result = load("09_zero_selector").main(site.url + "/books/", "Book number 1", "£11.50")
+    assert len(result["records"]) == 4 and result["records"][0]["title"] == "Book number 1"
+    assert [r["title"] for r in result["rows"]] == [f"Book number {i}" for i in range(1, 9)]
+    assert result["next"] == site.url + "/books/catalogue/page-2.html"
+
+
+def test_10_big_crawl(site, tmp_path) -> None:
+    import sqlite3
+
+    spider_cls = load("10_big_crawl").ShopCrawl
+    kwargs = {
+        "sitemap_urls": [],
+        "start_urls": [site.url + "/books/"],
+        "sitemap_rules": [],
+        "crawl_dir": str(tmp_path / "crawl"),
+        "cache": str(tmp_path / "cache"),
+        "output": str(tmp_path / "shop.db"),
+        "log_level": None,
+    }
+    live = spider_cls(**kwargs).run()
+    assert live.status == "finished" and live.stats["items"] == 12
+    replay = spider_cls(cache_mode="offline", **kwargs).run()
+    assert replay.stats["items"] == 12 and replay.stats["cache_hits"] >= 15
+    rows = sqlite3.connect(tmp_path / "shop.db").execute("SELECT url, title, stock, from_cache FROM items").fetchall()
+    assert len(rows) == 12  # upserted, not duplicated
+    assert all(row[3] == 1 for row in rows)  # the replay's rows replaced the live ones

@@ -15,6 +15,8 @@ practising web scraping.
 | `06_books_resumable.py` | pause/resume, AutoThrottle, proxies from env, item pipeline |
 | `07_browser_rendering.py` | JavaScript pages with `BrowserFetcher`, `wait_for`, `page_action` |
 | `08_sessions_and_fallback.py` | several sessions in one spider, escalating blocked pages to a browser |
+| `09_zero_selector.py` | `auto_extract`, learning a schema from examples, `next_page`, structured data |
+| `10_big_crawl.py` | sitemaps, disk frontier, revalidating cache + offline replay, SQLite upserts |
 
 The spiders also run from the command line:
 
