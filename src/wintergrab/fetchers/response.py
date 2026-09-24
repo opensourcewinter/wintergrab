@@ -1,0 +1,330 @@
+"""The :class:`Response` returned by every fetcher."""
+
+from __future__ import annotations
+
+import codecs
+import json as _json
+import re
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping
+from pathlib import Path
+from re import Pattern
+from typing import TYPE_CHECKING, Any
+
+from ..errors import HTTPStatusError
+from ..parser.selector import Selector, SelectorList
+
+if TYPE_CHECKING:
+    from ..adaptive.storage import AdaptiveStorage
+    from ..request import Request
+
+
+class Headers(MutableMapping[str, str]):
+    """Case-insensitive header mapping (repeated headers are joined with ``, ``)."""
+
+    def __init__(self, items: Mapping[str, str] | Iterable[tuple[str, str]] | None = None) -> None:
+        self._data: dict[str, tuple[str, list[str]]] = {}
+        if items is None:
+            return
+        pairs = items.items() if isinstance(items, Mapping) else items
+        for key, value in pairs:
+            self.add(key, value)
+
+    def add(self, key: str, value: str) -> None:
+        low = key.lower()
+        if low in self._data:
+            self._data[low][1].append(value)
+        else:
+            self._data[low] = (key, [value])
+
+    def get_list(self, key: str) -> list[str]:
+        """Every value of a repeated header (e.g. ``Set-Cookie``)."""
+        entry = self._data.get(key.lower())
+        return list(entry[1]) if entry else []
+
+    def __getitem__(self, key: str) -> str:
+        return ", ".join(self._data[key.lower()][1])
+
+    def __setitem__(self, key: str, value: str) -> None:
+        self._data[key.lower()] = (key, [value])
+
+    def __delitem__(self, key: str) -> None:
+        del self._data[key.lower()]
+
+    def __iter__(self) -> Iterator[str]:
+        return (original for original, _ in self._data.values())
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and key.lower() in self._data
+
+    def __repr__(self) -> str:
+        return f"Headers({dict(self.items())!r})"
+
+
+_META_CHARSET = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?\s*([a-zA-Z0-9_:.+-]+)""", re.I)
+_XML_ENCODING = re.compile(rb"""^\s*<\?xml[^>]+encoding\s*=\s*["']([a-zA-Z0-9_.+-]+)""", re.I)
+_BOMS = ((codecs.BOM_UTF8, "utf-8"), (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16"))
+
+
+def _valid_codec(name: str | None) -> str | None:
+    if not name:
+        return None
+    try:
+        return codecs.lookup(name.strip().strip("\"'")).name
+    except LookupError:
+        return None
+
+
+def detect_encoding(content_type: str | None, body: bytes) -> str:
+    """Charset from the Content-Type header, a BOM, ``<meta>``/XML declaration, else UTF-8."""
+    if content_type:
+        match = re.search(r"charset\s*=\s*([^\s;]+)", content_type, re.I)
+        found = _valid_codec(match.group(1)) if match else None
+        if found:
+            return found
+    for bom, name in _BOMS:
+        if body.startswith(bom):
+            return name
+    head = body[:4096]
+    for rx in (_META_CHARSET, _XML_ENCODING):
+        declared = rx.search(head)
+        if declared:
+            found = _valid_codec(declared.group(1).decode("ascii", "ignore"))
+            if found:
+                return found
+    return "utf-8"
+
+
+class Response:
+    """A downloaded page. Query it directly: ``response.css("h1::text").get()``.
+
+    Attributes:
+        url: Final URL (after redirects).
+        status: HTTP status code.
+        headers: Case-insensitive response headers.
+        body: Raw bytes.
+        request: The :class:`~wintergrab.Request` that produced it.
+        cookies: Cookies set by the server (name -> value).
+        elapsed: Seconds the download took.
+        history: URLs of redirects that were followed.
+        source: ``"http"`` or ``"browser"``.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        *,
+        status: int = 200,
+        headers: Headers | Mapping[str, str] | Iterable[tuple[str, str]] | None = None,
+        body: bytes = b"",
+        request: Request | None = None,
+        reason: str = "",
+        encoding: str | None = None,
+        cookies: Mapping[str, str] | None = None,
+        elapsed: float = 0.0,
+        history: list[str] | None = None,
+        http_version: str | None = None,
+        source: str = "http",
+        adaptive_storage: AdaptiveStorage | None = None,
+    ) -> None:
+        self.url = url
+        self.status = status
+        self.headers = headers if isinstance(headers, Headers) else Headers(headers)
+        self.body = body
+        self.request = request
+        self.reason = reason
+        self.cookies = dict(cookies or {})
+        self.elapsed = elapsed
+        self.history = list(history or [])
+        self.http_version = http_version
+        self.source = source
+        self._encoding = encoding
+        self._text: str | None = None
+        self._selector: Selector | None = None
+        self._adaptive_storage = adaptive_storage
+
+    # ------------------------------------------------------------------ #
+    # body
+    # ------------------------------------------------------------------ #
+    @property
+    def encoding(self) -> str:
+        if self._encoding is None:
+            self._encoding = detect_encoding(self.headers.get("content-type"), self.body)
+        return self._encoding
+
+    @property
+    def text(self) -> str:
+        """The body decoded to a string (like ``requests``' ``.text``)."""
+        if self._text is None:
+            self._text = self.body.decode(self.encoding, errors="replace")
+            if self._text.startswith("﻿"):
+                self._text = self._text[1:]
+        return self._text
+
+    @property
+    def content(self) -> bytes:
+        """Alias of :attr:`body`."""
+        return self.body
+
+    def json(self, **kwargs: Any) -> Any:
+        """Parse the body as JSON."""
+        return _json.loads(self.text, **kwargs)
+
+    @property
+    def content_type(self) -> str:
+        """Media type without parameters, e.g. ``"text/html"``."""
+        return self.headers.get("content-type", "").split(";")[0].strip().lower()
+
+    @property
+    def is_html(self) -> bool:
+        ctype = self.content_type
+        if ctype:
+            return "html" in ctype
+        return self.body.lstrip()[:100].lower().startswith((b"<!doctype html", b"<html"))
+
+    @property
+    def ok(self) -> bool:
+        """``True`` for 1xx-3xx statuses."""
+        return self.status < 400
+
+    @property
+    def meta(self) -> dict[str, Any]:
+        """``request.meta`` - data you attached to the request in a spider."""
+        return self.request.meta if self.request is not None else {}
+
+    def raise_for_status(self) -> Response:
+        """Raise :class:`~wintergrab.errors.HTTPStatusError` for 4xx/5xx."""
+        if self.status >= 400:
+            raise HTTPStatusError(self)
+        return self
+
+    # ------------------------------------------------------------------ #
+    # parsing (delegated to a lazily built Selector)
+    # ------------------------------------------------------------------ #
+    @property
+    def selector(self) -> Selector:
+        """The parsed document (built on first use)."""
+        if self._selector is None:
+            ctype = self.content_type
+            kind = "xml" if ("xml" in ctype and "html" not in ctype) else "html"
+            self._selector = Selector(self.text, url=self.url, type=kind, adaptive_storage=self._adaptive_storage)
+        return self._selector
+
+    def css(self, query: str, **kwargs: Any) -> SelectorList:
+        """CSS query on the page. See :meth:`Selector.css` (``adaptive=True`` etc.)."""
+        return self.selector.css(query, **kwargs)
+
+    def xpath(self, query: str, **kwargs: Any) -> SelectorList:
+        """XPath query on the page. See :meth:`Selector.xpath`."""
+        return self.selector.xpath(query, **kwargs)
+
+    def select(self, query: str, **kwargs: Any) -> SelectorList:
+        """CSS or XPath, guessed from the query."""
+        return self.selector.select(query, **kwargs)
+
+    def find_by_text(self, text: str, **kwargs: Any) -> SelectorList:
+        return self.selector.find_by_text(text, **kwargs)
+
+    def find_by_regex(self, pattern: str | Pattern[str], **kwargs: Any) -> SelectorList:
+        return self.selector.find_by_regex(pattern, **kwargs)
+
+    def extract(self, schema: Mapping[str, Any]) -> dict[str, Any]:
+        """Extract a dict with a schema of selectors. See :meth:`Selector.extract`."""
+        return self.selector.extract(schema)
+
+    def extract_all(self, query: str, schema: Mapping[str, Any], **kwargs: Any) -> list[dict[str, Any]]:
+        """Extract one dict per element matched by ``query``."""
+        return self.selector.extract_all(query, schema, **kwargs)
+
+    def links(self, css: str | None = None, **kwargs: Any) -> list[str]:
+        """Absolute URLs of the page's links. See :meth:`Selector.links`."""
+        return self.selector.links(css, **kwargs)
+
+    def re(self, pattern: str | Pattern[str], flags: int = 0) -> list[str]:
+        """Regex over the raw body text."""
+        from ..parser.selector import _regex_all
+
+        return _regex_all(pattern, self.text, flags)
+
+    def re_first(self, pattern: str | Pattern[str], default: str | None = None, flags: int = 0) -> str | None:
+        found = self.re(pattern, flags)
+        return found[0] if found else default
+
+    @property
+    def title(self) -> str | None:
+        """Contents of ``<title>``."""
+        return self.selector.css("title").text
+
+    def get_text(self) -> str:
+        """Readable text of the page body."""
+        body = self.selector.css("body")
+        return (body[0] if body else self.selector).get_text()
+
+    def markdown(self, *, main_content: bool = False) -> str:
+        """The page converted to Markdown."""
+        return self.selector.markdown(main_content=main_content)
+
+    def urljoin(self, url: str) -> str:
+        """Resolve a relative URL against this page."""
+        return self.selector.urljoin(url) if self.is_html else _urljoin(self.url, url)
+
+    # ------------------------------------------------------------------ #
+    # following links (spiders)
+    # ------------------------------------------------------------------ #
+    def follow(self, url: str | Selector, callback: Any = None, **kwargs: Any) -> Request:
+        """A :class:`Request` for a link on this page (relative URLs are fine).
+
+        ``url`` may be a string, an ``<a>`` element selector, or a
+        ``::attr(href)`` text selector.
+        """
+        from ..request import Request
+
+        if isinstance(url, Selector):
+            href = url.get() if not url.is_element else (url.attr("href") or url.attr("src"))
+            if not href:
+                raise ValueError(f"{url!r} has no href")
+            url = href
+        return Request(self.urljoin(url), callback=callback, **kwargs)
+
+    def follow_all(
+        self,
+        css: str | None = None,
+        *,
+        urls: Iterable[str | Selector] | None = None,
+        callback: Any = None,
+        allow: str | Iterable[str] | None = None,
+        deny: str | Iterable[str] | None = None,
+        same_domain: bool = False,
+        **kwargs: Any,
+    ) -> list[Request]:
+        """Requests for every link matched by ``css`` (or given in ``urls``).
+
+        ``css`` may select ``<a>`` elements, containers holding links, or
+        ``::attr(href)`` values. With neither ``css`` nor ``urls``, every link
+        on the page is followed.
+        """
+        if urls is not None:
+            return [self.follow(u, callback=callback, **kwargs) for u in urls]
+        found = self.links(css, allow=allow, deny=deny, same_domain=same_domain)
+        return [self.follow(u, callback=callback, **kwargs) for u in found]
+
+    # ------------------------------------------------------------------ #
+    # misc
+    # ------------------------------------------------------------------ #
+    def save(self, path: str | Path) -> Path:
+        """Write the raw body to a file and return its path."""
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(self.body)
+        return target
+
+    def __repr__(self) -> str:
+        return f"<Response {self.status} {self.url}>"
+
+
+def _urljoin(base: str, url: str) -> str:
+    from urllib.parse import urljoin
+
+    return urljoin(base, url.strip())

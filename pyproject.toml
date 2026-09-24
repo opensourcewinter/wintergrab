@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wintergrab"
+dynamic = ["version"]
+description = "Friendly web scraping that scales from one page to big crawls: browser-like fetching, adaptive selectors, resumable async spiders."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "wintergrab contributors" }]
+keywords = ["scraping", "crawler", "spider", "web-scraping", "css-selectors", "xpath", "playwright", "curl-cffi"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Text Processing :: Markup :: HTML",
+    "Typing :: Typed",
+]
+dependencies = [
+    "lxml>=5.0",
+    "cssselect>=1.2",
+    "curl_cffi>=0.10",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.45"]
+dev = [
+    "playwright>=1.45",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+wintergrab = "wintergrab.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/opensourcewinter/wintergrab"
+Documentation = "https://github.com/opensourcewinter/wintergrab/tree/main/docs"
+Issues = "https://github.com/opensourcewinter/wintergrab/issues"
+
+[tool.hatch.version]
+path = "src/wintergrab/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wintergrab"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/wintergrab", "tests", "docs", "examples", "README.md", "LICENSE", "CHANGELOG.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "browser: needs Playwright and a Chromium binary (skipped when unavailable)",
+]
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",    # long lines are fine when they are readable
+    "B008",
+    "RUF012",  # class-level defaults on Spider are intentional
+    "SIM105",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "SIM117", "RUF001"]
+"examples/*" = ["T201"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["wintergrab"]
+mypy_path = "src"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true
