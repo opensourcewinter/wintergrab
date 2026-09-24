@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .errors import WintergrabError, describe
+from .errors import FetchError, WintergrabError, describe
 from .fetchers import AsyncBrowserFetcher, AsyncFetcher, Response
 from .parser import Selector
 from .proxy import ProxyRotator
@@ -199,7 +199,8 @@ def cmd_get(args: argparse.Namespace) -> int:
     for url, result in zip(urls, results, strict=True):
         if isinstance(result, Exception):
             failures += 1
-            print(f"error: {url}: {describe(result)}", file=sys.stderr)
+            detail = str(result) if isinstance(result, FetchError) else f"{url}: {describe(result)}"
+            print(f"error: {detail}", file=sys.stderr)
             continue
         page = result
         if args.verbose >= 0:

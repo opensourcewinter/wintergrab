@@ -130,3 +130,16 @@ def test_relocation_is_fast_on_big_pages() -> None:
     started = time.perf_counter()
     assert len(changed.css("tr.row", adaptive=True)) == 2000
     assert time.perf_counter() - started < 5
+
+
+def test_adaptive_in_extraction_schemas() -> None:
+    store = MemoryStorage()
+    schema = {"title": wg.Field("h1#title::text", adaptive=True)}
+    assert wg.Selector(old_layout(), url=URL, adaptive_storage=store).extract(schema) == {"title": "Catalog"}
+    assert wg.Selector(new_layout(), url=URL, adaptive_storage=store).extract(schema) == {"title": "Catalog"}
+
+    wg.Selector(old_layout(), url=URL, adaptive_storage=store).extract_all("#products .product", {}, adaptive=True)
+    rows = wg.Selector(new_layout(), url=URL, adaptive_storage=store).extract_all(
+        "#products .product", {"name": "h2::text"}, adaptive=True
+    )
+    assert [r["name"] for r in rows[:2]] == ["Cup 5", "Cup 6"]

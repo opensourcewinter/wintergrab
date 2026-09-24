@@ -75,6 +75,10 @@ line-length = 120
 target-version = "py310"
 src = ["src", "tests"]
 
+[tool.ruff.format]
+# Code samples in the docs are hand-aligned; leave them alone.
+exclude = ["*.md"]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
 ignore = [
