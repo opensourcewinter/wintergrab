@@ -16,7 +16,11 @@
 - **Sitemaps**: `wg.sitemap()`, `Spider.sitemap_urls/rules/follow/since`.
 - **Output**: SQLite exporter with upserts, `unique_key` de-duplication,
   buffered writers, orjson.
-- **Speed**: uvloop when installed (`[speed]` extra), leaner crawl loop.
+- **Speed**: uvloop when installed (`[speed]` extra), leaner crawl loop, and
+  profile-guided hot-path shortcuts (URL joining and canonicalisation,
+  cached request host/fingerprint, compiled XPath cache, byte-level block
+  check). Each shortcut is tested to return exactly what the code it
+  bypasses returns.
 - Live terminal progress line; `wintergrab doctor`; many new CLI flags.
 - Engine robustness: no lost requests on cancel/force-stop/fatal errors,
   crash-safe JSON output, correct Retry-After/429 pacing, signal handlers

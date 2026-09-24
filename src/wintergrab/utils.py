@@ -78,9 +78,15 @@ def _canonicalize(url: str, keep_fragment: bool = False) -> str:
     return urlunsplit((scheme, netloc, path, query, fragment))
 
 
-@lru_cache(maxsize=8192)
+# http(s) URLs with a plain host (no user info, IPv6 literal or stripped characters).
+_PLAIN_HOST = re.compile(r"https?://([A-Za-z0-9.-]+)(?::[0-9]*)?(?=[/?#]|$)")
+
+
 def host_of(url: str) -> str:
     """Lower-case host name of a URL (``""`` if there is none)."""
+    match = _PLAIN_HOST.match(url)
+    if match is not None:
+        return match.group(1).lower()
     return (urlsplit(url).hostname or "").lower()
 
 

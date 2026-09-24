@@ -138,6 +138,14 @@ def is_blocked(self, response):
     return super().is_blocked(response) or "unusual traffic" in response.text
 ```
 
+The marker scan costs about 5% of a crawl's CPU on fast local sites. On a
+site you know never serves challenge pages, you can check only the status:
+
+```python
+def is_blocked(self, response):
+    return response.status == 429
+```
+
 ## Etiquette
 
 These tools help legitimate automation get through filters that can't tell it

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import pytest
 
@@ -11,7 +11,7 @@ from wintergrab import Request, Selector
 from wintergrab.errors import SelectorSyntaxError
 from wintergrab.fetchers.blocking import has_challenge_markers
 from wintergrab.parser.css import css_to_xpath
-from wintergrab.utils import _canonicalize, canonicalize_url, fast_urljoin
+from wintergrab.utils import _canonicalize, canonicalize_url, fast_urljoin, host_of
 
 BASES = [
     "http://example.com/a/b/c.html",
@@ -69,6 +69,19 @@ def test_canonicalize_fast_path_matches_full_normalisation() -> None:
         urls.append(href if href.startswith("http") else "http://h.example" + href)
     for url in urls:
         assert _outcome(canonicalize_url, url) == _outcome(_canonicalize.__wrapped__, url), url
+
+
+def test_host_of_matches_urlsplit() -> None:
+    urls = [
+        "http://Example.COM/x", "https://h.example:8443", "http://user:pw@h.example/", "http://h.example:/x",
+        "http://[::1]:80/", "HTTP://Upper.example/", "http://h\t.example/", "http://h.example?q", "ftp://f.example/",
+        "http://h.example#top", "http://h_x.example/", "", "/relative",
+    ]  # fmt: skip
+    urls += [f"http://{href}" for href in _random_hrefs(20000, seed=5)] + _random_hrefs(5000, seed=6)
+    for url in urls:
+        expected = _outcome(lambda u: (urlsplit(u).hostname or "").lower(), url)
+        if expected is not ValueError:
+            assert host_of(url) == expected, url
 
 
 def test_class_prefilter_keeps_css_semantics() -> None:
