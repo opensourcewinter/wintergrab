@@ -251,5 +251,8 @@ pip install "wintergrab[speed]"      # uvloop + orjson
 Spiders run on uvloop automatically when it is installed
 (`use_uvloop = True`), and exporters serialise with orjson. The core
 engine is tuned as well: no per-iteration task creation in the crawl loop,
-cheap deadlines, and buffered output. See [benchmarks](../benchmarks/README.md)
-for measured numbers against other frameworks.
+cheap deadlines, buffered output, and fast paths for link joining, URL
+canonicalisation, host parsing and XPath. See
+[benchmarks](../benchmarks/README.md) for measured numbers against other
+frameworks: about 0.95 ms of CPU per page, against 2.1 ms for Crawlee and
+3.6 ms for Scrapy.

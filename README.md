@@ -38,6 +38,11 @@ thousands of pages), the same API scales up.
   and replays whole crawls offline. A disk-backed queue with a Bloom filter
   that keeps memory flat at millions of URLs and survives `kill -9`. Sitemap
   crawling, SQLite output with upserts, and a live progress line.
+- **Fast.** In a [reproducible benchmark](benchmarks/README.md) against a
+  local test shop, a wintergrab spider crawled about 1,000 pages/s on one
+  core. That is 1.8× Crawlee and 3.8× Scrapy at the same concurrency, with
+  under half their memory. On real sites, the site and your politeness
+  settings usually set the pace, not the crawler.
 - **Browser superpowers.** Capture the JSON API calls a page makes while it
   renders. Clear a login or JS check once in the browser, then continue over
   fast HTTP with the same cookies.
