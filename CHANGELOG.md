@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0
+
+First release on PyPI.
 
 - **Zero-selector extraction**: `structured_data()` (JSON-LD, microdata,
   OpenGraph, Twitter, meta), `embedded_json()` (`__NEXT_DATA__`,
@@ -25,10 +27,18 @@
 - Engine robustness: no lost requests on cancel/force-stop/fatal errors,
   crash-safe JSON output, correct Retry-After/429 pacing, signal handlers
   restored, Ctrl+C in Jupyter.
+- **Block detection** recognises Fastly's "Client Challenge" (served with
+  status 200) and DataDome, and a spider that gives up on a block page says
+  so instead of reporting a bare "HTTP 200".
+- **Security**: a page on an allowed domain that redirects elsewhere
+  (possibly to an internal address) is no longer passed to the callbacks
+  (`offsite_redirects` stat).
+- The CLI writes UTF-8 when its output is redirected (Windows pipes default
+  to cp1252). Tested on Linux, macOS and Windows, Python 3.10-3.14.
 
 ## 0.1.0
 
-First release.
+Internal milestone, never published to PyPI.
 
 - **Fetching**: `get`/`post`/`aget`/`apost` shortcuts; `Fetcher` and `AsyncFetcher`
   sessions with browser TLS/HTTP2 impersonation (curl_cffi), retries with

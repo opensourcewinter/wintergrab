@@ -38,7 +38,7 @@ thousands of pages), the same API scales up.
   and replays whole crawls offline. A disk-backed queue with a Bloom filter
   that keeps memory flat at millions of URLs and survives `kill -9`. Sitemap
   crawling, SQLite output with upserts, and a live progress line.
-- **Fast.** In a [reproducible benchmark](benchmarks/README.md) against a
+- **Fast.** In a [reproducible benchmark](https://github.com/opensourcewinter/wintergrab/blob/main/benchmarks/README.md) against a
   local test shop, a wintergrab spider crawled about 1,000 pages/s on one
   core. That is 1.8× Crawlee and 3.8× Scrapy at the same concurrency, with
   under half their memory. On real sites, the site and your politeness
@@ -59,10 +59,10 @@ playwright install chromium            # one-time browser download (browser extr
 wintergrab doctor                      # check what is installed
 ```
 
-Python 3.10+.
-
-> Until the first PyPI release, install from GitHub:
-> `pip install "wintergrab[browser] @ git+https://github.com/opensourcewinter/wintergrab"`
+Python 3.10+ on Linux, macOS and Windows. On a fresh Linux machine, use
+`playwright install --with-deps chromium` to get the browser's system
+libraries too. The development version installs straight from GitHub:
+`pip install "wintergrab @ git+https://github.com/opensourcewinter/wintergrab"`.
 
 ## A quick tour
 
@@ -109,7 +109,7 @@ The first time, wintergrab saves a fingerprint of what matched: tag,
 attributes, text, position, parent and neighbours. If the site later renames
 `.product-card` or wraps it in new containers, the same call scores every
 element on the new page and returns the closest matches. It logs a warning
-so you know to update the selector. See [docs/adaptive-selectors.md](docs/adaptive-selectors.md).
+so you know to update the selector. See [docs/adaptive-selectors.md](https://github.com/opensourcewinter/wintergrab/blob/main/docs/adaptive-selectors.md).
 
 ### Scrape without writing selectors
 
@@ -218,15 +218,15 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 
 | Guide | What's inside |
 |---|---|
-| [Getting started](docs/getting-started.md) | Install, first scrape, first spider, in 10 minutes |
-| [Fetching](docs/fetching.md) | `get`/`Fetcher`/`AsyncFetcher`/`BrowserFetcher`, options, errors |
-| [Parsing](docs/parsing.md) | Selectors, extraction schemas, text search, Markdown |
-| [Adaptive selectors](docs/adaptive-selectors.md) | How relocation works and how to tune it |
-| [Spiders](docs/spiders.md) | Crawling, sessions, pause/resume, output, every setting |
-| [Power features](docs/power-features.md) | Zero-selector extraction, cache & offline replay, API capture, cookie handoff, sitemaps, disk frontier, SQLite |
-| [Tough sites](docs/anti-blocking.md) | Impersonation, browsers, proxies, AutoThrottle, etiquette |
-| [CLI](docs/cli.md) | `get`, `crawl` and `shell` reference |
-| [Examples](examples/) | Runnable scripts for every feature |
+| [Getting started](https://github.com/opensourcewinter/wintergrab/blob/main/docs/getting-started.md) | Install, first scrape, first spider, in 10 minutes |
+| [Fetching](https://github.com/opensourcewinter/wintergrab/blob/main/docs/fetching.md) | `get`/`Fetcher`/`AsyncFetcher`/`BrowserFetcher`, options, errors |
+| [Parsing](https://github.com/opensourcewinter/wintergrab/blob/main/docs/parsing.md) | Selectors, extraction schemas, text search, Markdown |
+| [Adaptive selectors](https://github.com/opensourcewinter/wintergrab/blob/main/docs/adaptive-selectors.md) | How relocation works and how to tune it |
+| [Spiders](https://github.com/opensourcewinter/wintergrab/blob/main/docs/spiders.md) | Crawling, sessions, pause/resume, output, every setting |
+| [Power features](https://github.com/opensourcewinter/wintergrab/blob/main/docs/power-features.md) | Zero-selector extraction, cache & offline replay, API capture, cookie handoff, sitemaps, disk frontier, SQLite |
+| [Tough sites](https://github.com/opensourcewinter/wintergrab/blob/main/docs/anti-blocking.md) | Impersonation, browsers, proxies, AutoThrottle, etiquette |
+| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl` and `shell` reference |
+| [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly
 
@@ -246,6 +246,9 @@ pytest                             # runs against a local test site; no internet
 ruff check . && ruff format --check .
 ```
 
+See [CONTRIBUTING.md](https://github.com/opensourcewinter/wintergrab/blob/main/CONTRIBUTING.md) for the live tests and the release
+process, and [SECURITY.md](https://github.com/opensourcewinter/wintergrab/blob/main/SECURITY.md) to report a vulnerability.
+
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/opensourcewinter/wintergrab/blob/main/LICENSE)

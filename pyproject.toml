@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
     "Topic :: Text Processing :: Markup :: HTML",
@@ -52,6 +53,8 @@ wintergrab = "wintergrab.cli:main"
 [project.urls]
 Homepage = "https://github.com/opensourcewinter/wintergrab"
 Documentation = "https://github.com/opensourcewinter/wintergrab/tree/main/docs"
+Changelog = "https://github.com/opensourcewinter/wintergrab/blob/main/CHANGELOG.md"
+Source = "https://github.com/opensourcewinter/wintergrab"
 Issues = "https://github.com/opensourcewinter/wintergrab/issues"
 
 [tool.hatch.version]
