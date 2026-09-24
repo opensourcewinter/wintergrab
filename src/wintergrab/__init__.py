@@ -30,7 +30,10 @@ from .fetchers import (
     AsyncBrowserFetcher,
     AsyncFetcher,
     BrowserFetcher,
+    CacheMiss,
+    CapturedResponse,
     Fetcher,
+    HTTPCache,
     Response,
     aget,
     apost,
@@ -41,6 +44,7 @@ from .fetchers import (
 )
 from .proxy import ProxyRotator
 from .request import Request
+from .sitemaps import SitemapEntry, sitemap
 from .spider import AutoThrottle, CrawlResult, SessionManager, Spider
 from .utils import configure_logging
 
@@ -50,11 +54,14 @@ __all__ = [
     "AutoThrottle",
     "BrowserFetcher",
     "BrowserNotAvailable",
+    "CacheMiss",
+    "CapturedResponse",
     "CheckpointError",
     "CrawlResult",
     "FetchError",
     "Fetcher",
     "Field",
+    "HTTPCache",
     "HTTPStatusError",
     "MemoryStorage",
     "ProxyRotator",
@@ -65,6 +72,7 @@ __all__ = [
     "SelectorList",
     "SelectorSyntaxError",
     "SessionManager",
+    "SitemapEntry",
     "Spider",
     "WintergrabError",
     "__version__",
@@ -76,4 +84,5 @@ __all__ = [
     "parse",
     "post",
     "render",
+    "sitemap",
 ]

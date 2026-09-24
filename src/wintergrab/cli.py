@@ -10,6 +10,7 @@ import inspect
 import io
 import json
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -102,9 +103,10 @@ def _emit(text: str, output: str | None, append: bool = False) -> None:
         sys.stdout.flush()
 
 
-def _write_rows(rows: list[dict[str, Any]], fmt: str, output: str | None) -> None:
+def _write_rows(rows: list[dict[str, Any]], fmt: str, output: str | None, *, single: bool = False) -> None:
     if fmt == "json":
-        text = json.dumps([to_dict(r) for r in rows], ensure_ascii=False, indent=2, default=str) + "\n"
+        data: Any = to_dict(rows[0]) if single and len(rows) == 1 else [to_dict(r) for r in rows]
+        text = json.dumps(data, ensure_ascii=False, indent=2, default=str) + "\n"
     elif fmt == "csv":
         buf = io.StringIO()
         columns = list(dict.fromkeys(k for r in rows for k in r))
@@ -125,6 +127,13 @@ def _write_rows(rows: list[dict[str, Any]], fmt: str, output: str | None) -> Non
     _emit(text, output)
 
 
+def _maybe_json(captured: Any) -> Any:
+    try:
+        return captured.json()
+    except ValueError:
+        return captured.text[:2000]
+
+
 def _value(sel: Selector, fmt: str) -> str:
     if not sel.is_element:
         return sel.get() or ""
@@ -135,6 +144,23 @@ def _value(sel: Selector, fmt: str) -> str:
     return sel.text
 
 
+def _cache_options(args: argparse.Namespace) -> dict[str, Any]:
+    """``--cache [DIR]`` / ``--cache-mode`` / ``--offline`` as fetcher keyword arguments."""
+    mode = "offline" if getattr(args, "offline", False) else getattr(args, "cache_mode", None)
+    location = getattr(args, "cache", None)
+    if location is None and mode:
+        location = True
+    if not location:
+        return {}
+    return {"cache": location, "cache_mode": mode}
+
+
+def _load_schema(path: str) -> Any:
+    from .parser.autoextract import LearnedSchema
+
+    return LearnedSchema.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
 # --------------------------------------------------------------------------- #
 # get
 # --------------------------------------------------------------------------- #
@@ -143,7 +169,8 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
     cookies = _parse_pairs(args.cookie, "=", "--cookie")
     rotator = _proxies(args)
     fetcher: Any
-    if args.browser:
+    cache = _cache_options(args)
+    if args.browser or args.capture:
         fetcher = AsyncBrowserFetcher(
             headless=not args.headful,
             proxies=rotator,
@@ -151,10 +178,14 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             retries=args.retries,
             cookies=cookies or None,
             extra_headers=headers or None,
+            **cache,
         )
         options: dict[str, Any] = {"wait_for": args.wait_for, "wait": args.wait, "scroll": args.scroll}
         if args.screenshot:
             options["screenshot"] = args.screenshot
+        if args.capture:
+            options["capture"] = True if args.capture == "json" else args.capture
+            options.setdefault("wait_until", "networkidle")
     else:
         impersonate = None if args.impersonate in ("none", "") else args.impersonate
         fetcher = AsyncFetcher(
@@ -165,6 +196,7 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             verify=not args.insecure,
             headers=headers,
             cookies=cookies,
+            **cache,
         )
         options = {}
 
@@ -185,8 +217,14 @@ def cmd_get(args: argparse.Namespace) -> int:
     fields = _fields(args)
     if fields and not args.each:
         args.each = ["html"]  # one record for the whole page
+    examples = _parse_pairs(args.learn, "=", "--learn")
+    schema = _load_schema(args.schema) if args.schema else None
+    # Modes that print one JSON document per page instead of page content.
+    json_modes = [m for m in ("structured", "json_data", "tables", "next", "capture") if getattr(args, m)]
     selecting = bool(args.css or args.xpath)
-    records = bool(args.each)
+    records = bool(args.each or args.auto or examples or schema)
+    if json_modes:
+        args.format = args.format or ("jsonl" if len(urls) > 1 else "json")
     default_fmt = "jsonl" if records else ("text" if selecting else "md")
     fmt = _format_for(args, default_fmt)
     if fmt == "csv" and not records:
@@ -208,6 +246,38 @@ def cmd_get(args: argparse.Namespace) -> int:
         if page.status >= 400:
             failures += 1
         multi = len(urls) > 1
+        if json_modes:
+            doc: dict[str, Any] = {"url": page.url}
+            if args.structured:
+                doc["structured"] = page.structured_data()
+            if args.json_data:
+                doc["embedded_json"] = page.embedded_json()
+            if args.tables:
+                doc["tables"] = page.tables()
+            if args.next:
+                doc["next_page"] = page.next_page()
+            if args.capture:
+                doc["captured"] = [
+                    {"url": c.url, "method": c.method, "status": c.status, "json": _maybe_json(c)}
+                    for c in page.captured
+                ]
+            rows.append(doc)
+            continue
+        if examples or schema:
+            if schema is None:
+                schema = page.learn(examples)
+                print(f"learned: {json.dumps(schema.to_dict(), ensure_ascii=False)}", file=sys.stderr)
+                if args.save_schema:
+                    Path(args.save_schema).write_text(json.dumps(schema.to_dict(), indent=2, ensure_ascii=False))
+                    print(f"schema saved to {args.save_schema}", file=sys.stderr)
+            rows.extend({"url": page.url, **row} if multi else row for row in schema.extract(page))
+            continue
+        if args.auto:
+            found = page.auto_extract()
+            if not found:
+                print(f"warning: no repeating records found on {page.url}", file=sys.stderr)
+            rows.extend({"url": page.url, **row} if multi else row for row in found)
+            continue
         if records:
             for each in args.each:
                 for el in page.select(each, adaptive=args.adaptive):
@@ -242,8 +312,8 @@ def cmd_get(args: argparse.Namespace) -> int:
             else:
                 chunks.append(page.markdown(main_content=args.main_content))
 
-    if records or fmt in ("json", "jsonl", "csv"):
-        _write_rows(rows, fmt, args.output)
+    if records or json_modes or fmt in ("json", "jsonl", "csv"):
+        _write_rows(rows, fmt, args.output, single=bool(json_modes))
         if args.output:
             print(f"wrote {len(rows)} record(s) to {args.output}", file=sys.stderr)
     else:
@@ -265,9 +335,22 @@ class QuickSpider(Spider):
     deny: Sequence[str] = ()
     each: Sequence[str] = ()
     fields: dict[str, str] = {}
+    auto: bool = False
+    paginate: bool = False
+    schema: dict[str, Any] | None = None
+    #: Follow every same-domain link when no --follow/--paginate is given.
+    wander: bool = True
 
     def parse(self, response: Response) -> Any:
-        if self.each:
+        if self.schema:
+            from .parser.autoextract import LearnedSchema
+
+            for row in LearnedSchema.from_dict(self.schema).extract(response):
+                yield {"url": response.url, **row}
+        elif self.auto:
+            for row in response.auto_extract():
+                yield {"url": response.url, **row}
+        elif self.each:
             for query in self.each:
                 for el in response.select(query):
                     row = el.extract(self.fields) if self.fields else {"text": el.text}
@@ -278,12 +361,16 @@ class QuickSpider(Spider):
             yield {"url": response.url, "status": response.status, "title": response.title}
         if not response.is_html:
             return
+        links: list[str] = []
         if self.follow:
-            links: list[str] = []
             for query in self.follow:
                 links.extend(response.links(query, allow=self.allow or None, deny=self.deny or None))
-        else:
+        elif not self.paginate and self.wander:
             links = response.links(allow=self.allow or None, deny=self.deny or None, same_domain=True)
+        if self.paginate:
+            next_url = response.next_page()
+            if next_url:
+                links.append(next_url)
         for link in dict.fromkeys(links):
             yield response.follow(link)
 
@@ -346,11 +433,22 @@ def cmd_crawl(args: argparse.Namespace) -> int:
             deny=args.deny or (),
             each=args.each or (),
             fields=_fields(args),
+            auto=args.auto,
+            paginate=args.paginate,
+            schema=json.loads(Path(args.schema).read_text(encoding="utf-8")) if args.schema else None,
         )
+        if args.sitemap:
+            overrides["sitemap_urls"] = list(args.sitemap)
+            if not args.follow and not args.paginate:
+                overrides["wander"] = False  # sitemap-driven: crawl what the sitemap lists
     else:
         cls = load_spider_class(args.target)
-        if args.follow or args.each or args.field:
-            print("warning: --follow/--each/--field only apply to URL crawls; ignored", file=sys.stderr)
+        if args.follow or args.each or args.field or args.auto or args.paginate or args.schema:
+            print(
+                "warning: --follow/--each/--field/--auto/--paginate/--schema only apply to URL crawls", file=sys.stderr
+            )
+        if args.sitemap:
+            overrides["sitemap_urls"] = list(args.sitemap)
     option_map = {
         "output": args.output,
         "crawl_dir": args.crawl_dir,
@@ -368,6 +466,15 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         overrides["obey_robots_txt"] = False
     if args.browser:
         overrides["use_browser"] = True
+    cache = _cache_options(args)
+    if cache:
+        overrides["cache"] = cache["cache"]
+        if cache["cache_mode"]:
+            overrides["cache_mode"] = cache["cache_mode"]
+    if args.unique_key:
+        overrides["unique_key"] = args.unique_key
+    if args.progress is not None:
+        overrides["progress"] = args.progress
     rotator = _proxies(args)
     if rotator:
         overrides["proxies"] = rotator
@@ -443,12 +550,70 @@ def cmd_shell(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# doctor
+# --------------------------------------------------------------------------- #
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """Report what is installed and what each optional feature needs."""
+    import platform
+
+    from .adaptive.storage import default_storage_path
+    from .fetchers.browser import _discover_chromium
+
+    def version(module: str) -> str | None:
+        try:
+            from importlib.metadata import version as dist_version
+
+            return dist_version(module)
+        except Exception:
+            return None
+
+    rows: list[tuple[str, str, str]] = []
+
+    def check(name: str, ok: bool, detail: str, hint: str = "") -> None:
+        rows.append(("ok " if ok else "-- ", name, detail if ok else f"{detail}  ->  {hint}"))
+
+    check("python", sys.version_info >= (3, 10), platform.python_version(), "Python 3.10+ is required")
+    for dist in ("curl_cffi", "lxml", "cssselect"):
+        v = version(dist)
+        check(dist, v is not None, v or "missing", f"pip install {dist}")
+    pw = version("playwright")
+    check("playwright", pw is not None, pw or "not installed", 'pip install "wintergrab[browser]"')
+    if pw:
+        found = _discover_chromium()
+        check(
+            "chromium",
+            bool(found) or bool(os.environ.get("WINTERGRAB_BROWSER_PATH")),
+            found[0] if found else "no browser binary found",
+            "playwright install chromium",
+        )
+    for dist, why in (("uvloop", "faster event loop"), ("orjson", "faster JSON output")):
+        v = version(dist)
+        check(dist, v is not None, v or f"not installed ({why})", 'pip install "wintergrab[speed]"')
+    check("adaptive db", True, str(default_storage_path()))
+    width = max(len(r[1]) for r in rows)
+    for status, name, detail in rows:
+        print(f"{status} {name.ljust(width)}  {detail}")
+    return 0 if all(r[0].strip() == "ok" for r in rows[:4]) else 1
+
+
+# --------------------------------------------------------------------------- #
 # argument parsing
 # --------------------------------------------------------------------------- #
 def _add_network_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--proxy", action="append", metavar="URL", help="proxy to use (repeat to rotate several)")
     p.add_argument("--proxy-file", metavar="FILE", help="file with one proxy per line")
     p.add_argument("--browser", "-b", action="store_true", help="use a headless browser (renders JavaScript)")
+
+
+def _add_cache_options(p: argparse.ArgumentParser) -> None:
+    group = p.add_argument_group("caching")
+    group.add_argument(
+        "--cache", nargs="?", const=True, metavar="DIR", help="cache responses on disk (default dir: .wintergrab-cache)"
+    )
+    group.add_argument(
+        "--cache-mode", choices=["revalidate", "prefer", "offline", "refresh"], help="how to use the cache"
+    )
+    group.add_argument("--offline", action="store_true", help="replay from the cache only; never touch the network")
 
 
 def _add_extract_options(p: argparse.ArgumentParser) -> None:
@@ -507,6 +672,28 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--scroll", action="store_true", help="(browser) scroll to the bottom (infinite scroll)")
     g.add_argument("--headful", action="store_true", help="(browser) show the browser window")
     g.add_argument("--screenshot", metavar="FILE", help="(browser) save a full-page screenshot")
+    g.add_argument(
+        "--capture",
+        nargs="?",
+        const="json",
+        metavar="URL_PATTERN",
+        help="(browser) record the page's own API calls (JSON by default, or those matching a URL glob)",
+    )
+    smart = g.add_argument_group("zero-selector extraction")
+    smart.add_argument("--auto", action="store_true", help="find the page's repeating records and extract them")
+    smart.add_argument(
+        "--learn",
+        action="append",
+        metavar="FIELD=EXAMPLE",
+        help="learn selectors from example values on the page, e.g. --learn 'title=A Light in the Attic'",
+    )
+    smart.add_argument("--save-schema", metavar="FILE", help="save the schema learned with --learn")
+    smart.add_argument("--schema", metavar="FILE", help="extract with a schema saved by --save-schema")
+    smart.add_argument("--structured", action="store_true", help="JSON-LD, microdata, OpenGraph and meta data")
+    smart.add_argument("--json-data", action="store_true", help="JSON embedded by JS apps (__NEXT_DATA__, ...)")
+    smart.add_argument("--tables", action="store_true", help="every HTML table as records")
+    smart.add_argument("--next", action="store_true", help="the URL of the next page (pagination)")
+    _add_cache_options(g)
     g.set_defaults(func=cmd_get)
 
     c = sub.add_parser(
@@ -536,6 +723,18 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--allow", action="append", metavar="REGEX", help="(URL mode) only follow matching URLs")
     c.add_argument("--deny", action="append", metavar="REGEX", help="(URL mode) never follow matching URLs")
     c.add_argument("--any-domain", action="store_true", help="(URL mode) follow links to other domains too")
+    c.add_argument("--paginate", action="store_true", help="(URL mode) follow next-page links (auto-detected)")
+    c.add_argument("--auto", action="store_true", help="(URL mode) extract repeating records automatically")
+    c.add_argument("--schema", metavar="FILE", help="(URL mode) extract with a schema saved by get --save-schema")
+    c.add_argument("--sitemap", action="append", metavar="URL", help="take pages from a sitemap or robots.txt")
+    c.add_argument("--unique-key", metavar="FIELD", help="drop duplicate items (and upsert into .sqlite output)")
+    c.add_argument(
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="live status line (default: on a terminal)",
+    )
+    _add_cache_options(c)
     _add_extract_options(c)
     c.set_defaults(func=cmd_crawl)
 
@@ -543,6 +742,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("url", nargs="?")
     s.add_argument("--browser", "-b", action="store_true", help="render the page with a headless browser")
     s.set_defaults(func=cmd_shell)
+
+    d = sub.add_parser("doctor", help="check the installation and optional features")
+    d.set_defaults(func=cmd_doctor)
     return parser
 
 

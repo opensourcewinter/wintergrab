@@ -5,17 +5,22 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import re
+import sys
 import threading
-from collections.abc import AsyncIterable, AsyncIterator, Collection, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..fetchers.blocking import looks_blocked
 from ..fetchers.browser import AsyncBrowserFetcher
+from ..fetchers.cache import HTTPCache
 from ..fetchers.http import DEFAULT_RETRY_STATUSES, AsyncFetcher
 from ..proxy import ProxyRotator
 from ..request import Request
+from ..sitemaps import parse_lastmod, parse_sitemap, robots_sitemaps
 from .sessions import SessionManager
 
 if TYPE_CHECKING:
@@ -96,6 +101,17 @@ class Spider:
     #: Only follow links on these domains (subdomains included). Empty = no limit.
     allowed_domains: Sequence[str] = ()
 
+    # -- discovery -------------------------------------------------------- #
+    #: Sitemaps, sitemap indexes, feeds or robots.txt URLs to take pages from.
+    sitemap_urls: Sequence[str] = ()
+    #: ``(regex, callback)`` pairs routing sitemap URLs to callbacks (first match
+    #: wins; URLs matching no rule are skipped). Empty = every URL -> ``parse``.
+    sitemap_rules: Sequence[tuple[str, str | Callable[..., Any]]] = ()
+    #: Only follow nested sitemaps whose URL matches one of these regexes.
+    sitemap_follow: Sequence[str] = ()
+    #: Only crawl sitemap entries modified at/after this date (incremental crawls).
+    sitemap_since: str | datetime | None = None
+
     # -- speed ------------------------------------------------------------ #
     #: Maximum requests in flight overall.
     concurrency: int = 16
@@ -133,15 +149,31 @@ class Spider:
     use_browser: bool = False
     #: Session to retry *blocked* requests with (e.g. ``"browser"``).
     fallback_session: str | None = None
+    #: Copy cookies from browser responses into the HTTP sessions, so a session
+    #: established in the browser (consent wall, login, JS check) carries on over
+    #: fast HTTP for the rest of the crawl.
+    share_browser_cookies: bool = True
     #: Respect robots.txt rules and Crawl-delay.
     obey_robots_txt: bool = True
     robots_user_agent: str = "*"
     #: Drop requests for URLs already seen.
     dedupe: bool = True
 
+    # -- caching ---------------------------------------------------------- #
+    #: Cache responses on disk (``True``, a path, or an :class:`HTTPCache`).
+    cache: bool | str | HTTPCache | None = None
+    #: ``"revalidate"`` (only re-download what changed), ``"prefer"`` (fetch each
+    #: page once), ``"offline"`` (replay from cache only) or ``"refresh"``.
+    cache_mode: str = "revalidate"
+    #: Seconds a cached response counts as fresh (overrides HTTP headers).
+    cache_ttl: float | None = None
+
     # -- output & state --------------------------------------------------- #
-    #: Stream items to this file (``.jsonl``, ``.json`` or ``.csv``).
+    #: Stream items to this file (``.jsonl``, ``.json``, ``.csv`` or ``.sqlite``/``.db``).
     output: str | None = None
+    #: Item field that identifies an item (e.g. ``"url"``): duplicates are dropped,
+    #: and SQLite output upserts on it so re-crawls update rows in place.
+    unique_key: str | None = None
     #: Directory for pause/resume state. Setting it makes the crawl resumable.
     crawl_dir: str | None = None
     #: Seconds between automatic checkpoints (crash safety).
@@ -152,6 +184,10 @@ class Spider:
     log_level: str | None = "INFO"
     #: Seconds between progress log lines.
     log_interval: float = 30.0
+    #: Live status line on the terminal (``None`` = automatic: on for interactive terminals).
+    progress: bool | None = None
+    #: Run on uvloop (a faster event loop) when it is installed: ``pip install "wintergrab[speed]"``.
+    use_uvloop: bool = True
 
     def __init__(self, **overrides: Any) -> None:
         for key, value in overrides.items():
@@ -163,14 +199,57 @@ class Spider:
         self.logger = logging.getLogger(f"wintergrab.spider.{self.name}")
         self._engine: Engine | None = None
         self._pending_command: str | None = None
+        self._http_cache: HTTPCache | None = None
+
+    def http_cache(self) -> HTTPCache | None:
+        """The spider's shared :class:`HTTPCache` (``None`` unless :attr:`cache` is set)."""
+        if self._http_cache is None and self.cache:
+            self._http_cache = HTTPCache.coerce(self.cache, mode=self.cache_mode, ttl=self.cache_ttl)
+        return self._http_cache
 
     # ------------------------------------------------------------------ #
     # hooks to override
     # ------------------------------------------------------------------ #
     def start_requests(self) -> Iterable[Request | str] | AsyncIterable[Request | str]:  # type: ignore[return]
-        """Initial requests. Defaults to one request per URL in :attr:`start_urls`."""
+        """Initial requests: one per URL in :attr:`start_urls` and :attr:`sitemap_urls`."""
+        for url in self.sitemap_urls:
+            yield Request(url, callback="_parse_sitemap", priority=100)
         for url in self.start_urls:
             yield Request(url, dont_filter=False)
+
+    def _parse_sitemap(self, response: Response) -> Iterable[Request]:
+        """Turn a sitemap (index, feed or robots.txt) into requests."""
+        if response.url.split("?")[0].rstrip("/").endswith("robots.txt"):
+            for url in robots_sitemaps(response.text, response.url):
+                yield Request(url, callback="_parse_sitemap", priority=100)
+            return
+        try:
+            _, entries = parse_sitemap(response.body, response.url)
+        except ValueError as exc:
+            self.logger.warning("could not read sitemap %s: %s", response.url, exc)
+            return
+        since = parse_lastmod(self.sitemap_since) if isinstance(self.sitemap_since, str) else self.sitemap_since
+        follow = [re.compile(p) for p in self.sitemap_follow]
+        for entry in entries:
+            if entry.kind == "sitemap":
+                if not follow or any(rx.search(entry.loc) for rx in follow):
+                    yield Request(entry.loc, callback="_parse_sitemap", priority=100)
+                continue
+            if since is not None:
+                modified = entry.lastmod_datetime
+                if modified is None or modified < (since if since.tzinfo else since.astimezone()):
+                    continue
+            callback = self._sitemap_callback(entry.loc)
+            if callback is not None:
+                yield Request(entry.loc, callback=callback, meta={"sitemap_lastmod": entry.lastmod})
+
+    def _sitemap_callback(self, url: str) -> str | Callable[..., Any] | None:
+        if not self.sitemap_rules:
+            return "parse"
+        for pattern, callback in self.sitemap_rules:
+            if re.search(pattern, url):
+                return callback
+        return None
 
     def parse(self, response: Response) -> Any:
         """Default callback. Yield items and/or :class:`Request` objects."""
@@ -193,13 +272,19 @@ class Spider:
                 verify=self.verify,
                 retries=0,
                 max_connections=max(16, self.concurrency * 2),
+                cache=self.http_cache(),
             ),
             default=not self.use_browser,
         )
         if self.use_browser or self.fallback_session == "browser":
             sessions.add(
                 "browser",
-                AsyncBrowserFetcher(timeout=self.timeout, retries=0, max_pages=max(1, min(self.concurrency, 8))),
+                AsyncBrowserFetcher(
+                    timeout=self.timeout,
+                    retries=0,
+                    max_pages=max(1, min(self.concurrency, 8)),
+                    cache=self.http_cache(),
+                ),
                 default=self.use_browser,
             )
 
@@ -252,12 +337,12 @@ class Spider:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(self.arun(resume=resume))
+            return self._run_coroutine(self.arun(resume=resume))
         # Already inside an event loop (e.g. Jupyter): run in a helper thread.
         # Signal handlers only work in the main thread, so turn Ctrl+C
         # (KeyboardInterrupt here) into pause / force-stop requests ourselves.
         with concurrent.futures.ThreadPoolExecutor(1) as pool:
-            future = pool.submit(asyncio.run, self.arun(resume=resume))
+            future = pool.submit(self._run_coroutine, self.arun(resume=resume))
             interrupts = 0
             while True:
                 try:
@@ -268,6 +353,16 @@ class Spider:
                         self.pause()  # stops instead when there is no crawl_dir
                     elif self._engine is not None:
                         self._engine.force_stop()
+
+    def _run_coroutine(self, coro: Any) -> Any:
+        if self.use_uvloop and sys.platform != "win32":
+            try:
+                import uvloop
+            except ImportError:
+                pass
+            else:
+                return uvloop.run(coro)
+        return asyncio.run(coro)
 
     async def stream(self, *, resume: bool = True) -> AsyncIterator[Any]:
         """Run the crawl and yield items as they are scraped::

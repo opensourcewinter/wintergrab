@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import fnmatch
 import glob
+import json as _json
 import logging
 import os
 import platform
@@ -14,6 +16,7 @@ import time
 import weakref
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -22,6 +25,7 @@ from ..proxy import ProxyRotator, proxy_for_playwright, proxy_label
 from ..request import Request
 from ..utils import ensure_scheme, maybe_await
 from .blocking import has_challenge_markers
+from .cache import CacheLayer, HTTPCache
 from .http import DEFAULT_RETRY_STATUSES, PROXY_FAILURE_STATUSES
 from .response import Headers, Response
 
@@ -130,6 +134,45 @@ def _discover_chromium() -> list[str]:
     return [p for p in dict.fromkeys(found) if p and os.path.isfile(p) and os.access(p, os.X_OK)]
 
 
+@dataclass
+class CapturedResponse:
+    """An XHR/fetch response recorded while a page rendered (see ``capture=``)."""
+
+    url: str
+    method: str
+    status: int
+    headers: dict[str, str]
+    body: bytes
+    resource_type: str = "fetch"
+    request_body: str | None = None
+    order: int = 0
+
+    @property
+    def text(self) -> str:
+        return self.body.decode("utf-8", errors="replace")
+
+    def json(self) -> Any:
+        return _json.loads(self.body)
+
+    def __repr__(self) -> str:
+        return f"<CapturedResponse {self.method} {self.status} {self.url}>"
+
+
+def _capture_matcher(capture: bool | str | Callable[[str], bool] | None) -> Callable[[str, str], bool] | None:
+    """Turn the ``capture=`` option into ``matcher(url, content_type) -> bool``."""
+    if not capture:
+        return None
+    if capture is True:
+        return lambda url, ctype: "json" in ctype.lower()
+    if isinstance(capture, str):
+        pattern = capture
+        if any(ch in pattern for ch in "*?["):
+            return lambda url, ctype: fnmatch.fnmatch(url, pattern)
+        return lambda url, ctype: pattern in url
+    func = capture
+    return lambda url, ctype: bool(func(url))
+
+
 class AsyncBrowserFetcher:
     """Fetch pages with a real (headless) Chromium via Playwright.
 
@@ -166,6 +209,9 @@ class AsyncBrowserFetcher:
             restarts). Incompatible with ``proxies``.
         launch_args: Extra Chromium command-line flags.
         adaptive_storage: Storage for adaptive selectors on fetched pages.
+        cache: Cache rendered pages (``True``, a path or an
+            :class:`~wintergrab.HTTPCache`); handy with ``cache_mode="prefer"``
+            to render each page only once while developing.
     """
 
     def __init__(
@@ -194,6 +240,9 @@ class AsyncBrowserFetcher:
         user_data_dir: str | None = None,
         launch_args: Sequence[str] | None = None,
         adaptive_storage: AdaptiveStorage | None = None,
+        cache: HTTPCache | str | bool | None = None,
+        cache_mode: str | None = None,
+        cache_ttl: float | None = None,
     ) -> None:
         if proxy and proxies:
             raise ValueError("Pass either proxy= or proxies=, not both")
@@ -222,6 +271,8 @@ class AsyncBrowserFetcher:
         self.user_data_dir = user_data_dir
         self.launch_args = list(launch_args or [])
         self.adaptive_storage = adaptive_storage
+        self.cache = HTTPCache.coerce(cache, mode=cache_mode, ttl=cache_ttl)
+        self._cache_layer = CacheLayer(self.cache, "browser:", "browser") if self.cache is not None else None
 
         self._pw: Any = None
         self._browser: Any = None
@@ -385,6 +436,21 @@ class AsyncBrowserFetcher:
         if key is not None and key in self._context_users:
             self._context_users[key] = max(0, self._context_users[key] - 1)
 
+    async def export_cookies(self, url: str | None = None, *, proxy: str | None = None) -> list[dict[str, Any]]:
+        """Cookies of the browser session (optionally only those sent to ``url``).
+
+        Feed them to :meth:`Fetcher.add_cookies` to continue a browser session
+        (a login, a solved consent wall...) with fast HTTP requests.
+        """
+        await self.start()
+        if self._persistent is not None:
+            context = self._persistent
+        else:
+            context = self._contexts.get(proxy or "")
+            if context is None:
+                return []
+        return [dict(c) for c in await (context.cookies(url) if url else context.cookies())]
+
     async def aclose(self) -> None:
         """Close every tab, context and the browser itself."""
         for ctx in list(self._contexts.values()):
@@ -438,6 +504,7 @@ class AsyncBrowserFetcher:
         scroll: bool | int = False,
         page_action: Callable[[Any], Any] | None = None,
         screenshot: str | Path | None = None,
+        capture: bool | str | Callable[[str], bool] | None = None,
         request: Request | None = None,
         **_ignored: Any,
     ) -> Response:
@@ -452,11 +519,22 @@ class AsyncBrowserFetcher:
             page_action: ``async def action(page)`` that receives Playwright's
                 async ``Page`` to click, type, etc. before capture.
             screenshot: Save a full-page PNG screenshot here.
+            capture: Record the page's own API calls (XHR/fetch) in
+                ``response.captured``: ``True`` for JSON responses, a URL glob or
+                substring (``"*/api/*"``, ``"graphql"``), or a function of the URL.
+                Often the cleanest way to scrape a JavaScript site: take the data
+                the page itself downloads.
         """
         if method.upper() != "GET":
             raise ValueError("Browser fetchers only support GET requests")
         url = ensure_scheme(url)
         req = request or Request(url)
+        use_cache = self._cache_layer is not None and not capture and not screenshot
+        if use_cache:
+            assert self._cache_layer is not None
+            cached, _, _ = self._cache_layer.before(req, self.adaptive_storage)
+            if cached is not None:
+                return cached
         await self.start()
         assert self._sem is not None
         attempts = 1 + (self.retries if retries is None else max(0, retries))
@@ -467,7 +545,17 @@ class AsyncBrowserFetcher:
             try:
                 async with self._sem:
                     response = await self._fetch_once(
-                        req, chosen, headers, timeout, wait_for, wait, wait_until, scroll, page_action, screenshot
+                        req,
+                        chosen,
+                        headers,
+                        timeout,
+                        wait_for,
+                        wait,
+                        wait_until,
+                        scroll,
+                        page_action,
+                        screenshot,
+                        _capture_matcher(capture),
                     )
             except asyncio.CancelledError:
                 raise
@@ -487,6 +575,8 @@ class AsyncBrowserFetcher:
             if response.status in self.retry_statuses and attempt + 1 < attempts:
                 await asyncio.sleep(min(10.0, 1.0 * 2**attempt))
                 continue
+            if use_cache and self._cache_layer is not None:
+                response = self._cache_layer.after(req, response, None, self.adaptive_storage)
             return response
         assert last_error is not None  # pragma: no cover
         raise last_error  # pragma: no cover
@@ -519,6 +609,7 @@ class AsyncBrowserFetcher:
         scroll: bool | int,
         page_action: Callable[[Any], Any] | None,
         screenshot: str | Path | None,
+        capture: Callable[[str, str], bool] | None = None,
     ) -> Response:
         timeout_ms = (timeout or self.timeout) * 1000
         context_key, context = await self._acquire_context(proxy)
@@ -534,11 +625,38 @@ class AsyncBrowserFetcher:
             if isinstance(self.cookies, Mapping) and self.cookies:
                 await context.add_cookies([{"name": k, "value": v, "url": req.url} for k, v in self.cookies.items()])
             last_nav: list[Any] = []
+            captured: list[CapturedResponse] = []
+            grabbing: set[asyncio.Future[None]] = set()
+
+            async def grab(resp: Any, order: int) -> None:
+                try:
+                    body = await resp.body()
+                except Exception:  # redirects and aborted requests have no body
+                    body = b""
+                request = resp.request
+                captured.append(
+                    CapturedResponse(
+                        url=resp.url,
+                        method=request.method,
+                        status=resp.status,
+                        headers=dict(resp.headers),
+                        body=body,
+                        resource_type=request.resource_type,
+                        request_body=request.post_data,
+                        order=order,
+                    )
+                )
 
             def on_response(resp: Any) -> None:
                 try:
                     if resp.request.is_navigation_request() and resp.frame == page.main_frame:
                         last_nav.append(resp)
+                    elif (
+                        capture is not None
+                        and resp.request.resource_type in ("xhr", "fetch")
+                        and capture(resp.url, resp.headers.get("content-type", ""))
+                    ):
+                        grabbing.add(asyncio.ensure_future(grab(resp, len(grabbing))))
                 except Exception:  # pragma: no cover - page may be closing
                     pass
 
@@ -554,6 +672,8 @@ class AsyncBrowserFetcher:
                 await maybe_await(page_action(page))
             if wait:
                 await page.wait_for_timeout(wait * 1000)
+            if grabbing:
+                await asyncio.wait(grabbing, timeout=10)
             main = last_nav[-1] if last_nav else nav
             status = main.status if main is not None else 200
             raw_headers: dict[str, str] = await main.all_headers() if main is not None else {}
@@ -569,9 +689,10 @@ class AsyncBrowserFetcher:
             if screenshot:
                 Path(screenshot).parent.mkdir(parents=True, exist_ok=True)
                 await page.screenshot(path=str(screenshot), full_page=True)
-            cookies = {c["name"]: c["value"] for c in await context.cookies(page.url)}
+            jar = await context.cookies(page.url)
+            cookies = {c["name"]: c["value"] for c in jar}
             history = [r.url for r in last_nav[:-1]]
-            return Response(
+            response = Response(
                 page.url,
                 status=status,
                 headers=Headers(raw_headers),
@@ -585,6 +706,9 @@ class AsyncBrowserFetcher:
                 source="browser",
                 adaptive_storage=self.adaptive_storage,
             )
+            response.captured = sorted(captured, key=lambda c: c.order)
+            response.cookie_jar = [dict(c) for c in jar]
+            return response
         finally:
             try:
                 await page.close()
@@ -723,6 +847,10 @@ class BrowserFetcher:
     def get_many(self, urls: Iterable[str], **kwargs: Any) -> list[Response | FetchError]:
         urls = list(urls)
         return self._run(lambda: self._async.get_many(urls, **kwargs))
+
+    def export_cookies(self, url: str | None = None, *, proxy: str | None = None) -> list[dict[str, Any]]:
+        """Cookies of the browser session - see :meth:`AsyncBrowserFetcher.export_cookies`."""
+        return self._run(lambda: self._async.export_cookies(url, proxy=proxy))
 
     def close(self, timeout: float | None = 30) -> None:
         """Close the browser and its background thread."""

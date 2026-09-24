@@ -70,3 +70,47 @@ async def test_async_browser_fetcher(site) -> None:
 def test_non_get_is_rejected(site, browser) -> None:
     with pytest.raises(ValueError):
         browser._run(lambda: browser._async.request("POST", site.url))
+
+
+def test_capture_api_calls(site, browser) -> None:
+    page = browser.get(site.url + "/spa", wait_for=".row", capture=True, wait_until="networkidle")
+    assert page.css(".row::text").getall() == ["API item 3", "API item 4", "API item 5"]
+    urls = [c.url for c in page.captured]
+    assert any("page=1" in u for u in urls) and any("page=2" in u for u in urls)
+    first = page.captured_json("page=1")[0]
+    assert first["items"][0]["name"] == "API item 3"
+    assert page.captured[0].method == "GET" and page.captured[0].status == 200
+    only_page2 = browser.get(site.url + "/spa", wait_for=".row", capture="*page=2*", wait_until="networkidle")
+    assert [c.url.endswith("page=2") for c in only_page2.captured] == [True]
+
+
+def test_export_cookies_to_http_session(site, browser) -> None:
+    gated = browser.get(site.url + "/jsgate/1")
+    assert gated.css("#gated::text").get() == "Gated 1"
+    cookies = browser.export_cookies(site.url)
+    assert any(c["name"] == "gate" for c in cookies)
+    with wg.Fetcher() as http:
+        assert http.get(site.url + "/jsgate/2").status == 403
+        http.add_cookies(cookies)
+        assert http.get(site.url + "/jsgate/2").css("#gated::text").get() == "Gated 2"
+
+
+def test_spider_hands_browser_cookies_to_http(fresh_site) -> None:
+    class Gated(wg.Spider):
+        log_level = None
+        obey_robots_txt = False
+        fallback_session = "browser"
+        concurrency = 1
+
+        def start_requests(self):
+            yield wg.Request(fresh_site.url + "/jsgate/1")
+
+        def parse(self, response):
+            yield {"n": response.css("#gated::text").get(), "source": response.source}
+            if response.url.endswith("/1"):
+                yield from (response.follow(f"/jsgate/{i}") for i in range(2, 5))
+
+    result = Gated().run()
+    by_n = {i["n"]: i["source"] for i in result.items}
+    assert by_n == {"Gated 1": "browser", "Gated 2": "http", "Gated 3": "http", "Gated 4": "http"}
+    assert result.stats["cookie_handoffs"] == 1

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import logging
 import pickle
@@ -13,12 +14,14 @@ from collections.abc import AsyncIterable, Callable
 from typing import TYPE_CHECKING, Any
 
 from ..errors import BrowserNotAvailable, CheckpointError, FetchError, HTTPStatusError, describe
+from ..fetchers.cache import HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
 from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
 from .checkpoint import Checkpoint
-from .exporters import Exporter, open_exporter
+from .exporters import Exporter, open_exporter, to_dict
+from .progress import ProgressDisplay
 from .robots import RobotsPolicy
 from .scheduler import Scheduler
 from .sessions import SessionManager
@@ -34,6 +37,15 @@ log = logging.getLogger("wintergrab.spider")
 PUSHBACK_STATUSES = frozenset({429, 503})
 # Keyword arguments the engine passes to fetchers itself; Request.options may not override them.
 RESERVED_OPTIONS = frozenset({"method", "url", "headers", "cookies", "data", "json", "proxy", "retries", "request"})
+
+
+async def _deadline(coro: Any, seconds: float) -> Any:
+    """Await ``coro`` with a hard time limit (cheap ``asyncio.timeout`` on 3.11+)."""
+    timeout_cm = getattr(asyncio, "timeout", None)
+    if timeout_cm is None:  # Python 3.10
+        return await asyncio.wait_for(coro, seconds)
+    async with timeout_cm(seconds):
+        return await coro
 
 
 class Stats(dict):  # type: ignore[type-arg]
@@ -87,6 +99,8 @@ class Engine:
         self._state_ready = False
         self._limit_reached = False
         self._warned_options: set[str] = set()
+        self._item_keys: set[bytes] = set()
+        self._progress: ProgressDisplay | None = None
 
     # ------------------------------------------------------------------ #
     # control (thread-safe entry points)
@@ -178,7 +192,11 @@ class Engine:
                 raise RuntimeError("configure_sessions() registered no sessions")
             if spider.obey_robots_txt:
                 self._robots_fetcher = AsyncFetcher(
-                    impersonate=spider.impersonate, timeout=15, retries=1, verify=spider.verify
+                    impersonate=spider.impersonate,
+                    timeout=15,
+                    retries=1,
+                    verify=spider.verify,
+                    cache=spider.http_cache(),
                 )
                 self.robots = RobotsPolicy(self._fetch_robots, spider.robots_user_agent)
             await maybe_await(spider.on_start())
@@ -197,6 +215,10 @@ class Engine:
                 spider.name,
                 len(self.scheduler),
             )
+            show = spider.progress if spider.progress is not None else (spider.log_level is not None)
+            if show and ProgressDisplay.supported():
+                self._progress = ProgressDisplay(self)
+                self._progress.start()
             await self._loop_until_done()
         except BaseException as exc:
             if self._fatal is None and not isinstance(exc, asyncio.CancelledError):
@@ -233,10 +255,14 @@ class Engine:
                     break
             self._periodic()
             timeout = 1.0 if wait is None else max(0.01, min(wait, 1.0))
-            try:
-                await asyncio.wait_for(self._wakeup.wait(), timeout=timeout)
-            except asyncio.TimeoutError:
-                pass
+            if not self._wakeup.is_set():
+                # A timer instead of asyncio.wait_for: no extra task per loop turn.
+                assert self._loop is not None
+                timer = self._loop.call_later(timeout, self._wakeup.set)
+                try:
+                    await self._wakeup.wait()
+                finally:
+                    timer.cancel()
             self._wakeup.clear()
 
     def _dispatch(self) -> float | None:
@@ -336,12 +362,13 @@ class Engine:
 
     def _setup_output(self, append: bool) -> None:
         if self.spider.output:
-            self.exporter = open_exporter(self.spider.output, append=append)
+            self.exporter = open_exporter(self.spider.output, append=append, unique_key=self.spider.unique_key)
 
     def _restore(self, state: dict[str, Any]) -> None:
         self.stats.update(state.get("stats") or {})
         self.stats.inc("runs")
         self.scheduler.restore_seen(state.get("seen") or ())
+        self._item_keys.update(state.get("item_keys") or ())
         self.throttle.restore(state.get("throttle") or {})
         for data in state.get("pending") or ():
             self.scheduler.push(Request.from_dict(data, self.spider), force=True)
@@ -366,6 +393,9 @@ class Engine:
 
     async def _shutdown(self) -> CrawlResult:
         spider = self.spider
+        if self._progress is not None:
+            self._progress.stop()
+            self._progress = None
         elapsed = time.monotonic() - self._started
         self.stats["elapsed_seconds"] = round(self.stats.get("elapsed_seconds", 0) + elapsed, 3)
         self.stats["duplicates_filtered"] = self.stats.get("duplicates_filtered", 0) + self.scheduler.duplicates
@@ -399,6 +429,12 @@ class Engine:
         await self.sessions.close_all()
         if self._robots_fetcher is not None:
             await self._robots_fetcher.aclose()
+        cache = spider.http_cache()
+        if cache is not None:
+            self.stats["cache"] = dict(cache.stats)
+            if not isinstance(spider.cache, HTTPCache):  # we created it, so we close it
+                cache.close()
+                spider._http_cache = None
         self.stats["status"] = status
         result = CrawlResult(items=self.items, stats=dict(self.stats), status=status, crawl_dir=spider.crawl_dir)
         self._log_progress(final=True)
@@ -416,6 +452,8 @@ class Engine:
 
     def _save_state(self, pending: list[Request]) -> None:
         assert self.checkpoint is not None
+        if self.exporter is not None:
+            self.exporter.flush()  # items on disk must match the saved queue
         self.checkpoint.save(
             {
                 "spider": self.spider.name,
@@ -423,6 +461,7 @@ class Engine:
                 "seen": self.scheduler.seen,
                 "stats": dict(self.stats),
                 "throttle": self.throttle.snapshot(),
+                "item_keys": self._item_keys,
             }
         )
 
@@ -437,7 +476,7 @@ class Engine:
                     log.error("%s", exc)
             self._last_checkpoint = now
         if now - self._last_log >= spider.log_interval:
-            if self._last_log:
+            if self._last_log and self._progress is None:
                 self._log_progress()
             self._last_log = now
 
@@ -484,7 +523,7 @@ class Engine:
             timeout = options.pop("timeout", spider.timeout)
             started = time.monotonic()
             try:
-                response: Response = await asyncio.wait_for(
+                response: Response = await _deadline(
                     fetcher.request(
                         request.method,
                         request.url,
@@ -498,7 +537,7 @@ class Engine:
                         request=request,
                         **options,
                     ),
-                    timeout=max(60.0, timeout * 4),
+                    max(60.0, timeout * 4),
                 )
             except asyncio.CancelledError:
                 raise
@@ -526,6 +565,13 @@ class Engine:
                 return
 
             latency = time.monotonic() - started
+            if response.cache_status == "hit":
+                # Served from disk: no request reached the site, so don't make
+                # the next one wait for this one's politeness delay.
+                self.stats.inc("cache_hits")
+                slot.next_start = min(slot.next_start, time.monotonic())
+            elif response.cache_status == "revalidated":
+                self.stats.inc("cache_revalidated")
             self.stats.inc("responses")
             self.stats.inc(f"status/{response.status}")
             self.stats.inc("bytes", len(response.body))
@@ -541,7 +587,7 @@ class Engine:
             if blocked or response.status in PUSHBACK_STATUSES:
                 self.throttle.on_pushback(domain, retry_after)
                 self.stats.inc("backoffs")
-            else:
+            elif response.cache_status != "hit":
                 self.throttle.on_success(domain, latency)
             if rotated:
                 bad = blocked or response.status in PROXY_FAILURE_STATUSES
@@ -551,6 +597,8 @@ class Engine:
                 reason = "blocked" if blocked else f"HTTP {response.status}"
                 if self._retry(request, reason, blocked=blocked, retry_after=retry_after):
                     return
+            if response.source == "browser" and response.cookie_jar and spider.share_browser_cookies:
+                self._share_cookies(response)
             ok_status = 200 <= response.status < 300 or response.status in spider.allowed_statuses
             if blocked and response.status not in spider.allowed_statuses:
                 ok_status = False
@@ -567,6 +615,17 @@ class Engine:
         finally:
             self.throttle.on_finish(slot)
             self._wake()
+
+    def _share_cookies(self, response: Response) -> None:
+        """Hand a browser session's cookies to every HTTP session."""
+        shared = 0
+        for name in self.sessions:
+            fetcher = self.sessions.get(name)
+            if isinstance(fetcher, AsyncFetcher):
+                fetcher.add_cookies(response.cookie_jar, url=response.url)
+                shared += 1
+        if shared:
+            self.stats.inc("cookie_handoffs")
 
     async def _robots_allow(self, request: Request, domain: str) -> bool:
         assert self.robots is not None
@@ -721,6 +780,16 @@ class Engine:
                 log.warning("Request.options[%r] is ignored; use the Request's own %r field instead", key, key)
         return options
 
+    def _is_duplicate_item(self, item: Any) -> bool:
+        data = to_dict(item)
+        if not isinstance(data, dict) or data.get(self.spider.unique_key) is None:
+            return False
+        digest = hashlib.blake2b(repr(data[self.spider.unique_key]).encode(), digest_size=16).digest()
+        if digest in self._item_keys:
+            return True
+        self._item_keys.add(digest)
+        return False
+
     async def _item(self, item: Any) -> None:
         spider = self.spider
         if spider.max_items is not None and self.stats.get("items", 0) >= spider.max_items:
@@ -729,6 +798,9 @@ class Engine:
         processed = await maybe_await(spider.process_item(item))
         if processed is None:
             self.stats.inc("items_dropped")
+            return
+        if spider.unique_key and self._is_duplicate_item(processed):
+            self.stats.inc("items_duplicate")
             return
         self.stats.inc("items")
         if self.exporter is not None:

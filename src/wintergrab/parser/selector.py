@@ -656,6 +656,80 @@ class Selector:
         return [item.extract(schema) for item in self.select(query, **select_kwargs) if item.is_element]
 
     # ------------------------------------------------------------------ #
+    # zero-selector extraction
+    # ------------------------------------------------------------------ #
+    def structured_data(self) -> dict[str, Any]:
+        """Machine-readable data the page publishes: JSON-LD, microdata, OpenGraph, Twitter cards, meta tags.
+
+        Product pages, articles, recipes and events very often carry clean
+        structured data - no selectors needed.
+        """
+        from .structured import structured_data
+
+        return structured_data(self._top(), self._doc.base_url(self._top())) if self._root is not None else {}
+
+    def embedded_json(self) -> dict[str, Any]:
+        """JSON state embedded by JavaScript apps (``__NEXT_DATA__``, ``window.__INITIAL_STATE__``...).
+
+        Lets you scrape many React/Vue/Next/Nuxt sites without a browser: the
+        data is already in the HTML, just not in the markup.
+        """
+        from .structured import embedded_json
+
+        return embedded_json(self._top()) if self._root is not None else {}
+
+    def find_json(self, key: str | Callable[[str], bool], *, limit: int | None = None) -> list[Any]:
+        """Every value stored under ``key`` anywhere in the page's embedded JSON and JSON-LD."""
+        from .structured import find_values
+
+        data = {"embedded": self.embedded_json(), "json_ld": self.structured_data().get("json_ld", [])}
+        return find_values(data, key, limit=limit)
+
+    def tables(self) -> list[dict[str, Any]]:
+        """Every ``<table>`` as ``{"headers", "rows": [{header: value}], "caption"}`` (colspan/rowspan handled)."""
+        from .structured import tables
+
+        return tables(self._root, self._doc.base_url(self._top())) if self._root is not None else []
+
+    def next_page(self) -> str | None:
+        """URL of the "next page" link (rel=next, "Next", arrows, numbered pagination...), if any."""
+        from .structured import next_page_url
+
+        return next_page_url(self._top(), self._doc.base_url(self._top())) if self._root is not None else None
+
+    def detect_records(self, *, min_records: int = 3) -> list[Any]:
+        """Repeating record groups on the page (product cards, results, rows), best first."""
+        from .autoextract import detect_records
+
+        return detect_records(self._root, min_records=min_records) if self._root is not None else []
+
+    def auto_extract(self, *, min_records: int = 3) -> list[dict[str, Any]]:
+        """Records from the page's main repeating list, with fields inferred automatically.
+
+        Finds the product grid / result list / table, names the fields
+        (title, url, image, price, rating...) and returns one dict per record.
+        """
+        from .autoextract import auto_extract
+
+        if self._root is None:
+            return []
+        return auto_extract(self._root, self._doc.base_url(self._top()), min_records=min_records)
+
+    def learn(self, examples: Mapping[str, str] | list[Mapping[str, str]]) -> Any:
+        """Learn an extraction schema from example values ("scraping by example").
+
+        ``page.learn({"title": "A Light in the Attic", "price": "£51.77"})`` finds
+        those values, works out the record container and a selector per field,
+        and returns a reusable :class:`~wintergrab.parser.autoextract.LearnedSchema`:
+        ``schema.extract(other_page)`` then works on every page with the same template.
+        """
+        from .autoextract import learn_schema
+
+        if self._root is None:
+            raise ValueError("cannot learn from a text selector")
+        return learn_schema(self._top(), examples, base_url=self._doc.base_url(self._top()))
+
+    # ------------------------------------------------------------------ #
     # dunder
     # ------------------------------------------------------------------ #
     def remove_namespaces(self) -> None:

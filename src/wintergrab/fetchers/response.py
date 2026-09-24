@@ -144,6 +144,13 @@ class Response:
         self._text: str | None = None
         self._selector: Selector | None = None
         self._adaptive_storage = adaptive_storage
+        #: ``"hit"`` (served from cache), ``"revalidated"`` (a 304 confirmed the
+        #: cached copy), ``"stored"`` (downloaded and cached) or ``None``.
+        self.cache_status: str | None = None
+        #: XHR/fetch responses recorded by a browser fetcher with ``capture=``.
+        self.captured: list[Any] = []
+        #: Full cookie records (domain, path, expiry...) for browser responses.
+        self.cookie_jar: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------ #
     # body
@@ -185,6 +192,11 @@ class Response:
         return self.body.lstrip()[:100].lower().startswith((b"<!doctype html", b"<html"))
 
     @property
+    def from_cache(self) -> bool:
+        """``True`` if the body came from the HTTP cache (a hit or a 304 revalidation)."""
+        return self.cache_status in ("hit", "revalidated")
+
+    @property
     def ok(self) -> bool:
         """``True`` for 1xx-3xx statuses."""
         return self.status < 400
@@ -193,6 +205,18 @@ class Response:
     def meta(self) -> dict[str, Any]:
         """``request.meta`` - data you attached to the request in a spider."""
         return self.request.meta if self.request is not None else {}
+
+    def captured_json(self, url_contains: str | None = None) -> list[Any]:
+        """Parsed JSON bodies of captured API calls (browser fetches with ``capture=``)."""
+        out = []
+        for item in self.captured:
+            if url_contains and url_contains not in item.url:
+                continue
+            try:
+                out.append(item.json())
+            except ValueError:
+                continue
+        return out
 
     def raise_for_status(self) -> Response:
         """Raise :class:`~wintergrab.errors.HTTPStatusError` for 4xx/5xx."""
@@ -266,6 +290,44 @@ class Response:
         """The page converted to Markdown."""
         return self.selector.markdown(main_content=main_content)
 
+    # ------------------------------------------------------------------ #
+    # zero-selector extraction (see Selector)
+    # ------------------------------------------------------------------ #
+    def structured_data(self) -> dict[str, Any]:
+        """JSON-LD, microdata, OpenGraph, Twitter cards and meta tags of the page."""
+        return self.selector.structured_data()
+
+    def embedded_json(self) -> dict[str, Any]:
+        """JSON state embedded by JavaScript apps (``__NEXT_DATA__``, ``window.__STATE__``...)."""
+        return self.selector.embedded_json()
+
+    def find_json(self, key: Any, *, limit: int | None = None) -> list[Any]:
+        """Every value under ``key`` in the page's embedded JSON / JSON-LD - or in the body, for JSON responses."""
+        if "json" in self.content_type:
+            from ..parser.structured import find_values
+
+            try:
+                return find_values(self.json(), key, limit=limit)
+            except ValueError:
+                return []
+        return self.selector.find_json(key, limit=limit)
+
+    def tables(self) -> list[dict[str, Any]]:
+        """Every HTML table as records."""
+        return self.selector.tables()
+
+    def next_page(self) -> str | None:
+        """URL of the "next page" link, if the page has pagination."""
+        return self.selector.next_page()
+
+    def auto_extract(self, **kwargs: Any) -> list[dict[str, Any]]:
+        """Records from the page's main repeating list, fields inferred automatically."""
+        return self.selector.auto_extract(**kwargs)
+
+    def learn(self, examples: Any) -> Any:
+        """Learn a reusable extraction schema from example values (see :meth:`Selector.learn`)."""
+        return self.selector.learn(examples)
+
     def urljoin(self, url: str) -> str:
         """Resolve a relative URL against this page."""
         return self.selector.urljoin(url) if self.is_html else _urljoin(self.url, url)
@@ -287,6 +349,14 @@ class Response:
                 raise ValueError(f"{url!r} has no href")
             url = href
         return Request(self.urljoin(url), callback=callback, **kwargs)
+
+    def follow_next(self, callback: Any = None, **kwargs: Any) -> Request | None:
+        """A :class:`Request` for the next page of a paginated listing (``None`` on the last page).
+
+        ``yield response.follow_next()`` in a callback is all a pagination loop needs.
+        """
+        url = self.next_page()
+        return self.follow(url, callback=callback, **kwargs) if url else None
 
     def follow_all(
         self,

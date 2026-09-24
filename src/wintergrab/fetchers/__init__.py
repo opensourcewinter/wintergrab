@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from .blocking import has_challenge_markers, looks_blocked
-from .browser import AsyncBrowserFetcher, BrowserFetcher
+from .browser import AsyncBrowserFetcher, BrowserFetcher, CapturedResponse
+from .cache import CacheMiss, HTTPCache
 from .http import DEFAULT_RETRY_STATUSES, AsyncFetcher, Fetcher
 from .response import Headers, Response
 
@@ -14,7 +15,10 @@ __all__ = [
     "AsyncBrowserFetcher",
     "AsyncFetcher",
     "BrowserFetcher",
+    "CacheMiss",
+    "CapturedResponse",
     "Fetcher",
+    "HTTPCache",
     "Headers",
     "Response",
     "aget",
@@ -42,6 +46,9 @@ _CLIENT_OPTIONS = {
     "referer",
     "raise_for_status",
     "adaptive_storage",
+    "cache",
+    "cache_mode",
+    "cache_ttl",
 }
 _BROWSER_CLIENT_OPTIONS = {
     "headless",
@@ -67,6 +74,9 @@ _BROWSER_CLIENT_OPTIONS = {
     "launch_args",
     "adaptive_storage",
     "timeout",
+    "cache",
+    "cache_mode",
+    "cache_ttl",
 }
 
 

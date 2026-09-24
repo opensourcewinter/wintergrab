@@ -8,6 +8,7 @@ import random
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from curl_cffi import requests as curl_requests
 from curl_cffi.requests import exceptions as curl_exc
@@ -16,6 +17,7 @@ from ..errors import FetchError, describe
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
 from ..utils import ensure_scheme, resolve_verify
+from .cache import CacheLayer, HTTPCache
 from .response import Headers, Response
 
 if TYPE_CHECKING:
@@ -59,6 +61,9 @@ class _HTTPBase:
         referer: str | None = None,
         raise_for_status: bool = False,
         adaptive_storage: AdaptiveStorage | None = None,
+        cache: HTTPCache | str | bool | None = None,
+        cache_mode: str | None = None,
+        cache_ttl: float | None = None,
     ) -> None:
         """
         Args:
@@ -85,6 +90,11 @@ class _HTTPBase:
             raise_for_status: Raise :class:`~wintergrab.errors.HTTPStatusError` on 4xx/5xx.
             adaptive_storage: Where adaptive selectors on fetched pages keep
                 their data (defaults to a SQLite file in your cache dir).
+            cache: Cache responses on disk: ``True`` (``./.wintergrab-cache``),
+                a path, or an :class:`~wintergrab.HTTPCache`.
+            cache_mode: ``"revalidate"`` (default), ``"prefer"``, ``"offline"``
+                or ``"refresh"`` - see :class:`~wintergrab.HTTPCache`.
+            cache_ttl: Seconds a cached response counts as fresh.
         """
         if proxy and proxies:
             raise ValueError("Pass either proxy= or proxies=, not both")
@@ -105,6 +115,8 @@ class _HTTPBase:
         self.referer = REFERERS.get(referer, referer) if referer else None
         self.raise_for_status = raise_for_status
         self.adaptive_storage = adaptive_storage
+        self.cache = HTTPCache.coerce(cache, mode=cache_mode, ttl=cache_ttl)
+        self._cache_layer = CacheLayer(self.cache) if self.cache is not None else None
 
     # -- helpers ---------------------------------------------------------- #
     def _session_kwargs(self) -> dict[str, Any]:
@@ -207,6 +219,42 @@ class _HTTPBase:
             retryable=retryable,
         )
 
+    def _cache_before(
+        self, req: Request, headers: Mapping[str, str] | None
+    ) -> tuple[Response | None, Any, Mapping[str, str] | None]:
+        """Serve from cache, or add conditional headers for revalidation."""
+        if self._cache_layer is None:
+            return None, None, headers
+        cached, stale, conditional = self._cache_layer.before(req, self.adaptive_storage)
+        if conditional:
+            headers = {**conditional, **(headers or {})}
+        return cached, stale, headers
+
+    def _finish(self, req: Request, response: Response, stale: Any = None) -> Response:
+        if self._cache_layer is not None and response.cache_status is None:
+            response = self._cache_layer.after(req, response, stale, self.adaptive_storage)
+        if self.raise_for_status:
+            response.raise_for_status()
+        return response
+
+    @staticmethod
+    def _cookie_records(
+        cookies: Mapping[str, str] | Iterable[Mapping[str, Any]], url: str | None, domain: str | None
+    ) -> list[dict[str, Any]]:
+        host = domain or (urlsplit(url).hostname if url else None) or ""
+        if isinstance(cookies, Mapping):
+            return [{"name": k, "value": v, "domain": host, "path": "/"} for k, v in cookies.items()]
+        return [
+            {
+                "name": c["name"],
+                "value": c.get("value", ""),
+                "domain": (c.get("domain") or host).lstrip("."),
+                "path": c.get("path") or "/",
+                "secure": bool(c.get("secure", False)),
+            }
+            for c in cookies
+        ]
+
     def _report(self, proxy: str | None, from_rotator: bool, ok: bool) -> None:
         if from_rotator and self.proxies is not None:
             (self.proxies.report_success if ok else self.proxies.report_failure)(proxy)
@@ -262,6 +310,9 @@ class Fetcher(_HTTPBase):
         req = Request(
             ensure_scheme(url), method=method, params=params, headers=dict(headers or {}), data=data, json=json
         )
+        cached, stale, headers = self._cache_before(req, headers)
+        if cached is not None:
+            return self._finish(req, cached)
         attempts = 1 + (self.retries if retries is None else max(0, retries))
         for attempt in range(attempts):
             chosen, rotated = self._pick_proxy(proxy)
@@ -297,9 +348,7 @@ class Fetcher(_HTTPBase):
                 log.info("retrying %s in %.1fs (HTTP %s)", req.url, delay, response.status)
                 time.sleep(delay)
                 continue
-            if self.raise_for_status:
-                response.raise_for_status()
-            return response
+            return self._finish(req, response, stale)
         raise AssertionError("unreachable")  # pragma: no cover
 
     def get(self, url: str, **kwargs: Any) -> Response:
@@ -324,6 +373,22 @@ class Fetcher(_HTTPBase):
     def session_cookies(self) -> dict[str, str]:
         """Cookies currently stored in the session."""
         return {c.name: c.value or "" for c in self._session.cookies.jar}
+
+    def add_cookies(
+        self,
+        cookies: Mapping[str, str] | Iterable[Mapping[str, Any]],
+        *,
+        url: str | None = None,
+        domain: str | None = None,
+    ) -> None:
+        """Load cookies into the session, scoped to a domain.
+
+        Accepts ``{name: value}`` (scoped to ``url``'s host or ``domain``) or
+        cookie dicts as returned by :meth:`BrowserFetcher.export_cookies` - the way to
+        log in with a real browser and continue with fast HTTP requests.
+        """
+        for c in self._cookie_records(cookies, url, domain):
+            self._session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"], secure=c["secure"])
 
     def close(self) -> None:
         self._session.close()
@@ -353,6 +418,7 @@ class AsyncFetcher(_HTTPBase):
         self.max_connections = max_connections
         self._session: curl_requests.AsyncSession | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._pending_cookies: list[dict[str, Any]] = []
 
     def _get_session(self) -> curl_requests.AsyncSession:
         loop = asyncio.get_running_loop()
@@ -364,7 +430,23 @@ class AsyncFetcher(_HTTPBase):
                 asyncio.run_coroutine_threadsafe(old.close(), old_loop)
             self._session = curl_requests.AsyncSession(max_clients=self.max_connections, **self._session_kwargs())
             self._loop = loop
+            for c in self._pending_cookies:
+                self._session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"], secure=c["secure"])
         return self._session
+
+    def add_cookies(
+        self,
+        cookies: Mapping[str, str] | Iterable[Mapping[str, Any]],
+        *,
+        url: str | None = None,
+        domain: str | None = None,
+    ) -> None:
+        """Load cookies into the session (see :meth:`Fetcher.add_cookies`)."""
+        records = self._cookie_records(cookies, url, domain)
+        self._pending_cookies.extend(records)  # also applied if the session is recreated
+        if self._session is not None:
+            for c in records:
+                self._session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"], secure=c["secure"])
 
     async def request(
         self,
@@ -387,6 +469,9 @@ class AsyncFetcher(_HTTPBase):
         req = request or Request(
             ensure_scheme(url), method=method, params=params, headers=dict(headers or {}), data=data, json=json
         )
+        cached, stale, headers = self._cache_before(req, headers)
+        if cached is not None:
+            return self._finish(req, cached)
         session = self._get_session()
         attempts = 1 + (self.retries if retries is None else max(0, retries))
         for attempt in range(attempts):
@@ -425,9 +510,7 @@ class AsyncFetcher(_HTTPBase):
                 log.info("retrying %s in %.1fs (HTTP %s)", req.url, delay, response.status)
                 await asyncio.sleep(delay)
                 continue
-            if self.raise_for_status:
-                response.raise_for_status()
-            return response
+            return self._finish(req, response, stale)
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def get(self, url: str, **kwargs: Any) -> Response:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import http.client
 import json
 import threading
@@ -195,7 +196,28 @@ class Handler(BaseHTTPRequestHandler):
             jar = dict(c.strip().split("=", 1) for c in raw.split(";") if "=" in c)
             return self.send(200, json.dumps(jar), "application/json")
         if path == "/robots.txt":
-            return self.send(200, "User-agent: *\nDisallow: /private/\n", "text/plain")
+            host = self.headers.get("Host", "127.0.0.1")
+            body = f"User-agent: *\nDisallow: /private/\nSitemap: http://{host}/sitemap_index.xml\n"
+            return self.send(200, body, "text/plain")
+        if path == "/sitemap_index.xml":
+            host = self.headers.get("Host", "127.0.0.1")
+            xml = (
+                "<?xml version='1.0' encoding='UTF-8'?><sitemapindex xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>"
+                f"<sitemap><loc>http://{host}/sitemap-products.xml.gz</loc></sitemap>"
+                f"<sitemap><loc>http://{host}/sitemap-items.xml</loc></sitemap></sitemapindex>"
+            )
+            return self.send(200, xml, "application/xml")
+        if path == "/sitemap-products.xml.gz":
+            host = self.headers.get("Host", "127.0.0.1")
+            urls = "".join(
+                f"<url><loc>http://{host}/product/{i}</loc><lastmod>2026-0{i}-01</lastmod></url>" for i in range(1, 6)
+            )
+            xml = f"<?xml version='1.0'?><urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>{urls}</urlset>"
+            return self.send(200, gzip.compress(xml.encode()), "application/x-gzip")
+        if path == "/sitemap-items.xml":
+            urls = "".join(f"<url><loc>/item/{i}</loc></url>" for i in range(3))
+            xml = f"<urlset xmlns='http://www.sitemaps.org/schemas/sitemap/0.9'>{urls}</urlset>"
+            return self.send(200, xml, "text/xml")
         if path.startswith("/private/"):
             return self.send(200, layout("private", "<p>secret</p>"))
         if path == "/js":
@@ -222,6 +244,77 @@ class Handler(BaseHTTPRequestHandler):
                 "<script>setTimeout(function(){location.href='/challenge?passed=1'}, 800);</script></body></html>"
             )
             return self.send(503, html)
+        if path.startswith("/etag/"):
+            version = q("v", "1")
+            etag = f'"v{version}"'
+            if self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            return self.send(200, layout("etag", f"<p id='v'>{version}</p>"), headers={"ETag": etag})
+        if path == "/maxage":
+            n = site.bump("maxage")
+            return self.send(200, layout("maxage", f"<p id='n'>{n}</p>"), headers={"Cache-Control": "max-age=60"})
+        if path == "/nostore":
+            n = site.bump("nostore")
+            return self.send(200, layout("nostore", f"<p id='n'>{n}</p>"), headers={"Cache-Control": "no-store"})
+        if path == "/api/products":
+            page_no = int(q("page", "1"))
+            data = {
+                "page": page_no,
+                "items": [{"id": i, "name": f"API item {i}"} for i in range(page_no * 3, page_no * 3 + 3)],
+            }
+            return self.send(200, json.dumps(data), "application/json")
+        if path == "/spa":
+            html = layout(
+                "SPA",
+                "<div id='root'>loading</div><script>fetch('/api/products?page=1').then(r => r.json()).then(d => {"
+                "document.getElementById('root').innerHTML = d.items.map(i => '<p class=\"row\">' + i.name + '</p>').join('');"
+                "return fetch('/api/products?page=2');}).then(r => r.json()).then(d => {document.title = 'SPA loaded';});"
+                "</script>",
+            )
+            return self.send(200, html)
+        if path.startswith("/rich/"):
+            n = int(path.rsplit("/", 1)[1])
+            next_link = f"<a rel='next' href='/rich/{n + 1}'>Next ›</a>" if n < 3 else ""
+            body = (
+                "<script type='application/ld+json'>"
+                + json.dumps(
+                    {
+                        "@context": "https://schema.org",
+                        "@type": "Product",
+                        "name": f"Rich product {n}",
+                        "offers": {"@type": "Offer", "price": f"{n}9.99", "priceCurrency": "USD"},
+                    }
+                )
+                + "</script>"
+                f"<div itemscope itemtype='https://schema.org/Product'><span itemprop='name'>Micro {n}</span>"
+                "<div itemprop='aggregateRating' itemscope itemtype='https://schema.org/AggregateRating'>"
+                "<meta itemprop='ratingValue' content='4.5'></div></div>"
+                "<script id='__NEXT_DATA__' type='application/json'>"
+                + json.dumps({"props": {"pageProps": {"product": {"id": n, "price": n * 10}}}})
+                + "</script>"
+                f"<script>window.__INITIAL_STATE__ = {json.dumps({'cart': {'items': [], 'price': 0}})};</script>"
+                "<table><thead><tr><th>Spec</th><th>Value</th></tr></thead>"
+                "<tbody><tr><td>Weight</td><td>1 kg</td></tr><tr><td>Color</td><td>Blue</td></tr></tbody></table>"
+                f"<nav class='pagination'>{next_link}</nav>"
+            )
+            head = f"<meta property='og:title' content='Rich {n}'><meta property='og:image' content='/img/{n}.png'>"
+            html = layout(f"Rich {n}", body).replace("<head>", "<head>" + head, 1)
+            return self.send(200, html)
+        if path.startswith("/jsgate/"):
+            # Content needs a cookie that only a JavaScript-running client gets.
+            if "gate=passed" in (self.headers.get("Cookie") or ""):
+                n = path.rsplit("/", 1)[1]
+                return self.send(200, layout(f"gated {n}", f"<h1 id='gated'>Gated {n}</h1>"))
+            html = (
+                "<html><head><title>Just a moment...</title></head><body>Checking your browser"
+                "<script>document.cookie = 'gate=passed; path=/'; setTimeout(function(){location.reload()}, 300);</script>"
+                "</body></html>"
+            )
+            return self.send(403, html)
         if path == "/guarded":
             if self.headers.get("X-Solved") == "yes":
                 return self.send(200, layout("Guarded", "<h1 id='real'>Guarded content</h1>"))
