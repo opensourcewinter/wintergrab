@@ -13,7 +13,7 @@ See https://github.com/opensourcewinter/wintergrab for the full docs.
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # The parser must be imported before the adaptive package (they reference each other).
 from .parser import Field, Selector, SelectorList, parse  # isort: skip

@@ -29,15 +29,29 @@ thousands of pages), the same API scales up.
   sessions (HTTP + browser, several accounts…), proxy rotation with health
   checks, **AutoThrottle** that backs off when a site pushes back,
   robots.txt support, and **pause/resume** (Ctrl+C, then run again).
+- **Scrape without selectors.** Pull JSON-LD/microdata/OpenGraph, the JSON
+  state that React/Next/Vue apps embed in their HTML, and every table.
+  `auto_extract()` finds a page's product grid or result list and names the
+  fields. `learn({"title": "…", "price": "…"})` writes the selectors for you
+  from values you can see on the page.
+- **Built for big, long crawls.** An HTTP cache that revalidates with `304`s
+  and replays whole crawls offline. A disk-backed queue with a Bloom filter
+  that keeps memory flat at millions of URLs and survives `kill -9`. Sitemap
+  crawling, SQLite output with upserts, and a live progress line.
+- **Browser superpowers.** Capture the JSON API calls a page makes while it
+  renders. Clear a login or JS check once in the browser, then continue over
+  fast HTTP with the same cookies.
 - **A small CLI.** `wintergrab get` and `wintergrab crawl` cover the common
-  jobs with no code at all.
+  jobs with no code at all, including `--auto`, `--learn` and `--offline`.
 
 ## Install
 
 ```bash
 pip install wintergrab                 # HTTP fetching, parsing, spiders, CLI
 pip install "wintergrab[browser]"      # + headless browser support
+pip install "wintergrab[speed]"        # + uvloop and orjson
 playwright install chromium            # one-time browser download (browser extra only)
+wintergrab doctor                      # check what is installed
 ```
 
 Python 3.10+.
@@ -92,6 +106,18 @@ attributes, text, position, parent and neighbours. If the site later renames
 element on the new page and returns the closest matches. It logs a warning
 so you know to update the selector. See [docs/adaptive-selectors.md](docs/adaptive-selectors.md).
 
+### Scrape without writing selectors
+
+```python
+page.auto_extract()          # [{"title", "url", "image", "price", "rating"...}, ...] from the main record list
+schema = page.learn({"title": "A Light in the Attic", "price": "£51.77"})
+schema.extract(other_page)   # the learned selectors work on every page of that template
+page.structured_data()       # JSON-LD, microdata, OpenGraph, meta tags
+page.embedded_json()         # __NEXT_DATA__, window.__INITIAL_STATE__, ... (SPAs without a browser)
+page.tables()                # every table as records
+page.next_page()             # pagination, auto-detected
+```
+
 ### JavaScript pages
 
 ```python
@@ -135,6 +161,19 @@ result = BooksSpider().run()
 print(result.status, result.stats["pages"], result.stats["items"])
 ```
 
+Scaling up is a few attributes away:
+
+```python
+class BigCrawl(Spider):
+    sitemap_urls = ["https://shop.example/robots.txt"]   # discover pages from sitemaps
+    frontier = "disk"            # flat memory for millions of URLs, crash-safe queue
+    crawl_dir = ".crawl/big"
+    cache = ".cache/big"         # revalidating HTTP cache; cache_mode="offline" replays the crawl
+    output = "catalog.db"        # SQLite...
+    unique_key = "url"           # ...with upserts: re-crawls update rows in place
+    fallback_session = "browser" # blocked page? retry it in a headless browser, share its cookies
+```
+
 Spiders also give you:
 
 - **Sessions.** Route requests through different fetchers with
@@ -158,6 +197,11 @@ wintergrab get https://books.toscrape.com --each article.product_pod \
     --field title="h3 a::attr(title)" --field price=.price_color::text -o books.csv
 wintergrab get https://quotes.toscrape.com/js/ --browser --wait-for .quote
 
+wintergrab get https://books.toscrape.com --auto                     # records, no selectors
+wintergrab get https://books.toscrape.com --learn "title=A Light in the Attic" --save-schema books.json
+wintergrab crawl https://books.toscrape.com --schema books.json --paginate -o books.jsonl
+wintergrab get https://shop.example/p/1 --structured                # JSON-LD, OpenGraph...
+
 wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine   # run a spider file
 wintergrab crawl https://books.toscrape.com --follow "li.next a" --follow "h3 a" \
     --each ".product_main" --field title=h1::text --max-pages 50 -o books.jsonl
@@ -174,6 +218,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Parsing](docs/parsing.md) | Selectors, extraction schemas, text search, Markdown |
 | [Adaptive selectors](docs/adaptive-selectors.md) | How relocation works and how to tune it |
 | [Spiders](docs/spiders.md) | Crawling, sessions, pause/resume, output, every setting |
+| [Power features](docs/power-features.md) | Zero-selector extraction, cache & offline replay, API capture, cookie handoff, sitemaps, disk frontier, SQLite |
 | [Tough sites](docs/anti-blocking.md) | Impersonation, browsers, proxies, AutoThrottle, etiquette |
 | [CLI](docs/cli.md) | `get`, `crawl` and `shell` reference |
 | [Examples](examples/) | Runnable scripts for every feature |

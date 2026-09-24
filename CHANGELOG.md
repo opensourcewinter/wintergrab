@@ -1,6 +1,28 @@
 # Changelog
 
-## 0.1.0 — unreleased
+## 0.2.0 — unreleased
+
+- **Zero-selector extraction**: `structured_data()` (JSON-LD, microdata,
+  OpenGraph, Twitter, meta), `embedded_json()` (`__NEXT_DATA__`,
+  `window.__STATE__`, `JSON.parse` payloads), `find_json()`, `tables()`,
+  `next_page()`/`follow_next()`, `detect_records()`/`auto_extract()` and
+  learn-by-example `learn()` → reusable `LearnedSchema`.
+- **HTTP cache** with `revalidate`/`prefer`/`offline`/`refresh` modes for all
+  fetchers and spiders (offline replay of whole crawls).
+- **Disk frontier** (`frontier="disk"`): SQLite queue + scalable Bloom filter,
+  flat memory, at-least-once crash recovery.
+- **Browser**: `capture=` records XHR/fetch API responses; `export_cookies()` /
+  `add_cookies()`; spiders share browser cookies with HTTP sessions.
+- **Sitemaps**: `wg.sitemap()`, `Spider.sitemap_urls/rules/follow/since`.
+- **Output**: SQLite exporter with upserts, `unique_key` de-duplication,
+  buffered writers, orjson.
+- **Speed**: uvloop when installed (`[speed]` extra), leaner crawl loop.
+- Live terminal progress line; `wintergrab doctor`; many new CLI flags.
+- Engine robustness: no lost requests on cancel/force-stop/fatal errors,
+  crash-safe JSON output, correct Retry-After/429 pacing, signal handlers
+  restored, Ctrl+C in Jupyter.
+
+## 0.1.0
 
 First release.
 
