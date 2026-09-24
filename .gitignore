@@ -26,3 +26,6 @@ crawls/
 .idea/
 .vscode/
 .DS_Store
+
+# Default HTTP cache directory
+.wintergrab-cache/

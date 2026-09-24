@@ -12,7 +12,6 @@ import sys
 import textwrap
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
@@ -432,14 +431,14 @@ def test_add_cookies_does_not_accumulate() -> None:
     assert len(fetcher._pending_cookies) == 2
 
 
-def test_cli_cache_and_capture_flags_do_not_eat_urls(site, capsys) -> None:
+def test_cli_cache_and_capture_flags_do_not_eat_urls(site, capsys, tmp_path) -> None:
     from wintergrab.cli import build_parser, main
 
     args = build_parser().parse_args(["get", "--cache", "--capture", site.url, "b"])
     assert args.urls == [site.url, "b"] and args.cache is True and args.capture is True
     args = build_parser().parse_args(["get", site.url, "--cache"])
     assert args.urls == [site.url] and args.cache is True
-    assert main(["-q", "get", "--cache-dir", str(Path(os.getcwd()) / ".nope-never-used"), "--offline", site.url]) == 1
+    assert main(["-q", "get", "--cache-dir", str(tmp_path / "empty-cache"), "--offline", site.url]) == 1
 
 
 def test_cli_learn_unknown_example_is_a_clean_error(site, capsys) -> None:
