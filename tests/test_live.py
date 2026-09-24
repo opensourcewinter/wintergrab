@@ -45,7 +45,7 @@ def test_extract_to_csv(tmp_path) -> None:
     assert len(books) == 20
     assert books[0]["title"] == "A Light in the Attic"
     assert isinstance(books[0]["price"], float)
-    assert len(list(csv.DictReader(out.open()))) == 20
+    assert len(list(csv.DictReader(out.open(encoding="utf-8", newline="")))) == 20
 
 
 def test_async_many_pages() -> None:
@@ -56,7 +56,7 @@ def test_async_many_pages() -> None:
 def test_quotes_spider(tmp_path) -> None:
     out = tmp_path / "quotes.jsonl"
     result = load("05_quotes_spider").QuotesSpider(output=str(out), max_pages=4, log_level=None).run()
-    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert result.status == "finished" and result.stats.get("failed", 0) == 0
     assert any("text" in row for row in rows)
 

@@ -350,7 +350,10 @@ class Spider:
             interrupts = 0
             while True:
                 try:
-                    return future.result()
+                    # Wait in short slices: on Windows a wait without a timeout
+                    # isn't interrupted by Ctrl+C until the crawl has ended.
+                    if concurrent.futures.wait([future], timeout=0.25).done:
+                        return future.result()
                 except KeyboardInterrupt:
                     interrupts += 1
                     if interrupts == 1:

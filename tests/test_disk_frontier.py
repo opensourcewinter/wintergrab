@@ -55,7 +55,7 @@ def test_disk_frontier_pause_and_resume(site, tmp_path) -> None:
     assert (tmp_path / "c" / "frontier.sqlite3").exists()
     second = Catalog(output=str(out), **kwargs).run()
     assert second.status == "finished"
-    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert sorted(r["name"] for r in rows) == EXPECTED  # nothing lost, nothing twice
     assert second.stats["runs"] == 2
 
@@ -110,14 +110,14 @@ def test_disk_frontier_survives_a_hard_crash(site, tmp_path) -> None:
     proc = subprocess.Popen([sys.executable, str(script)])
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        if out.exists() and len(out.read_text().splitlines()) >= 8:
+        if out.exists() and len(out.read_text(encoding="utf-8").splitlines()) >= 8:
             break
         time.sleep(0.05)
     proc.kill()  # SIGKILL; TerminateProcess on Windows
     proc.wait()
-    crashed = len(out.read_text().splitlines())
+    crashed = len(out.read_text(encoding="utf-8").splitlines())
     assert 0 < crashed < 40
 
     subprocess.run([sys.executable, str(script)], check=True, timeout=120)
-    urls = {json.loads(line)["url"] for line in out.read_text().splitlines()}
+    urls = {json.loads(line)["url"] for line in out.read_text(encoding="utf-8").splitlines()}
     assert urls == {site.url + f"/item/{i}" for i in range(40)}  # at-least-once: nothing missing

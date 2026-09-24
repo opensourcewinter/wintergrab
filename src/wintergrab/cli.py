@@ -110,7 +110,8 @@ def _write_rows(rows: list[dict[str, Any]], fmt: str, output: str | None, *, sin
     elif fmt == "csv":
         buf = io.StringIO()
         columns = list(dict.fromkeys(k for r in rows for k in r))
-        writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore")
+        # "\n": _emit's text-mode file or console adds the platform's line ending
+        writer = csv.DictWriter(buf, fieldnames=columns, extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
         for row in rows:
             writer.writerow(

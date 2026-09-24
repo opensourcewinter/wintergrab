@@ -78,7 +78,7 @@ def test_json_output_survives_a_crash(tmp_path, tail) -> None:
     exporter = open_exporter(path, append=True)
     exporter.write({"i": 99})
     exporter.close()
-    assert [row["i"] for row in json.loads(path.read_text())] == [1, 2, 99]
+    assert [row["i"] for row in json.loads(path.read_text(encoding="utf-8"))] == [1, 2, 99]
 
 
 def test_json_output_refuses_foreign_files(tmp_path) -> None:
@@ -86,7 +86,7 @@ def test_json_output_refuses_foreign_files(tmp_path) -> None:
     path.write_text('{"not": "an array"}')
     with pytest.raises(ValueError, match=r"not a JSON array"):
         open_exporter(path, append=True)
-    assert path.read_text() == '{"not": "an array"}'
+    assert path.read_text(encoding="utf-8") == '{"not": "an array"}'
 
 
 def test_cancelled_crawl_saves_every_in_flight_request(site, tmp_path) -> None:
@@ -318,13 +318,13 @@ def test_disk_frontier_crash_in_the_first_seconds_loses_nothing(site, tmp_path) 
     )
     proc = subprocess.Popen([sys.executable, str(script)])
     deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and not (out.exists() and len(out.read_text().splitlines()) >= 6):
+    while time.monotonic() < deadline and not (out.exists() and len(out.read_text(encoding="utf-8").splitlines()) >= 6):
         time.sleep(0.05)
     time.sleep(0.3)  # let at least one frontier commit happen
     proc.kill()  # SIGKILL; TerminateProcess on Windows
     proc.wait()
     subprocess.run([sys.executable, str(script)], check=True, timeout=120)
-    urls = {json.loads(line)["url"] for line in out.read_text().splitlines()}
+    urls = {json.loads(line)["url"] for line in out.read_text(encoding="utf-8").splitlines()}
     assert urls == {site.url + f"/item/{i}" for i in range(30)}
 
 

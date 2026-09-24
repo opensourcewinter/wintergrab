@@ -38,7 +38,7 @@ def test_02_extract_to_csv(site, tmp_path) -> None:
         "in_stock": True,
         "url": site.url + "/books/catalogue/book-1/index.html",
     }
-    assert len(list(csv.DictReader(out.open()))) == 4
+    assert len(list(csv.DictReader(out.open(encoding="utf-8", newline="")))) == 4
 
 
 def test_03_adaptive_selectors() -> None:
@@ -62,7 +62,7 @@ def test_05_quotes_spider(site, tmp_path) -> None:
     result = spider_cls(
         start_urls=[site.url + "/quotes/"], allowed_domains=["127.0.0.1"], output=str(out), log_level=None
     ).run()
-    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     quotes = [r for r in rows if "text" in r]
     authors = [r for r in rows if "born" in r]
     assert len(quotes) == 6 and len(authors) == 4

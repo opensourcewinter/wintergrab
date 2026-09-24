@@ -47,8 +47,9 @@ def test_get_records_to_csv(site, tmp_path, capsys) -> None:
         "--field", "name=.name a::text", "--field", "price=.price::text", "-o", str(out_file),
     )  # fmt: skip
     assert code == 0 and "wrote 4 record(s)" in err
-    rows = list(csv.DictReader(out_file.open()))
+    rows = list(csv.DictReader(out_file.open(encoding="utf-8", newline="")))
     assert rows[0] == {"name": "Product 1", "price": "$6.25"}
+    assert b"\r\r\n" not in out_file.read_bytes()  # Windows: csv's CRLF plus text-mode newline translation
 
 
 def test_get_records_as_jsonl_for_many_urls(site, capsys) -> None:
@@ -62,7 +63,7 @@ def test_get_saves_html_and_reports_failures(site, tmp_path, capsys) -> None:
     page = tmp_path / "page.html"
     code, _, _ = run(capsys, "get", site.url + "/json", site.url + "/status/404", "-o", str(page), "--retries", "0")
     assert code == 1  # the 404 counts as a failure
-    assert '"items"' in page.read_text()
+    assert '"items"' in page.read_text(encoding="utf-8")
 
 
 def test_get_sends_headers_and_cookies(site, capsys) -> None:
@@ -79,7 +80,7 @@ def test_crawl_url_mode(site, tmp_path, capsys) -> None:
         "--each", "h1", "--field", "name=::text", "-o", str(out_file),
     )  # fmt: skip
     assert code == 0 and "finished" in err
-    rows = [json.loads(line) for line in out_file.read_text().splitlines()]
+    rows = [json.loads(line) for line in out_file.read_text(encoding="utf-8").splitlines()]
     names = sorted(r["name"] for r in rows)
     assert len(names) == 20 and names[0] == "Product 1"
 
@@ -114,7 +115,7 @@ def test_crawl_spider_file_with_overrides(site, tmp_path, capsys) -> None:
         "-s", f'start_urls=["{site.url}/quotes/"]', "-s", "concurrency=2", "--crawl-dir", str(tmp_path / "state"),
     )  # fmt: skip
     assert code == 0, err
-    authors = [r["author"] for r in json.loads(out_file.read_text())]
+    authors = [r["author"] for r in json.loads(out_file.read_text(encoding="utf-8"))]
     assert len(authors) == 6 and "Albert Einstein" in authors
 
 

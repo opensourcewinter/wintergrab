@@ -93,12 +93,12 @@ def test_cli_auto_and_learn(site, capsys, tmp_path) -> None:
 
     out = tmp_path / "all.jsonl"
     assert main(["-q", "crawl", site.url + "/books/", "--schema", str(schema_file), "--paginate", "-o", str(out)]) == 0
-    titles = [json.loads(line)["title"] for line in out.read_text().splitlines()]
+    titles = [json.loads(line)["title"] for line in out.read_text(encoding="utf-8").splitlines()]
     assert len(titles) == 12 and "Book number 12" in titles
 
 
 def test_cli_crawl_auto_paginate(site, tmp_path) -> None:
     out = tmp_path / "auto.jsonl"
     assert main(["-q", "crawl", site.url + "/books/", "--auto", "--paginate", "-o", str(out)]) == 0
-    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 12

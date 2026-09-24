@@ -98,7 +98,7 @@ def test_items_can_be_dataclasses_and_are_processed(site, tmp_path) -> None:
     result = Pipeline(output=str(out)).run()
     assert result.items == [Product("Product 1")]
     assert result.stats["items_dropped"] == 1
-    assert [json.loads(line) for line in out.read_text().splitlines()] == [{"name": "Product 1"}]
+    assert [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()] == [{"name": "Product 1"}]
 
 
 @pytest.mark.parametrize("suffix", [".jsonl", ".json", ".csv"])
@@ -357,7 +357,7 @@ def test_request_basics() -> None:
 def test_crawl_result_save(site, tmp_path) -> None:
     result = product_spider(site, max_items=3, concurrency=1).run()
     path = result.save(tmp_path / "saved.json")
-    assert len(json.loads(path.read_text())) == 3
+    assert len(json.loads(path.read_text(encoding="utf-8"))) == 3
     assert "CrawlResult" in repr(result)
 
 

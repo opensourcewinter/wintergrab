@@ -32,7 +32,7 @@ class Catalog(Spider):
 
 
 def read_jsonl(path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text().splitlines()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
 def test_pause_and_resume(site, tmp_path) -> None:
@@ -51,7 +51,7 @@ def test_pause_and_resume(site, tmp_path) -> None:
     second = Catalog(start_urls=start, crawl_dir=str(crawl_dir), output=str(out)).run()
     assert second.status == "finished"
     assert not (crawl_dir / "state.pickle").exists()
-    assert json.loads((crawl_dir / "summary.json").read_text())["status"] == "finished"
+    assert json.loads((crawl_dir / "summary.json").read_text(encoding="utf-8"))["status"] == "finished"
     names = [row["name"] for row in read_jsonl(out)]
     assert sorted(names) == sorted(f"Product {i}" for i in range(1, 21))  # nothing lost, nothing twice
     assert second.stats["runs"] == 2
@@ -75,9 +75,9 @@ def test_json_output_is_extended_on_resume(site, tmp_path) -> None:
     crawl_dir, out = tmp_path / "crawl", tmp_path / "items.json"
     start = [site.url + "/products/page/1"]
     Catalog(start_urls=start, crawl_dir=str(crawl_dir), output=str(out), pause_after=4).run()
-    assert len(json.loads(out.read_text())) >= 4
+    assert len(json.loads(out.read_text(encoding="utf-8"))) >= 4
     Catalog(start_urls=start, crawl_dir=str(crawl_dir), output=str(out)).run()
-    assert len(json.loads(out.read_text())) == 20
+    assert len(json.loads(out.read_text(encoding="utf-8"))) == 20
 
 
 def test_lambda_callbacks_are_rejected_when_resumable(site, tmp_path) -> None:
