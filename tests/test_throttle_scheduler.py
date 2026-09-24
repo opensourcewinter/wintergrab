@@ -95,7 +95,8 @@ def test_scheduler_reports_wait_for_delayed_domains() -> None:
     req, _ = sched.pop_ready(throttle, now)
     throttle.on_start(throttle.slot("a.test"), now)
     req, wait = sched.pop_ready(throttle, now)
-    assert req is None and 0.9 < wait <= 1.0
+    # (now + 1.0) - now is not exactly 1.0 when the monotonic clock reads high
+    assert req is None and abs(wait - 1.0) < 1e-6
 
 
 def test_url_helpers() -> None:
