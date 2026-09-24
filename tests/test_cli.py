@@ -153,3 +153,17 @@ def test_shell_is_wired(monkeypatch, site, capsys) -> None:
     assert main(["shell", site.url + "/product/1"]) == 0
     assert captured["local"]["page"].css("h1::text").get() == "Product 1"
     assert textwrap.dedent("page = ") in captured["banner"]
+
+
+def test_output_survives_a_narrow_locale_encoding(monkeypatch) -> None:
+    import io
+
+    from wintergrab import cli
+
+    raw = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="cp1252"))  # a Windows pipe
+    monkeypatch.delenv("PYTHONIOENCODING", raising=False)
+    cli._utf8_output()
+    print("₹ 中文 £")  # UnicodeEncodeError in cp1252
+    sys.stdout.flush()
+    assert raw.getvalue().decode("utf-8").strip() == "₹ 中文 £"

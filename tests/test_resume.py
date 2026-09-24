@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import signal
 import sys
 import threading
@@ -134,7 +133,7 @@ def test_ctrl_c_pauses_the_crawl(site, tmp_path) -> None:
         def parse(self, response):
             yield {"url": response.url}
 
-    timer = threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGINT))
+    timer = threading.Timer(0.5, lambda: signal.raise_signal(signal.SIGINT))
     timer.start()
     try:
         result = Slow(crawl_dir=str(crawl_dir)).run()

@@ -193,6 +193,15 @@ def test_signal_handlers_are_restored(site) -> None:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
+def _interrupt_like_a_notebook() -> None:
+    if sys.platform == "win32":
+        import _thread
+
+        _thread.interrupt_main()  # how ipykernel interrupts on Windows
+    else:
+        os.kill(os.getpid(), signal.SIGINT)  # a terminal's Ctrl+C reaches the whole process
+
+
 def test_ctrl_c_pauses_a_crawl_started_inside_an_event_loop(site, tmp_path) -> None:
     class Slow(Quiet):
         concurrency = 1
@@ -207,7 +216,7 @@ def test_ctrl_c_pauses_a_crawl_started_inside_an_event_loop(site, tmp_path) -> N
     # Like a Jupyter kernel: a loop without asyncio.run()'s own SIGINT handler,
     # so Ctrl+C surfaces as KeyboardInterrupt in the main thread.
     loop = asyncio.new_event_loop()
-    timer = threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGINT))
+    timer = threading.Timer(0.5, _interrupt_like_a_notebook)
     timer.start()
     try:
         result = loop.run_until_complete(notebook_cell())
@@ -312,7 +321,7 @@ def test_disk_frontier_crash_in_the_first_seconds_loses_nothing(site, tmp_path) 
     while time.monotonic() < deadline and not (out.exists() and len(out.read_text().splitlines()) >= 6):
         time.sleep(0.05)
     time.sleep(0.3)  # let at least one frontier commit happen
-    os.kill(proc.pid, signal.SIGKILL)
+    proc.kill()  # SIGKILL; TerminateProcess on Windows
     proc.wait()
     subprocess.run([sys.executable, str(script)], check=True, timeout=120)
     urls = {json.loads(line)["url"] for line in out.read_text().splitlines()}

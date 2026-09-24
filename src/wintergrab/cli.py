@@ -274,7 +274,9 @@ def cmd_get(args: argparse.Namespace) -> int:
                     return 1
                 print(f"learned: {json.dumps(schema.to_dict(), ensure_ascii=False)}", file=sys.stderr)
                 if args.save_schema:
-                    Path(args.save_schema).write_text(json.dumps(schema.to_dict(), indent=2, ensure_ascii=False))
+                    Path(args.save_schema).write_text(
+                        json.dumps(schema.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8"
+                    )
                     print(f"schema saved to {args.save_schema}", file=sys.stderr)
             rows.extend({"url": page.url, **row} if multi else row for row in schema.extract(page))
             continue
@@ -741,7 +743,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _utf8_output() -> None:
+    """Write UTF-8 to redirected stdout/stderr.
+
+    Scraped text can hold any character. Where the locale encoding is narrower
+    (Windows pipes and files default to cp1252) printing it would crash, so
+    switch to UTF-8 unless the user chose an encoding with PYTHONIOENCODING.
+    """
+    if os.environ.get("PYTHONIOENCODING"):
+        return
+    for stream in (sys.stdout, sys.stderr):
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "").replace("_", "")
+        if encoding != "utf8" and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (ValueError, OSError):  # e.g. a stream that was already written to in binary mode
+                pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

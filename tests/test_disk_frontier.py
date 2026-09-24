@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import signal
 import subprocess
 import sys
 import textwrap
@@ -115,7 +113,7 @@ def test_disk_frontier_survives_a_hard_crash(site, tmp_path) -> None:
         if out.exists() and len(out.read_text().splitlines()) >= 8:
             break
         time.sleep(0.05)
-    os.kill(proc.pid, signal.SIGKILL)
+    proc.kill()  # SIGKILL; TerminateProcess on Windows
     proc.wait()
     crashed = len(out.read_text().splitlines())
     assert 0 < crashed < 40

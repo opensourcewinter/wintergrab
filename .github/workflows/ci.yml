@@ -15,8 +15,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
@@ -25,20 +25,59 @@ jobs:
       - run: mypy
 
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, ${{ matrix.python-version }}${{ matrix.extras == 'dev' && ', no speed extras' || '' }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        extras: ["dev,speed"]
+        include:
+          # the oldest Python, without uvloop/orjson, covers the pure-stdlib fallbacks
+          - os: ubuntu-latest
+            python-version: "3.10"
+            extras: "dev"
+          - os: windows-latest
+            python-version: "3.13"
+            extras: "dev,speed"
+          - os: macos-latest
+            python-version: "3.13"
+            extras: "dev,speed"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[${{ matrix.extras }}]"
       - name: Install Chromium for the browser tests
-        run: python -m playwright install --with-deps chromium
+        run: python -m playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - name: Test
         run: python -m pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          pip install build twine
+          python -m build
+          twine check --strict dist/*
+      - name: Install the wheel in a clean environment and smoke-test it
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/clean/bin/wintergrab --version
+          /tmp/clean/bin/wintergrab doctor
+          /tmp/clean/bin/python -c "import wintergrab as wg; page = wg.parse('<p class=x>ok</p>'); assert page.css('.x::text').get() == 'ok'"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
