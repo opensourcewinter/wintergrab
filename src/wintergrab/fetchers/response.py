@@ -320,6 +320,10 @@ class Response:
         """URL of the "next page" link, if the page has pagination."""
         return self.selector.next_page()
 
+    def detect_records(self, **kwargs: Any) -> list[Any]:
+        """Repeating record groups on the page, best first (see :meth:`Selector.detect_records`)."""
+        return self.selector.detect_records(**kwargs)
+
     def auto_extract(self, **kwargs: Any) -> list[dict[str, Any]]:
         """Records from the page's main repeating list, fields inferred automatically."""
         return self.selector.auto_extract(**kwargs)

@@ -11,6 +11,7 @@ import random
 import signal
 import time
 from collections.abc import AsyncIterable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..errors import BrowserNotAvailable, CheckpointError, FetchError, HTTPStatusError, describe
@@ -21,6 +22,7 @@ from ..request import Request
 from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
 from .checkpoint import Checkpoint
 from .exporters import Exporter, open_exporter, to_dict
+from .frontier import DiskScheduler
 from .progress import ProgressDisplay
 from .robots import RobotsPolicy
 from .scheduler import Scheduler
@@ -68,7 +70,8 @@ class Engine:
         self.item_queue = item_queue
         self.stats = Stats()
         self.items: list[Any] = []
-        self.scheduler = Scheduler(dedupe=spider.dedupe)
+        self.scheduler: Scheduler | DiskScheduler = Scheduler(dedupe=spider.dedupe)
+        self._persistent = False  # True with the disk frontier
         self.throttle: AutoThrottle = spider.throttle or AutoThrottle(
             enabled=spider.autothrottle,
             base_delay=spider.download_delay,
@@ -85,7 +88,11 @@ class Engine:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wakeup: asyncio.Event | None = None
         self._inflight: dict[asyncio.Task[None], Request] = {}
-        self._delayed: dict[int, tuple[Request, asyncio.TimerHandle]] = {}
+        # Retries waiting to be queued: request, timer, and (disk frontier) the
+        # original request whose acknowledgement waits until the retry is queued.
+        self._delayed: dict[int, tuple[Request, asyncio.TimerHandle, Request | None]] = {}
+        self._ack_deferred: set[int] = set()
+        self._last_commit = 0.0
         self._stopping = False
         self._status = "finished"
         self._fatal: BaseException | None = None
@@ -186,6 +193,7 @@ class Engine:
         restore_signals = self._install_signals()
         try:
             state = self._load_state(resume)
+            self._open_frontier(resume)
             self._setup_output(append=state is not None)
             spider.configure_sessions(self.sessions)
             if not len(self.sessions):
@@ -204,6 +212,8 @@ class Engine:
                 self._restore(state)
             else:
                 await self._seed()
+            if isinstance(self.scheduler, DiskScheduler):
+                self.scheduler.commit()
             # Only now may shutdown save/clear the checkpoint: a failure above
             # must leave an existing state file untouched.
             self._state_ready = True
@@ -358,7 +368,26 @@ class Engine:
             raise CheckpointError(
                 f"{self.checkpoint.path} belongs to spider {state.get('spider')!r}, not {self.spider.name!r}"
             )
+        if state is not None and state.get("frontier") == "disk" and self.spider.frontier != "disk":
+            raise CheckpointError(
+                f"{self.checkpoint.dir} was saved with frontier='disk'; resume it with frontier='disk' too"
+            )
         return state
+
+    def _open_frontier(self, resume: bool) -> None:
+        kind = self.spider.frontier
+        if kind == "memory":
+            return
+        if kind != "disk":
+            raise ValueError(f"frontier must be 'memory' or 'disk', not {kind!r}")
+        if self.checkpoint is None:
+            raise ValueError("frontier='disk' needs a crawl_dir to keep the queue in")
+        path = self.checkpoint.dir / "frontier.sqlite3"
+        if not resume:
+            for suffix in ("", "-wal", "-shm"):
+                path.with_name(path.name + suffix).unlink(missing_ok=True)
+        self.scheduler = DiskScheduler(path, self.spider, dedupe=self.spider.dedupe)
+        self._persistent = True
 
     def _setup_output(self, append: bool) -> None:
         if self.spider.output:
@@ -401,15 +430,20 @@ class Engine:
         self.stats["duplicates_filtered"] = self.stats.get("duplicates_filtered", 0) + self.scheduler.duplicates
         self.scheduler.duplicates = 0
         status = self._status if self._fatal is None else "stopped"
-        pending = self._pending_requests()
+        disk = self.scheduler if isinstance(self.scheduler, DiskScheduler) else None
+        pending: list[Request] = [] if disk is not None else self._pending_requests()
+        pending_count = len(self.scheduler) + len(self._delayed) + len(self._inflight) if disk else len(pending)
+        keep = status in ("paused", "limit") or self._fatal is not None
         if self.checkpoint is not None and self._state_ready:
             try:
-                if (status in ("paused", "limit") or self._fatal is not None) and pending:
+                if keep and pending_count:
                     # Paused, stopped at a limit, or crashed: keep the queue so the
                     # crawl can continue (after raising the limit / fixing the bug).
+                    if disk is not None:
+                        self._flush_delayed_to_frontier()
                     self._save_state(pending)
                     hint = "raise the limit and run again to continue" if status == "limit" else "run again to resume"
-                    log.info("saved %d pending request(s) to %s; %s", len(pending), self.checkpoint.dir, hint)
+                    log.info("saved %d pending request(s) to %s; %s", pending_count, self.checkpoint.dir, hint)
                 else:
                     self.checkpoint.clear()
                     if status == "paused":
@@ -419,11 +453,18 @@ class Engine:
                 log.error("%s", exc)
                 if self._fatal is None:
                     self._fatal = exc
-        elif pending and status != "finished":
-            log.info("%d pending request(s) discarded", len(pending))
-        for timer in self._delayed.values():
-            timer[1].cancel()
+        elif pending_count and status != "finished":
+            log.info("%d pending request(s) discarded", pending_count)
+        for entry in self._delayed.values():
+            entry[1].cancel()
         self._delayed.clear()
+        if disk is not None:
+            keep_frontier = keep and pending_count and self._state_ready
+            disk.close()
+            if not keep_frontier and self._state_ready and self.checkpoint is not None:
+                path = Path(disk.path)
+                for suffix in ("", "-wal", "-shm"):
+                    path.with_name(path.name + suffix).unlink(missing_ok=True)
         if self.exporter is not None:
             self.exporter.close()
         await self.sessions.close_all()
@@ -446,32 +487,53 @@ class Engine:
 
     def _pending_requests(self) -> list[Request]:
         pending = self.scheduler.pending()
-        pending.extend(req for req, _ in self._delayed.values())
+        pending.extend(entry[0] for entry in self._delayed.values())
         pending.extend(req.replace(dont_filter=True) for req in self._inflight.values())
         return pending
+
+    def _flush_delayed_to_frontier(self) -> None:
+        """Queue waiting retries now (disk frontier) so they are part of the saved queue."""
+        for request, timer, original in list(self._delayed.values()):
+            timer.cancel()
+            self.scheduler.push(request, force=True)
+            if original is not None:
+                self._ack_deferred.discard(id(original))
+                self._ack(original)
+        self._delayed.clear()
+
+    def _ack(self, request: Request) -> None:
+        if isinstance(self.scheduler, DiskScheduler):
+            self.scheduler.ack(request)
 
     def _save_state(self, pending: list[Request]) -> None:
         assert self.checkpoint is not None
         if self.exporter is not None:
             self.exporter.flush()  # items on disk must match the saved queue
-        self.checkpoint.save(
-            {
-                "spider": self.spider.name,
-                "pending": [r.to_dict(self.spider) for r in pending],
-                "seen": self.scheduler.seen,
-                "stats": dict(self.stats),
-                "throttle": self.throttle.snapshot(),
-                "item_keys": self._item_keys,
-            }
-        )
+        state: dict[str, Any] = {
+            "spider": self.spider.name,
+            "stats": dict(self.stats),
+            "throttle": self.throttle.snapshot(),
+            "item_keys": self._item_keys,
+        }
+        if isinstance(self.scheduler, DiskScheduler):
+            # The queue and seen-filter live in the frontier database already.
+            self.scheduler.commit()
+            state["frontier"] = "disk"
+        else:
+            state["pending"] = [r.to_dict(self.spider) for r in pending]
+            state["seen"] = self.scheduler.seen
+        self.checkpoint.save(state)
 
     def _periodic(self) -> None:
         now = time.monotonic()
         spider = self.spider
+        if isinstance(self.scheduler, DiskScheduler) and now - self._last_commit >= 1.0:
+            self.scheduler.commit()  # bounds what a crash can lose to about a second of work
+            self._last_commit = now
         if self.checkpoint is not None and now - self._last_checkpoint >= spider.checkpoint_interval:
             if self._last_checkpoint:
                 try:
-                    self._save_state(self._pending_requests())
+                    self._save_state([] if self._persistent else self._pending_requests())
                 except CheckpointError as exc:
                     log.error("%s", exc)
             self._last_checkpoint = now
@@ -614,6 +676,8 @@ class Engine:
             self.stats.inc("errors")
         finally:
             self.throttle.on_finish(slot)
+            if self._persistent and id(request) not in self._ack_deferred:
+                self._ack(request)  # children are queued by now: safe to forget the request
             self._wake()
 
     def _share_cookies(self, response: Response) -> None:
@@ -660,24 +724,32 @@ class Engine:
             delay = 0.0  # the throttle already paused the whole domain for Retry-After
         self.stats.inc("retries")
         log.debug("retry %d/%d for %s in %.1fs (%s)", attempt + 1, spider.retries, request.url, delay, reason)
-        self._schedule_later(new, delay)
+        self._schedule_later(new, delay, original=request)
         return True
 
-    def _schedule_later(self, request: Request, delay: float) -> None:
+    def _schedule_later(self, request: Request, delay: float, original: Request | None = None) -> None:
         assert self._loop is not None
         if delay <= 0:
             self.scheduler.push(request, force=True)
             self._wake()
             return
         key = id(request)
+        if self._persistent and original is not None:
+            # Keep the original leased until its retry is safely queued.
+            self._ack_deferred.add(id(original))
+        else:
+            original = None
 
         def release() -> None:
             entry = self._delayed.pop(key, None)
             if entry is not None:
                 self.scheduler.push(entry[0], force=True)
+                if entry[2] is not None:
+                    self._ack_deferred.discard(id(entry[2]))
+                    self._ack(entry[2])
                 self._wake()
 
-        self._delayed[key] = (request, self._loop.call_later(delay, release))
+        self._delayed[key] = (request, self._loop.call_later(delay, release), original)
 
     async def _give_up(self, request: Request, error: BaseException, quiet: bool = False) -> None:
         self.stats.inc("failed")

@@ -42,6 +42,7 @@ from .fetchers import (
     post,
     render,
 )
+from .parser.autoextract import LearnedSchema, RecordGroup
 from .proxy import ProxyRotator
 from .request import Request
 from .sitemaps import SitemapEntry, sitemap
@@ -63,8 +64,10 @@ __all__ = [
     "Field",
     "HTTPCache",
     "HTTPStatusError",
+    "LearnedSchema",
     "MemoryStorage",
     "ProxyRotator",
+    "RecordGroup",
     "Request",
     "Response",
     "SQLiteStorage",

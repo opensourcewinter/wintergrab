@@ -158,6 +158,9 @@ class Spider:
     robots_user_agent: str = "*"
     #: Drop requests for URLs already seen.
     dedupe: bool = True
+    #: ``"memory"`` (fastest) or ``"disk"``: an SQLite queue + Bloom filter that keeps
+    #: memory flat for crawls of millions of URLs and survives crashes (needs ``crawl_dir``).
+    frontier: str = "memory"
 
     # -- caching ---------------------------------------------------------- #
     #: Cache responses on disk (``True``, a path, or an :class:`HTTPCache`).
