@@ -221,6 +221,11 @@ Pipelines run before de-duplication (`unique_key`) and output. Dropped
 items are counted in `stats["items_dropped/<Pipeline>"]`; a pipeline that
 raises drops the item and counts `pipeline_errors`.
 
+Ready-made pipelines for cleaning data (typed schemas, validation, filters,
+computed fields, near-duplicate removal, quality monitoring) are in
+[the data layer](data.md#pipelines-in-crawls); `wintergrab crawl --pipeline
+FILE` attaches one from a configuration file.
+
 ## Budgets
 
 Stop a crawl before it uses too much. When a budget runs out the crawl

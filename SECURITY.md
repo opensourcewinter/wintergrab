@@ -27,6 +27,11 @@ These inputs are trusted, so only use ones you control:
 - **Crawl state** (`crawl_dir`) is stored as pickle files. Loading someone
   else's crawl state can run their code.
 - **Schema files** (`--schema`) and proxy lists are your own configuration.
+- **Pipeline files** may name Python functions to call, but they are only
+  imported when you allow it (`allow_imports=True`, `--allow-imports`).
+  Without that, a pipeline file can only use the built-in stages and the
+  expression language, which has no attribute access, imports or loops and
+  can read records but not files, the network or Python objects.
 
 ## Crawling from sensitive networks
 

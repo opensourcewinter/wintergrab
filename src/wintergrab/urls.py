@@ -462,8 +462,7 @@ def url_template(url: str, *, include_host: bool = True, include_query: bool = T
     ``shop.example/product/{int}?page``. Numbers, UUIDs, hex ids, dates and
     slugs (multi-word or digit-bearing path segments) become placeholders;
     short words stay literal. Query parameter *names* are kept (sorted, tracking
-    parameters dropped); their values are not. For better templates from many
-    URLs at once, see :class:`~wintergrab.intel.templates.TemplateMiner`.
+    parameters dropped); their values are not.
     """
     try:
         parts = urlsplit(url)

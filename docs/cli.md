@@ -5,7 +5,7 @@ Installing wintergrab adds a `wintergrab` command (also runnable as
 stdout, so you can pipe the output anywhere.
 
 ```
-wintergrab [-v | -q] [--version] {get,crawl,shell} ...
+wintergrab [-v | -q] [--version] {get,crawl,data,shell,doctor} ...
 ```
 
 `-v` shows debug logs; `-q` keeps only warnings.
@@ -112,6 +112,7 @@ Options for any crawl:
 | `--public-only` | `network_policy = "public"` |
 | `--normalize-urls` | `url_normalizer = True` |
 | `--block-trackers` | `resource_filter = True` |
+| `--pipeline FILE` | appends a [data pipeline](data.md#pipelines-as-configuration) to `pipelines` (`--allow-imports` if it names Python functions) |
 | `-s/--set NAME=VALUE` | any attribute; values are parsed as JSON when possible (`-s retries=5`, `-s 'allowed_statuses=[404]'`) |
 
 ### Quick crawls from a URL
@@ -138,6 +139,24 @@ wintergrab crawl https://example.com --allow "/blog/" --deny "\?replytocom=" --m
 | `--allow REGEX`, `--deny REGEX` | Filter followed URLs. |
 | `--any-domain` | Allow leaving the start domain. |
 | `--each SEL`, `--field NAME=SEL` | What to extract from each page. |
+
+## `wintergrab data`: check and clean datasets
+
+```bash
+wintergrab data infer INPUT [-o SCHEMA] [--explain]         # guess a schema from records
+wintergrab data validate SCHEMA INPUT [-o VALID] [--rejects FILE]
+wintergrab data run PIPELINE INPUT [-o OUTPUT] [--allow-imports]
+wintergrab data quality INPUT [--schema SCHEMA] [--baseline REPORT] [--save REPORT] [--json]
+```
+
+Inputs are JSON Lines, JSON or CSV files (`-` reads JSON Lines from stdin);
+outputs are chosen by extension, as for `crawl -o`. `validate` normalizes
+records with the schema first (`--no-normalize` to skip; `--country`,
+`--currency`, `--dayfirst` help read local formats), prints the most common
+issues, and exits with status 1 if any record is invalid. `quality` prints
+completeness, validity, consistency and anomalies per field; with
+`--baseline` it compares with an earlier report and exits with status 1 when
+quality collapsed. See [data.md](data.md).
 
 ## `wintergrab shell`: explore interactively
 

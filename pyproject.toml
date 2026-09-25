@@ -33,14 +33,18 @@ dependencies = [
     "lxml>=5.0",
     "cssselect>=1.2",
     "curl_cffi>=0.10",
+    "tomli>=1.1; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.45"]
 speed = ["uvloop>=0.19; sys_platform != 'win32'", "orjson>=3.9"]
-all = ["playwright>=1.45", "uvloop>=0.19; sys_platform != 'win32'", "orjson>=3.9"]
+yaml = ["pyyaml>=6.0"]
+all = ["playwright>=1.45", "uvloop>=0.19; sys_platform != 'win32'", "orjson>=3.9", "pyyaml>=6.0"]
 dev = [
     "playwright>=1.45",
+    "pyyaml>=6.0",
+    "jsonschema>=4.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
@@ -96,6 +100,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011", "SIM117", "RUF001"]
+# Normalizers recognise look-alike characters (curly quotes, primes, dashes, "×") on purpose.
+"src/wintergrab/data/normalize/*" = ["RUF001", "RUF002", "RUF003"]
 "examples/*" = ["T201"]
 
 [tool.mypy]

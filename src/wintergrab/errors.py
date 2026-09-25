@@ -13,6 +13,7 @@ The hierarchy::
     WintergrabError
     ├── ConfigurationError        (also a ValueError)
     ├── SchemaError               (also a ValueError)
+    ├── ExpressionError           (also a ValueError)
     ├── ParserError
     │   └── SelectorSyntaxError   (also a ValueError)
     ├── FetchError                a page could not be fetched
@@ -96,6 +97,22 @@ class SchemaError(WintergrabError, ValueError):
     """A data schema is malformed (unknown type, bad constraint...)."""
 
     category = "schema"
+
+
+class ExpressionError(WintergrabError, ValueError):
+    """A filter/computed-field expression is invalid, or failed on a record (see :mod:`wintergrab.data.expressions`).
+
+    Attributes:
+        expression: The expression's source text.
+    """
+
+    category = "expression"
+
+    def __init__(self, message: str, *, expression: str | None = None, context: Mapping[str, Any] | None = None):
+        super().__init__(message, context=context)
+        self.expression = expression
+        if expression is not None:
+            self.context.setdefault("expression", expression)
 
 
 class ParserError(WintergrabError):

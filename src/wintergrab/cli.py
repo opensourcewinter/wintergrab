@@ -1,4 +1,4 @@
-"""Command line interface: ``wintergrab get``, ``wintergrab crawl``, ``wintergrab shell``."""
+"""Command line interface: ``wintergrab get``, ``crawl``, ``data``, ``shell`` and ``doctor``."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +56,16 @@ EPILOG_CRAWL = """examples:
 
 Press Ctrl+C once to pause (state is saved when --crawl-dir is set); run the
 same command again to resume. Press Ctrl+C twice to force quit.
+"""
+
+EPILOG_DATA = """examples:
+  wintergrab data infer items.jsonl -o product.schema.json       # guess a schema from records
+  wintergrab data validate product.schema.json items.jsonl -o clean.jsonl --rejects rejects.jsonl
+  wintergrab data run pipeline.yaml items.jsonl -o clean.csv
+  wintergrab data quality items.jsonl --schema product.schema.json --save quality.json
+  wintergrab data quality items.jsonl --baseline quality.json    # exit status 1 if quality collapsed
+
+Inputs are JSON Lines, JSON or CSV files ("-" reads JSON Lines from stdin).
 """
 
 
@@ -500,6 +510,11 @@ def cmd_crawl(args: argparse.Namespace) -> int:
             overrides["cache_mode"] = cache["cache_mode"]
     if args.unique_key:
         overrides["unique_key"] = args.unique_key
+    if args.pipeline:
+        from .data import Pipeline
+
+        pipeline = Pipeline.load(args.pipeline, allow_imports=args.allow_imports)
+        overrides["pipelines"] = [*(overrides.get("pipelines") or getattr(cls, "pipelines", None) or ()), pipeline]
     if args.progress is not None:
         overrides["progress"] = args.progress
     rotator = _proxies(args)
@@ -636,11 +651,134 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for dist, why in (("uvloop", "faster event loop"), ("orjson", "faster JSON output")):
         v = version(dist)
         check(dist, v is not None, v or f"not installed ({why})", 'pip install "wintergrab[speed]"')
+    v = version("pyyaml")
+    check("pyyaml", v is not None, v or "not installed (YAML schemas and pipelines)", 'pip install "wintergrab[yaml]"')
     check("adaptive db", True, str(default_storage_path()))
     width = max(len(r[1]) for r in rows)
     for status, name, detail in rows:
         print(f"{status} {name.ljust(width)}  {detail}")
     return 0 if all(r[0].strip() == "ok" for r in rows[:4]) else 1
+
+
+# --------------------------------------------------------------------------- #
+# data
+# --------------------------------------------------------------------------- #
+def _write_records(records: Iterable[Any], output: str | None) -> int:
+    from .spider.exporters import open_exporter
+
+    exporter = open_exporter(output or "-")
+    count = 0
+    try:
+        for record in records:
+            exporter.write(record)
+            count += 1
+    finally:
+        exporter.close()
+    return count
+
+
+def cmd_data_run(args: argparse.Namespace) -> int:
+    from .data import Pipeline
+    from .data.io import read_records
+
+    pipeline = Pipeline.load(args.pipeline, allow_imports=args.allow_imports)
+    records = read_records(args.input, limit=args.limit)
+    if pipeline.is_async:
+        written = _write_records(asyncio.run(pipeline.arun(records)), args.output)
+    else:
+        written = _write_records(pipeline.stream(records), args.output)
+    if args.verbose >= 0:
+        print(pipeline.describe(), file=sys.stderr)
+        if args.output:
+            print(f"wrote {written:,} record(s) to {args.output}", file=sys.stderr)
+    return 0
+
+
+def cmd_data_validate(args: argparse.Namespace) -> int:
+    from .data import Normalize, Pipeline, Validate, load_schema
+    from .data.io import read_records
+
+    schema = load_schema(args.schema)
+    stages: list[Any] = []
+    if not args.no_normalize:
+        stages.append(Normalize(schema, country=args.country, currency=args.currency, dayfirst=args.dayfirst))
+    validate = Validate(schema, on_error="drop", rejects=args.rejects)
+    stages.append(validate)
+    pipeline = Pipeline(stages, name=f"validate {schema.name}")
+    valid = pipeline.stream(read_records(args.input, limit=args.limit))
+    if args.output:
+        _write_records(valid, args.output)
+    else:
+        for _ in valid:
+            pass
+    total, invalid = validate.stats["in"], validate.stats["invalid"]
+    if args.verbose >= 0:
+        print(f"{total:,} record(s): {total - invalid:,} valid, {invalid:,} invalid", file=sys.stderr)
+        for field, code, severity, count in validate.summary(args.max_issues):
+            print(f"  {count:>8,}  {severity:<7}  {field or '(record)'}: {code}", file=sys.stderr)
+        if args.rejects and invalid:
+            print(f"invalid records and their issues: {args.rejects}", file=sys.stderr)
+    return 1 if invalid else 0
+
+
+def cmd_data_infer(args: argparse.Namespace) -> int:
+    from .data import TypeGuess, infer_schema
+    from .data.io import read_records
+
+    records = list(read_records(args.input, limit=args.sample))
+    if not records:
+        print("error: no records to learn from", file=sys.stderr)
+        return 1
+    name = args.name or (Path(args.input).stem if args.input != "-" else "records")
+    guesses: list[TypeGuess] = []
+    schema = infer_schema(records, name=name, sample=args.sample, guesses=guesses)
+    if args.explain:
+        for guess in guesses:
+            print(
+                f"{guess.field}: {guess.type} ({guess.share:.0%} of {guess.samples:,} value(s) fit; "
+                f"present in {guess.present:,}/{guess.records:,} record(s))",
+                file=sys.stderr,
+            )
+    if args.output:
+        schema.save(args.output)
+        print(f"saved the schema to {args.output}", file=sys.stderr)
+    else:
+        print(json.dumps(schema.to_dict(), indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_data_quality(args: argparse.Namespace) -> int:
+    from .data import QualityMonitor, QualityReport, load_schema
+    from .data.io import read_records
+
+    schema = load_schema(args.schema) if args.schema else None
+    name = Path(args.input).stem if args.input != "-" else "records"
+    monitor = QualityMonitor(schema, name=name, key=args.key or None, save_to=None)
+    for record in read_records(args.input, limit=args.limit):
+        monitor.observe(record)
+    report = monitor.report()
+    comparison = []
+    if args.baseline:
+        try:
+            baseline = QualityReport.load(args.baseline)
+        except (OSError, ValueError) as exc:
+            print(f"error: cannot read the baseline {args.baseline}: {exc}", file=sys.stderr)
+            return 2
+        comparison = report.compare(baseline)
+    if args.save:
+        report.save(args.save)
+    if args.json:
+        data = report.to_dict()
+        if args.baseline:
+            data["comparison"] = [issue.to_dict() for issue in comparison]
+        print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+    else:
+        print(report.describe())
+        if args.baseline:
+            print(f"compared with {args.baseline}:" if comparison else f"no degradation compared with {args.baseline}")
+            for issue in comparison:
+                print(f"  {issue}")
+    return 1 if any(issue.severity == "error" for issue in comparison) else 0
 
 
 # --------------------------------------------------------------------------- #
@@ -794,6 +932,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="drop tracking parameters, session ids and fragments from URLs before queueing them",
     )
+    c.add_argument("--pipeline", metavar="FILE", help="clean, validate and filter items with a pipeline file")
+    c.add_argument(
+        "--allow-imports", action="store_true", help="let the --pipeline file call Python functions it names"
+    )
     c.add_argument(
         "--progress",
         action=argparse.BooleanOptionalAction,
@@ -804,6 +946,53 @@ def build_parser() -> argparse.ArgumentParser:
     _add_extract_options(c)
     c.set_defaults(func=cmd_crawl)
 
+    data = sub.add_parser(
+        "data",
+        help="infer schemas, validate, clean and check the quality of datasets",
+        description="Work with scraped datasets: JSON Lines, JSON or CSV files.",
+        epilog=EPILOG_DATA,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    data.set_defaults(func=lambda args: _print_help(data))
+    actions = data.add_subparsers(dest="action", metavar="ACTION")
+    run = actions.add_parser("run", help="run records through a pipeline file")
+    run.add_argument("pipeline", metavar="PIPELINE", help="pipeline file (.yaml, .json or .toml)")
+    run.add_argument("input", metavar="INPUT")
+    run.add_argument(
+        "-o", "--output", metavar="FILE", help="where to write the results (default: JSON lines on stdout)"
+    )
+    run.add_argument("--allow-imports", action="store_true", help="let the pipeline call Python functions it names")
+    run.add_argument("--limit", type=int, metavar="N", help="only the first N records")
+    run.set_defaults(func=cmd_data_run)
+    val = actions.add_parser("validate", help="normalize and validate records against a schema")
+    val.add_argument("schema", metavar="SCHEMA", help="schema file (.json, .yaml or .toml)")
+    val.add_argument("input", metavar="INPUT")
+    val.add_argument("-o", "--output", metavar="FILE", help="write the valid (normalized) records")
+    val.add_argument("--rejects", metavar="FILE", help="write the invalid records with their issues (JSON lines)")
+    val.add_argument("--no-normalize", action="store_true", help="validate the records as they are")
+    val.add_argument("--country", metavar="CC", help="country for local formats (phone numbers, $, kr...)")
+    val.add_argument("--currency", metavar="CODE", help="currency of prices that name none")
+    val.add_argument("--dayfirst", action="store_true", default=None, help="read 03/05/2024 as 3 May")
+    val.add_argument("--max-issues", type=int, default=10, metavar="N", help="issue kinds to list (default 10)")
+    val.add_argument("--limit", type=int, metavar="N", help="only the first N records")
+    val.set_defaults(func=cmd_data_validate)
+    inf = actions.add_parser("infer", help="guess a schema from sample records")
+    inf.add_argument("input", metavar="INPUT")
+    inf.add_argument("-o", "--output", metavar="FILE", help="save the schema (.json or .yaml)")
+    inf.add_argument("--name", help="the schema's name (default: the file name)")
+    inf.add_argument("--sample", type=int, default=1000, metavar="N", help="records to learn from (default 1000)")
+    inf.add_argument("--explain", action="store_true", help="say why each field got its type")
+    inf.set_defaults(func=cmd_data_infer)
+    qual = actions.add_parser("quality", help="measure quality, and compare with a baseline report")
+    qual.add_argument("input", metavar="INPUT")
+    qual.add_argument("--schema", metavar="FILE", help="validate against this schema too")
+    qual.add_argument("--key", action="append", metavar="FIELD", help="field(s) identifying a record")
+    qual.add_argument("--baseline", metavar="FILE", help="an earlier report (exit status 1 on serious degradation)")
+    qual.add_argument("--save", metavar="FILE", help="save the report (the next run's baseline)")
+    qual.add_argument("--json", action="store_true", help="print the report as JSON")
+    qual.add_argument("--limit", type=int, metavar="N", help="only the first N records")
+    qual.set_defaults(func=cmd_data_quality)
+
     s = sub.add_parser("shell", help="interactive Python shell with a page loaded")
     s.add_argument("url", nargs="?")
     s.add_argument("--browser", "-b", action="store_true", help="render the page with a headless browser")
@@ -812,6 +1001,11 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("doctor", help="check the installation and optional features")
     d.set_defaults(func=cmd_doctor)
     return parser
+
+
+def _print_help(parser: argparse.ArgumentParser) -> int:
+    parser.print_help()
+    return 2
 
 
 def _utf8_output() -> None:

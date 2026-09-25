@@ -231,3 +231,29 @@ Not worth pursuing:
 - Parsing from bytes instead of `text.encode()`: the encode is 12 µs of a 350 µs parse.
 - Tuning the dispatcher: both variants tried made no difference.
 - GC: no samples in the garbage collector.
+
+## Data layer
+
+`bench_data.py` measures the data layer on synthetic product records (no
+network): normalizers, schema normalization and validation, expressions, a
+five-stage pipeline, near-duplicate detection and quality monitoring.
+
+```bash
+.venv/bin/python benchmarks/bench_data.py --records 20000 --repeat 5
+```
+
+One core of a 4-vCPU cloud VM, Python 3.11.15, median of 5 runs:
+
+| Operation | Rate | Time per item |
+|---|---:|---:|
+| parse_money | 94,172 values/s | 10.6 µs |
+| parse_date | 164,860 values/s | 6.1 µs |
+| expression (3 comparisons) | 1,020,763 records/s | 1.0 µs |
+| Schema.normalize (10 fields) | 7,614 records/s | 131.3 µs |
+| Schema.validate (10 fields) | 41,901 records/s | 23.9 µs |
+| pipeline: normalize, validate, filter, compute, dedupe | 4,203 records/s | 237.9 µs |
+| Deduplicator near=True (40-word texts) | 6,325 records/s | 158.1 µs |
+| QualityMonitor.observe + report | 6,814 records/s | 146.8 µs |
+
+URL normalization is the largest single cost inside `Schema.normalize`
+(about a fifth of it for the benchmark's all-distinct URLs).

@@ -67,6 +67,53 @@
 - Measured: crawl throughput is unchanged (1,038 pages/s median before and
   after on the benchmark site, concurrency 64, 5 alternating runs each).
 
+### Data layer (`wintergrab.data`)
+
+- **Normalizers** for prices (currency symbols, ISO codes, Indian and Swiss
+  grouping, `1.299,-`; separator ambiguity settled by the currency's minor
+  units), numbers (`2.3k`, `12 lakh`, accounting negatives, non-Latin
+  digits), dates (many formats and languages, relative dates, timestamps),
+  durations, measurements with exact conversions, phone numbers (E.164),
+  emails, URLs, countries, regions, postal codes, addresses, coordinates
+  (decimal and DMS), languages, booleans, availability (schema.org names),
+  ratings and text (entities, invisible characters, mojibake repair).
+  Every guess is reported as a note (`ambiguous-separator`,
+  `ambiguous-currency`, `ambiguous-day-month`...) instead of being hidden.
+- **Typed schemas**: 24 field types, constraints, aliases, nested objects,
+  lists; `normalize()` returns typed records plus per-field results;
+  `validate()` returns issues (missing, invalid, range, pattern, enum,
+  suspicious values, damaged text). Versioned JSON/YAML/TOML files, JSON
+  Schema export, custom types, and `infer_schema()` from sample records.
+- **Expression language** for filters, computed fields and rules
+  (`"price > 0 and availability == 'InStock'"`): Python syntax without
+  attribute access, imports or loops, SQL-like missing values, 46 functions.
+- **Pipelines**: `Rename`, `Select`, `Exclude`, `Transform` (36 value
+  operations), `Compute`, `Filter`, `Normalize`, `Validate` (drop, flag,
+  keep or raise; rejects file), `Deduplicate`, `Lookup`, `ConvertCurrency`
+  (rates you supply), `Enrich` (sync or async), `QualityCheck`. Pipelines
+  are item pipelines for spiders and load from JSON/YAML/TOML files, which
+  can only name Python code when loaded with `allow_imports=True`.
+- **Duplicates**: by normalized key, by content, and near duplicates by
+  MinHash/LSH (one-permutation hashing: about 15 times faster than classic
+  MinHash in pure Python, same accuracy). SimHash with an exact
+  pigeonhole index for long documents.
+- **Quality monitoring**: completeness, validity, uniqueness, consistency,
+  freshness and confidence; anomalies (constant fields, placeholders,
+  outliers, damaged text, duplicates); comparison with the previous run's
+  report (extraction collapse, fields disappearing or appearing, type drift,
+  distribution shift by Kolmogorov-Smirnov test, volume drop), emitted as
+  `quality_degraded` events.
+- **CLI**: `wintergrab data infer | validate | run | quality`, and
+  `wintergrab crawl --pipeline FILE`. `validate` and `quality --baseline`
+  exit with status 1 on bad data, for use in CI.
+- New optional extra `yaml` (PyYAML); `tomli` is installed on Python 3.10
+  for TOML files.
+- Measured (one core, Python 3.11, `benchmarks/bench_data.py`, 20,000
+  synthetic product records): `Schema.normalize` of a 10-field record
+  131 µs, `validate` 24 µs, a normalize-validate-filter-compute-dedupe
+  pipeline about 4,200 records/s, near-duplicate checks 158 µs per record,
+  expressions 1 µs.
+
 ## 0.2.0
 
 First release on PyPI.

@@ -41,6 +41,8 @@ Or let the spider write them: `event_log = True` writes
 | `throttle_backoff` | `domain`, `delay`, `concurrency`, `retry_after` |
 | `policy_refused` | `url`, `reason`, `policy` |
 | `budget_exhausted` | `budget`, `used`, `limit` |
+| `pipeline_report` | `pipeline`, `stages` (per-stage counts, when a [data pipeline](data.md#pipelines) closes) |
+| `quality_degraded` | `dataset`, `field`, `code`, `message`, `severity` ([quality monitoring](data.md#quality)) |
 
 `response` and `item_scraped` fire for every page and item, so they are
 only built when someone subscribed to them: an unobserved crawl pays
