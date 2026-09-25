@@ -159,20 +159,33 @@ class JsonExporter(Exporter):
 
 
 class CsvExporter(Exporter):
-    """CSV with columns taken from the first item (nested values become JSON)."""
+    """CSV with columns taken from the first item (nested values become JSON).
+
+    New files start with a UTF-8 byte order mark so Excel reads "£" and "é"
+    correctly instead of "Â£" and "Ã©"; other tools skip it.
+    """
 
     def __init__(self, path: Path, *, append: bool) -> None:
         super().__init__(path, append=append)
         self._fields: list[str] | None = None
         resuming = append and path.exists() and path.stat().st_size > 0
         if resuming:
-            with open(path, newline="", encoding="utf-8") as fh:
+            with open(path, newline="", encoding="utf-8-sig") as fh:
                 header = next(csv.reader(fh), None)
             self._fields = header or None
-        self._fh = open(path, "a" if resuming else "w", newline="", encoding="utf-8")  # noqa: SIM115 - closed in close()
+        # "utf-8-sig" writes the byte order mark; appending must not add a second one mid-file.
+        encoding = "utf-8" if resuming else "utf-8-sig"
+        self._fh = open(path, "a" if resuming else "w", newline="", encoding=encoding)  # noqa: SIM115 - closed in close()
         self._writer: csv.DictWriter[str] | None = None
         if self._fields:
             self._writer = csv.DictWriter(self._fh, fieldnames=self._fields, extrasaction="ignore")
+
+    def set_fields(self, fields: list[str]) -> None:
+        """Use these columns (when every item is known up front) instead of the first item's."""
+        if self._writer is None:
+            self._fields = list(fields)
+            self._writer = csv.DictWriter(self._fh, fieldnames=self._fields, extrasaction="ignore")
+            self._writer.writeheader()
 
     def write(self, item: Any) -> None:
         row = to_dict(item)
@@ -369,6 +382,9 @@ def write_items(path: str | os.PathLike[str], items: list[Any]) -> Path:
     """Write a list of items in one go (format chosen by extension)."""
     exporter = open_exporter(path)
     try:
+        if isinstance(exporter, CsvExporter):  # every column any item has, in first-seen order
+            rows = [to_dict(item) for item in items]
+            exporter.set_fields(list(dict.fromkeys(k for r in rows if isinstance(r, Mapping) for k in r)))
         for item in items:
             exporter.write(item)
     finally:

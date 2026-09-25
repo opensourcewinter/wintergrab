@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import sqlite3
@@ -127,3 +128,26 @@ def test_progress_line_renders(site) -> None:
     line = stream.getvalue()
     assert "5 pages" in line and "3 items" in line and "2 cached" in line and "1 retries" in line
     assert not ProgressDisplay.supported(io.StringIO())
+
+
+def test_csv_files_open_correctly_in_excel(tmp_path) -> None:
+    # Excel reads a UTF-8 CSV without a byte order mark as Windows-1252: "£51.77" shows as "Â£51.77".
+    from wintergrab.spider.exporters import open_exporter, write_items
+
+    path = tmp_path / "books.csv"
+    write_items(path, [{"title": "Café", "price": "£5"}, {"title": "Tea", "price": "£3", "stock": 7}])
+    data = path.read_bytes()
+    assert data.startswith(b"\xef\xbb\xbf") and data.count(b"\xef\xbb\xbf") == 1
+    rows = list(csv.DictReader(path.open(encoding="utf-8-sig", newline="")))
+    assert rows == [
+        {"title": "Café", "price": "£5", "stock": ""},  # columns from every item, not just the first
+        {"title": "Tea", "price": "£3", "stock": "7"},
+    ]
+
+    # A resumed crawl appends without a second byte order mark and keeps the header.
+    exporter = open_exporter(path, append=True)
+    exporter.write({"title": "Jam", "price": "£2", "stock": 1})
+    exporter.close()
+    data = path.read_bytes()
+    assert data.count(b"\xef\xbb\xbf") == 1
+    assert list(csv.DictReader(path.open(encoding="utf-8-sig", newline="")))[-1]["title"] == "Jam"

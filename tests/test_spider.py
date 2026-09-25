@@ -105,7 +105,7 @@ def test_items_can_be_dataclasses_and_are_processed(site, tmp_path) -> None:
 def test_output_formats(site, tmp_path, suffix) -> None:
     out = tmp_path / f"items{suffix}"
     product_spider(site, output=str(out)).run()
-    text = out.read_text(encoding="utf-8")
+    text = out.read_text(encoding="utf-8-sig")  # CSV files start with a BOM
     if suffix == ".jsonl":
         rows = [json.loads(line) for line in text.splitlines()]
     elif suffix == ".json":

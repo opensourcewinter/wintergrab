@@ -38,7 +38,7 @@ def test_02_extract_to_csv(site, tmp_path) -> None:
         "in_stock": True,
         "url": site.url + "/books/catalogue/book-1/index.html",
     }
-    assert len(list(csv.DictReader(out.open(encoding="utf-8", newline="")))) == 4
+    assert len(list(csv.DictReader(out.open(encoding="utf-8-sig", newline="")))) == 4
 
 
 def test_03_adaptive_selectors() -> None:

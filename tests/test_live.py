@@ -45,7 +45,7 @@ def test_extract_to_csv(tmp_path) -> None:
     assert len(books) == 20
     assert books[0]["title"] == "A Light in the Attic"
     assert isinstance(books[0]["price"], float)
-    assert len(list(csv.DictReader(out.open(encoding="utf-8", newline="")))) == 20
+    assert len(list(csv.DictReader(out.open(encoding="utf-8-sig", newline="")))) == 20
 
 
 def test_async_many_pages() -> None:

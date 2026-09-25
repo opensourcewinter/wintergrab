@@ -47,7 +47,7 @@ def test_get_records_to_csv(site, tmp_path, capsys) -> None:
         "--field", "name=.name a::text", "--field", "price=.price::text", "-o", str(out_file),
     )  # fmt: skip
     assert code == 0 and "wrote 4 record(s)" in err
-    rows = list(csv.DictReader(out_file.open(encoding="utf-8", newline="")))
+    rows = list(csv.DictReader(out_file.open(encoding="utf-8-sig", newline="")))  # skips the BOM
     assert rows[0] == {"name": "Product 1", "price": "$6.25"}
     assert b"\r\r\n" not in out_file.read_bytes()  # Windows: csv's CRLF plus text-mode newline translation
 
@@ -168,3 +168,11 @@ def test_output_survives_a_narrow_locale_encoding(monkeypatch) -> None:
     print("₹ 中文 £")  # UnicodeEncodeError in cp1252
     sys.stdout.flush()
     assert raw.getvalue().decode("utf-8").strip() == "₹ 中文 £"
+
+
+def test_csv_file_output_has_a_byte_order_mark(site, capsys, tmp_path) -> None:
+    out = tmp_path / "books.csv"
+    assert main(["-q", "get", site.url + "/books/", "--auto", "-o", str(out)]) == 0
+    assert out.read_bytes().startswith(b"\xef\xbb\xbf")  # Excel then shows "£", not "Â£"
+    assert main(["-q", "get", site.url + "/books/", "--auto", "-f", "csv"]) == 0
+    assert not capsys.readouterr().out.startswith("﻿")  # not when piping to other tools

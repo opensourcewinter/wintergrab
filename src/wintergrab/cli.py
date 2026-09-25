@@ -123,6 +123,8 @@ def _write_rows(rows: list[dict[str, Any]], fmt: str, output: str | None, *, sin
                 }
             )
         text = buf.getvalue()
+        if output:
+            text = "\ufeff" + text  # byte order mark: Excel then reads the file as UTF-8
     else:
         text = "".join(dumps(r) + "\n" for r in rows)
     _emit(text, output)
