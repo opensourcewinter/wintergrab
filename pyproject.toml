@@ -100,8 +100,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011", "SIM117", "RUF001"]
-# Normalizers recognise look-alike characters (curly quotes, primes, dashes, "×") on purpose.
+# Normalizers and extraction heuristics recognise look-alike characters (curly quotes, primes,
+# dashes, "×", full-width colons) on purpose.
 "src/wintergrab/data/normalize/*" = ["RUF001", "RUF002", "RUF003"]
+"src/wintergrab/extraction/strategies.py" = ["RUF001", "RUF002", "RUF003"]
 "examples/*" = ["T201"]
 
 [tool.mypy]

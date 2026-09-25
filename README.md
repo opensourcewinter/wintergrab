@@ -227,6 +227,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Tough sites](https://github.com/opensourcewinter/wintergrab/blob/main/docs/anti-blocking.md) | Impersonation, browsers, proxies, AutoThrottle, etiquette |
 | [Observability](https://github.com/opensourcewinter/wintergrab/blob/main/docs/observability.md) | Events, live metrics, Prometheus, failure reports, dead letters |
 | [Data](https://github.com/opensourcewinter/wintergrab/blob/main/docs/data.md) | Normalizers, typed schemas, validation, pipelines, duplicates, quality monitoring |
+| [Extraction](https://github.com/opensourcewinter/wintergrab/blob/main/docs/extraction.md) | Typed records from any page with a strategy hierarchy, provenance and confidence |
 | [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `data` and `shell` reference |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 

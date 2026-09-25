@@ -235,10 +235,11 @@ def cmd_get(args: argparse.Namespace) -> int:
         args.each = ["html"]  # one record for the whole page
     examples = _parse_pairs(args.learn, "=", "--learn")
     schema = _load_schema(args.schema) if args.schema else None
+    extractor = _extractor(args)
     # Modes that print one JSON document per page instead of page content.
     json_modes = [m for m in ("structured", "json_data", "tables", "next", "capture") if getattr(args, m)]
     selecting = bool(args.css or args.xpath)
-    records = bool(args.each or args.auto or examples or schema)
+    records = bool(args.each or args.auto or examples or schema or extractor)
     if json_modes:
         args.format = args.format or ("jsonl" if len(urls) > 1 else "json")
     default_fmt = "jsonl" if records else ("text" if selecting else "md")
@@ -278,6 +279,17 @@ def cmd_get(args: argparse.Namespace) -> int:
                     for c in page.captured
                 ]
             rows.append(doc)
+            continue
+        if extractor is not None:
+            listing = args.all or args.container
+            found = extractor.extract_all(page, container=args.container) if listing else [extractor.extract(page)]
+            if listing and not found:
+                print(f"warning: no records found on {page.url}", file=sys.stderr)
+            for record in found:
+                if args.explain:
+                    print(record.explain(), file=sys.stderr)
+                row = record.to_dict(provenance=args.provenance)
+                rows.append({"url": page.url, **row} if multi and "url" not in row else row)
             continue
         if examples or schema:
             if schema is None:
@@ -360,13 +372,40 @@ class QuickSpider(Spider):
     auto: bool = False
     paginate: bool = False
     schema: dict[str, Any] | None = None
+    #: A data schema file: extract typed records (see wintergrab.extraction).
+    extract: str | None = None
+    extract_all: bool = False
+    container: str | None = None
+    provenance: bool = False
+    #: Pages where --extract found no complete record (a required field missing).
+    incomplete: int = 0
     #: Follow every same-domain link when no --follow/--paginate is given.
     wander: bool = True
     #: Skip links to images, media, archives and crawler traps (``-s url_rules=null`` turns it off).
     url_rules = True
 
+    def _records(self, response: Response) -> Any:
+        extractor = self.__dict__.get("_extractor")
+        if extractor is None:
+            from .extraction import Extractor
+
+            extractor = self.__dict__["_extractor"] = Extractor(self.extract, provenance=self.provenance)  # type: ignore[arg-type]
+        if self.extract_all or self.container:
+            found = extractor.extract_all(response, container=self.container)
+        else:
+            found = [extractor.extract(response)]
+        for record in found:
+            if any(fv.validation == "missing" for fv in record.fields.values()):
+                self.incomplete += 1
+                continue
+            row = record.to_dict()
+            yield row if "url" in row else {"url": response.url, **row}
+
     def parse(self, response: Response) -> Any:
-        if self.schema:
+        if self.extract:
+            if response.is_html:
+                yield from self._records(response)
+        elif self.schema:
             from .parser.autoextract import LearnedSchema
 
             for row in LearnedSchema.from_dict(self.schema).extract(response):
@@ -460,6 +499,10 @@ def cmd_crawl(args: argparse.Namespace) -> int:
             auto=args.auto,
             paginate=args.paginate,
             schema=json.loads(Path(args.schema).read_text(encoding="utf-8")) if args.schema else None,
+            extract=args.extract,
+            extract_all=args.all,
+            container=args.container,
+            provenance=args.provenance,
         )
         if args.sitemap:
             overrides["sitemap_urls"] = list(args.sitemap)
@@ -467,9 +510,10 @@ def cmd_crawl(args: argparse.Namespace) -> int:
                 overrides["wander"] = False  # sitemap-driven: crawl what the sitemap lists
     else:
         cls = load_spider_class(args.target)
-        if args.follow or args.each or args.field or args.auto or args.paginate or args.schema:
+        if args.follow or args.each or args.field or args.auto or args.paginate or args.schema or args.extract:
             print(
-                "warning: --follow/--each/--field/--auto/--paginate/--schema only apply to URL crawls", file=sys.stderr
+                "warning: --follow/--each/--field/--auto/--paginate/--schema/--extract only apply to URL crawls",
+                file=sys.stderr,
             )
         if args.sitemap:
             overrides["sitemap_urls"] = list(args.sitemap)
@@ -545,6 +589,9 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     _print_failures(result, verbose=args.verbose)
+    incomplete = getattr(spider, "incomplete", 0)
+    if incomplete:
+        print(f"{incomplete} page(s) had no complete record (a required field was missing)", file=sys.stderr)
     if result.paused:
         print("paused - run the same command again to resume", file=sys.stderr)
     if stats.get("dead_letters") and spider.crawl_dir:
@@ -808,6 +855,25 @@ def _add_cache_options(p: argparse.ArgumentParser) -> None:
     group.add_argument("--offline", action="store_true", help="replay from the cache only; never touch the network")
 
 
+def _add_typed_extract_options(p: Any) -> None:
+    p.add_argument(
+        "--extract",
+        metavar="SCHEMA",
+        help="extract typed records described by a data schema file (see docs/extraction.md)",
+    )
+    p.add_argument("--all", action="store_true", help="(--extract) every record of a listing page")
+    p.add_argument("--container", metavar="SELECTOR", help="(--extract) the elements holding one record each")
+    p.add_argument("--provenance", action="store_true", help="(--extract) add where each value came from")
+
+
+def _extractor(args: argparse.Namespace) -> Any:
+    if not getattr(args, "extract", None):
+        return None
+    from .extraction import Extractor
+
+    return Extractor(args.extract, provenance=args.provenance)
+
+
 def _add_extract_options(p: argparse.ArgumentParser) -> None:
     p.add_argument(
         "--each", action="append", metavar="SELECTOR", help="make one record per element matched by this selector"
@@ -880,10 +946,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     smart.add_argument("--save-schema", metavar="FILE", help="save the schema learned with --learn")
     smart.add_argument("--schema", metavar="FILE", help="extract with a schema saved by --save-schema")
+    _add_typed_extract_options(smart)
     smart.add_argument("--structured", action="store_true", help="JSON-LD, microdata, OpenGraph and meta data")
     smart.add_argument("--json-data", action="store_true", help="JSON embedded by JS apps (__NEXT_DATA__, ...)")
     smart.add_argument("--tables", action="store_true", help="every HTML table as records")
     smart.add_argument("--next", action="store_true", help="the URL of the next page (pagination)")
+    smart.add_argument("--explain", action="store_true", help="(--extract) show where every value came from")
     _add_cache_options(g)
     g.set_defaults(func=cmd_get)
 
@@ -925,6 +993,7 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--paginate", action="store_true", help="(URL mode) follow next-page links (auto-detected)")
     c.add_argument("--auto", action="store_true", help="(URL mode) extract repeating records automatically")
     c.add_argument("--schema", metavar="FILE", help="(URL mode) extract with a schema saved by get --save-schema")
+    _add_typed_extract_options(c)
     c.add_argument("--sitemap", action="append", metavar="URL", help="take pages from a sitemap or robots.txt")
     c.add_argument("--unique-key", metavar="FIELD", help="drop duplicate items (and upsert into .sqlite output)")
     c.add_argument(

@@ -23,6 +23,7 @@ What gets printed depends on the options:
 | nothing | the page as Markdown |
 | `--css` / `--xpath` | each match on its own line (text for elements, the value for `::text`/`::attr()`) |
 | `--each SEL` and/or `--field NAME=SEL` | one JSON record per matched element (JSON Lines) |
+| `--extract SCHEMA` | a typed record per page with confidence, no selectors needed ([extraction](extraction.md)); `--all` for every record of a listing |
 
 Change the format with `-f md|text|html|json|jsonl|csv`, or let `-o FILE`
 pick it from the extension (`.md`, `.txt`, `.html`, `.json`, `.jsonl`,
@@ -44,6 +45,9 @@ wintergrab get https://books.toscrape.com --each article.product_pod \
 wintergrab get https://books.toscrape.com/catalogue/page-{1,2,3}.html \
     --field first_title="h3 a::attr(title)"
 
+# Typed records from a data schema, with where each value came from
+wintergrab get https://shop.example/p/1 --extract product.schema.json --explain
+
 # Save the raw HTML
 wintergrab get https://example.com -o page.html
 
@@ -58,6 +62,7 @@ Options:
 |---|---|
 | `--css SEL`, `--xpath XPATH` | Print what matches (repeatable). |
 | `--each SEL`, `--field NAME=SEL` | Build records (repeatable). |
+| `--extract SCHEMA`, `--all`, `--container SEL`, `--explain`, `--provenance` | Typed extraction with a [data schema](extraction.md). |
 | `-f/--format`, `-o/--output FILE` | Output format and destination. |
 | `--main-content` | Markdown/text of the main content only. |
 | `--adaptive` | Use [adaptive selectors](adaptive-selectors.md). |
@@ -112,6 +117,7 @@ Options for any crawl:
 | `--public-only` | `network_policy = "public"` |
 | `--normalize-urls` | `url_normalizer = True` |
 | `--block-trackers` | `resource_filter = True` |
+| `--extract SCHEMA` | (URL mode) extract typed records with [the extractor](extraction.md) (`--all`, `--container`, `--provenance`) |
 | `--pipeline FILE` | appends a [data pipeline](data.md#pipelines-as-configuration) to `pipelines` (`--allow-imports` if it names Python functions) |
 | `-s/--set NAME=VALUE` | any attribute; values are parsed as JSON when possible (`-s retries=5`, `-s 'allowed_statuses=[404]'`) |
 

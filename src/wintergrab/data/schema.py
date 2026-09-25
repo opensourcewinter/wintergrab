@@ -636,6 +636,17 @@ class Schema:
                     out[name] = value
         return out, results
 
+    def normalize_value(self, name: str, raw: Any, *, context: NormalizeContext | None = None) -> FieldResult:
+        """Read one raw value as field ``name`` (without record-level steps such as the currency split).
+
+        Extractors use it to compare candidate values: ``"$299.99"`` and
+        ``"299.99"`` both become amount 299.99.
+        """
+        f = self._by_name[name]
+        notes: list[str] = []
+        value = _normalize_value(f, raw, context or _DEFAULT_CONTEXT, notes) if raw is not None else None
+        return FieldResult(raw=raw, value=value, ok=raw is None or (value is not None and value != []), notes=notes)
+
     def _split_money(self, out: dict[str, Any], results: dict[str, FieldResult]) -> None:
         """Money values: amount into the field, currency into the currency field (or keep both together)."""
         for f in self.fields:

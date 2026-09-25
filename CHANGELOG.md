@@ -116,6 +116,28 @@
   pipeline about 4,200 records/s, near-duplicate checks 158 µs per record,
   expressions 1 µs.
 
+### Extraction engine (`wintergrab.extraction`)
+
+- `Extractor(schema).extract(page)` finds every field of a data schema
+  without selectors: schema.org JSON-LD and microdata, OpenGraph/Twitter/meta
+  tags, your selectors, embedded app state, labelled values ("Weight: 1.2 kg",
+  spec tables), repeating-record fields, DOM conventions and text patterns,
+  in that order of preference. Struck-through prices and prices in related
+  products, carts, headers and footers are told apart.
+- Each value keeps its provenance (method, exact source, raw value, agreeing
+  methods, competing values, normalizer notes, validation) and a confidence
+  computed from evidence: method priors (measurable with `calibrate()`),
+  ambiguity, agreement between independent methods, disagreement and
+  validation. Values below `min_confidence` are left out, not guessed.
+- `extract_all()` for listing pages (JSON-LD item lists, a container
+  selector, or automatic record detection).
+- Optional extraction models through a plain function interface, asked only
+  for missing fields; their answers are grounded against the page text.
+- CLI: `get --extract SCHEMA [--explain] [--provenance] [--all]`,
+  `crawl URL --extract SCHEMA`.
+- Measured: about 2.5 ms per 13-field product page with JSON-LD, 1.3 ms
+  without, on one core.
+
 ## 0.2.0
 
 First release on PyPI.
