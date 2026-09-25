@@ -95,3 +95,13 @@ def test_pypi_feed_and_cache(tmp_path) -> None:
         second = http.get("https://pypi.org/project/cssselect/")
     assert first.cache_status == "stored"
     assert second.cache_status in ("hit", "revalidated")
+
+
+@pytest.mark.browser
+def test_browser_gets_the_whole_pypi_page() -> None:
+    # pypi.org may put a JavaScript bot check in front of the page. Either way
+    # the browser must end up with the complete real page (about 1.2 MB).
+    page = wg.render("https://pypi.org/project/lxml/")
+    assert not looks_blocked(page)
+    assert page.css("h1.project-header__name::text").get("").strip().startswith("lxml")
+    assert len(page.body) > 100_000

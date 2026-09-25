@@ -236,6 +236,43 @@ class Handler(BaseHTTPRequestHandler):
                 "languages: navigator.languages});</script>",
             )
             return self.send(200, html)
+        if path == "/challenge-rewrite":
+            # A check that fetches the real page and writes it into the current
+            # document (no navigation, so the load event has long fired).
+            if q("raw"):
+                body = "<html><head><title>Real page</title></head><body>"
+                body += "".join(f"<div class='item'>Item {i}</div>" for i in range(400)) + "</body></html>"
+                return self.send(200, body)
+            html = (
+                "<html><head><title>Client Challenge</title></head><body><script>"
+                "setTimeout(async function(){"
+                "  const text = await (await fetch('/challenge-rewrite?raw=1')).text();"
+                "  document.open(); document.write(text.slice(0, 120));"
+                "  setTimeout(function(){ document.write(text.slice(120)); document.close(); }, 1500);"
+                "}, 800);</script></body></html>"
+            )
+            return self.send(200, html)
+        if path == "/challenge-reload":
+            # Like Fastly's check on pypi.org: status 200, a script sets a cookie
+            # and reloads, then the real (large) page arrives over a while.
+            if "passed=1" in self.headers.get("Cookie", ""):
+                head = b"<html><head><title>Real page</title></head><body>"
+                rest = "".join(f"<div class='item'>Item {i}</div>" for i in range(400)).encode() + b"</body></html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(head) + len(rest)))
+                self.end_headers()
+                self.wfile.write(head)
+                self.wfile.flush()
+                time.sleep(float(q("delay", "1.5")))
+                self.wfile.write(rest)
+                return None
+            html = (
+                "<html><head><title>Client Challenge</title></head><body><noscript>Enable JavaScript</noscript>"
+                "<script>setTimeout(function(){document.cookie='passed=1; path=/'; location.reload()}, 800);"
+                "</script></body></html>"
+            )
+            return self.send(200, html)
         if path == "/challenge":
             if q("passed"):
                 return self.send(200, layout("Welcome", "<h1 id='real'>Real content</h1>"))
