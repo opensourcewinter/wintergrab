@@ -45,6 +45,7 @@ from .fetchers import (
 from .parser.autoextract import LearnedSchema, RecordGroup
 from .proxy import ProxyRotator
 from .request import Request
+from .scrape import scrape
 from .sitemaps import SitemapEntry, sitemap
 from .spider import AutoThrottle, CrawlResult, SessionManager, Spider
 from .utils import configure_logging
@@ -87,5 +88,6 @@ __all__ = [
     "parse",
     "post",
     "render",
+    "scrape",
     "sitemap",
 ]

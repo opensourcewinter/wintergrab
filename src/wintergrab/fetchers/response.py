@@ -328,6 +328,10 @@ class Response:
         """Records from the page's main repeating list, fields inferred automatically."""
         return self.selector.auto_extract(**kwargs)
 
+    def extract_details(self, **kwargs: Any) -> dict[str, Any]:
+        """Everything this detail page says about its main item (see :meth:`Selector.extract_details`)."""
+        return self.selector.extract_details(**kwargs)
+
     def learn(self, examples: Any) -> Any:
         """Learn a reusable extraction schema from example values (see :meth:`Selector.learn`)."""
         return self.selector.learn(examples)

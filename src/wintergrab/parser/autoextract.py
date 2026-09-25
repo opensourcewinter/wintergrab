@@ -585,6 +585,12 @@ class _Group:
         return [paths.get(path) for paths in self.paths]
 
 
+def _label_row(tr: etree._Element) -> bool:
+    """``<tr><th>UPC</th><td>a897fe39</td></tr>``: one item's attribute, not a record of a list."""
+    cells = [c for c in tr if isinstance(c.tag, str) and tag_name(c) in ("th", "td")]
+    return len(cells) == 2 and tag_name(cells[0]) == "th" and tag_name(cells[1]) == "td"
+
+
 def _candidate_groups(body: etree._Element, min_records: int) -> list[list[etree._Element]]:
     """Sibling elements sharing a tag (and optionally a class), merged across sibling parents."""
     buckets: dict[tuple[Any, ...], list[etree._Element]] = {}
@@ -594,7 +600,7 @@ def _candidate_groups(body: etree._Element, min_records: int) -> list[list[etree
             if not isinstance(child.tag, str):
                 continue
             name = tag_name(child)
-            if name in _NOT_MEMBERS or (name == "tr" and child.find("td") is None):
+            if name in _NOT_MEMBERS or (name == "tr" and (child.find("td") is None or _label_row(child))):
                 continue
             by_tag.setdefault(name, []).append(child)
         if not by_tag:

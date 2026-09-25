@@ -236,6 +236,13 @@ class Handler(BaseHTTPRequestHandler):
                 "languages: navigator.languages});</script>",
             )
             return self.send(200, html)
+        if path == "/deadlinks/":
+            # A listing whose records link to pages that don't exist.
+            cards = "".join(
+                f"<article class='card'><h3><a href='/nope/{i}'>Gadget {i}</a></h3><p class='price'>${i}.99</p></article>"
+                for i in range(1, 5)
+            )
+            return self.send(200, layout("Gadgets", f"<main>{cards}</main>"))
         if path == "/challenge-rewrite":
             # A check that fetches the real page and writes it into the current
             # document (no navigation, so the load event has long fired).
@@ -424,18 +431,42 @@ def _books_page(handler: Handler, path: str) -> None:
             200, layout("All products | Books to Scrape", f"<ol class='row'>{pods}</ol><ul class='pager'>{nxt}</ul>")
         )
     if path.startswith("/books/catalogue/book-"):
+        # The structure of a real books.toscrape.com product page.
         i = int(path.split("book-")[1].split("/")[0])
         b = _book(i)
+        blurb = f"{b['title']} is a wonderful read. It was written long ago and still holds up today."
+        head = (
+            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            f"<title>{b['title']} | Books to Scrape - Sandbox</title>"
+            f"<meta name='description' content='{blurb}'></head>"
+        )
         body = (
-            f"<ul class='breadcrumb'><li><a href='../../index.html'>Home</a></li><li><a href='#'>Books</a></li>"
+            "<body><header class='header'><a href='../../index.html'>Books to Scrape</a> We love being scraped!"
+            "</header><div class='page_inner'>"
+            "<ul class='breadcrumb'><li><a href='../../index.html'>Home</a></li><li><a href='#'>Books</a></li>"
             f"<li><a href='#'>{b['category']}</a></li><li class='active'>{b['title']}</li></ul>"
+            "<article class='product_page'><div class='row'>"
+            "<div class='col-sm-6'><div id='product_gallery' class='carousel'><div class='item active'>"
+            f"<img src='../../media/cache/{i}.jpg' alt='{b['title']}'></div></div></div>"
             f"<div class='col-sm-6 product_main'><h1>{b['title']}</h1><p class='price_color'>{b['price']}</p>"
             f"<p class='instock availability'><i class='icon-ok'></i> In stock ({b['stock']} available)</p>"
-            f"<p class='star-rating {b['rating']}'></p></div>"
+            f"<p class='star-rating {b['rating']}'><i class='icon-star'></i></p><hr>"
+            "<div class='alert alert-warning' role='alert'><strong>Warning!</strong> This is a demo website for "
+            "web scraping purposes. Prices and ratings here were randomly assigned and have no real meaning."
+            "</div></div></div>"
+            "<div id='product_description' class='sub-header'><h2>Product Description</h2></div>"
+            f"<p>{blurb}</p>"
+            "<div class='sub-header'><h2>Product Information</h2></div>"
             f"<table class='table table-striped'><tr><th>UPC</th><td>{b['upc']}</td></tr>"
-            f"<tr><th>Product Type</th><td>Books</td></tr></table>"
+            "<tr><th>Product Type</th><td>Books</td></tr>"
+            f"<tr><th>Price (excl. tax)</th><td>{b['price']}</td></tr>"
+            f"<tr><th>Price (incl. tax)</th><td>{b['price']}</td></tr>"
+            "<tr><th>Tax</th><td>\u00a30.00</td></tr>"
+            f"<tr><th>Availability</th><td>In stock ({b['stock']} available)</td></tr>"
+            f"<tr><th>Number of reviews</th><td>{i % 3}</td></tr></table>"
+            "</article></div><footer class='footer'>Books to Scrape - a demo site</footer></body></html>"
         )
-        return handler.send(200, layout(f"{b['title']} | Books to Scrape", body))
+        return handler.send(200, head + body)
     return handler.send(404, layout("Not found", "<p>nope</p>"))
 
 

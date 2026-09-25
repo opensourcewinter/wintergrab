@@ -732,6 +732,19 @@ class Selector:
             return []
         return auto_extract(self._root, self._doc.base_url(self._top()), min_records=min_records, clean=clean)
 
+    def extract_details(self, *, clean: bool = True) -> dict[str, Any]:
+        """Everything a detail page says about its main item, as one flat record.
+
+        Merges schema.org data, the block around the ``<h1>`` (price, stock, rating,
+        image), label/value tables and lists, breadcrumbs and the description.
+        Values are typed like :meth:`auto_extract`'s; ``clean=False`` keeps raw text.
+        """
+        from .details import extract_details
+
+        if self._root is None:
+            return {}
+        return extract_details(self._root, self._doc.base_url(self._top()), clean=clean)
+
     def learn(self, examples: Mapping[str, str] | list[Mapping[str, str]]) -> Any:
         """Learn an extraction schema from example values ("scraping by example").
 

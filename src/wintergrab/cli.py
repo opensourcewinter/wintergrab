@@ -213,6 +213,25 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
         await fetcher.aclose()
 
 
+def _deepen(args: argparse.Namespace, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Open each record's own page (with the same fetch options) and merge its details."""
+    from .scrape import merge_details
+
+    urls = list(dict.fromkeys(r["url"] for r in records if isinstance(r.get("url"), str)))
+    pages = dict(zip(urls, asyncio.run(_fetch_all(args, urls)), strict=True))
+    merged = []
+    for record in records:
+        page = pages.get(record.get("url"))  # type: ignore[arg-type]
+        if isinstance(page, Response) and page.status < 400:
+            merged.append(merge_details(record, page.extract_details()))
+        else:
+            merged.append(record)  # keep what the listing had
+    failed = sum(1 for p in pages.values() if not isinstance(p, Response) or p.status >= 400)
+    if failed:
+        print(f"warning: {failed} of {len(pages)} detail page(s) could not be read", file=sys.stderr)
+    return merged
+
+
 def cmd_get(args: argparse.Namespace) -> int:
     urls = [ensure_scheme(u) for u in args.urls]
     if args.capture_filter:
@@ -225,7 +244,7 @@ def cmd_get(args: argparse.Namespace) -> int:
     # Modes that print one JSON document per page instead of page content.
     json_modes = [m for m in ("structured", "json_data", "tables", "next", "capture") if getattr(args, m)]
     selecting = bool(args.css or args.xpath)
-    records = bool(args.each or args.auto or examples or schema)
+    records = bool(args.each or args.auto or args.deep or examples or schema)
     if json_modes:
         args.format = args.format or ("jsonl" if len(urls) > 1 else "json")
     default_fmt = "jsonl" if records else ("text" if selecting else "md")
@@ -281,10 +300,17 @@ def cmd_get(args: argparse.Namespace) -> int:
                     print(f"schema saved to {args.save_schema}", file=sys.stderr)
             rows.extend({"url": page.url, **row} if multi else row for row in schema.extract(page))
             continue
-        if args.auto:
+        if args.auto or args.deep:
             found = page.auto_extract()
             if not found:
-                print(f"warning: no repeating records found on {page.url}", file=sys.stderr)
+                item = page.extract_details()
+                if len(item) > 1:  # more than just the url
+                    print(f"note: no list of records on {page.url}; extracted its main item", file=sys.stderr)
+                    found = [item]
+                else:
+                    print(f"warning: no repeating records found on {page.url}", file=sys.stderr)
+            elif args.deep:
+                found = _deepen(args, found)
             rows.extend({"url": page.url, **row} if multi else row for row in found)
             continue
         if records:
@@ -431,9 +457,19 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     is_url = args.target.startswith(("http://", "https://")) or (
         not args.target.endswith(".py") and ".py:" not in args.target and not Path(args.target).exists()
     )
-    if is_url:
+    if is_url and args.deep:
+        from .scrape import AutoSpider
+
         start = ensure_scheme(args.target)
-        cls: type[Spider] = QuickSpider
+        cls: type[Spider] = AutoSpider
+        overrides.setdefault("start_urls", [start])
+        overrides.setdefault("allowed_domains", [] if args.any_domain else [host_of(start)])
+        overrides.update(pages=None if args.paginate else 1, deep=True)
+        if args.follow or args.each or args.field or args.schema:
+            print("warning: --follow/--each/--field/--schema are ignored with --deep", file=sys.stderr)
+    elif is_url:
+        start = ensure_scheme(args.target)
+        cls = QuickSpider
         overrides.setdefault("start_urls", [start])
         overrides.setdefault("allowed_domains", [] if args.any_domain else [host_of(start)])
         overrides.update(
@@ -678,6 +714,11 @@ def build_parser() -> argparse.ArgumentParser:
     smart = g.add_argument_group("zero-selector extraction")
     smart.add_argument("--auto", action="store_true", help="find the page's repeating records and extract them")
     smart.add_argument(
+        "--deep",
+        action="store_true",
+        help="with --auto: also open each record's own page and merge its details (implies --auto)",
+    )
+    smart.add_argument(
         "--learn",
         action="append",
         metavar="FIELD=EXAMPLE",
@@ -721,6 +762,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--any-domain", action="store_true", help="(URL mode) follow links to other domains too")
     c.add_argument("--paginate", action="store_true", help="(URL mode) follow next-page links (auto-detected)")
     c.add_argument("--auto", action="store_true", help="(URL mode) extract repeating records automatically")
+    c.add_argument(
+        "--deep",
+        action="store_true",
+        help="(URL mode) records from the listing (all pages with --paginate), each completed from its own page",
+    )
     c.add_argument("--schema", metavar="FILE", help="(URL mode) extract with a schema saved by get --save-schema")
     c.add_argument("--sitemap", action="append", metavar="URL", help="take pages from a sitemap or robots.txt")
     c.add_argument("--unique-key", metavar="FIELD", help="drop duplicate items (and upsert into .sqlite output)")
