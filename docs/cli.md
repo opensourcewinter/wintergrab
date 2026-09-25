@@ -23,6 +23,8 @@ What gets printed depends on the options:
 | nothing | the page as Markdown |
 | `--css` / `--xpath` | each match on its own line (text for elements, the value for `::text`/`::attr()`) |
 | `--each SEL` and/or `--field NAME=SEL` | one JSON record per matched element (JSON Lines) |
+| `--auto` | typed records from the page's main list, or the item on a single item's page (JSON Lines) |
+| `--deep` | like `--auto`, and each record completed from its own page |
 
 Change the format with `-f md|text|html|json|jsonl|csv`, or let `-o FILE`
 pick it from the extension (`.md`, `.txt`, `.html`, `.json`, `.jsonl`,
@@ -39,6 +41,9 @@ wintergrab get https://quotes.toscrape.com --xpath "//a[@class='tag']/@href"
 # Structured records -> CSV
 wintergrab get https://books.toscrape.com --each article.product_pod \
     --field title="h3 a::attr(title)" --field price=.price_color::text -o books.csv
+
+# No selectors: typed records, each completed from its own page, ready for Excel
+wintergrab get https://books.toscrape.com --deep -o books.csv
 
 # One record per page, several pages at once (fetched concurrently)
 wintergrab get https://books.toscrape.com/catalogue/page-{1,2,3}.html \
@@ -58,6 +63,7 @@ Options:
 |---|---|
 | `--css SEL`, `--xpath XPATH` | Print what matches (repeatable). |
 | `--each SEL`, `--field NAME=SEL` | Build records (repeatable). |
+| `--auto`, `--deep` | Records without selectors; `--deep` also reads each record's own page. |
 | `-f/--format`, `-o/--output FILE` | Output format and destination. |
 | `--main-content` | Markdown/text of the main content only. |
 | `--adaptive` | Use [adaptive selectors](adaptive-selectors.md). |
@@ -115,6 +121,9 @@ wintergrab crawl https://books.toscrape.com \
     --each ".product_main" --field title=h1::text --field price=.price_color::text \
     --max-pages 100 -o books.jsonl
 
+# No selectors: every listing page, each record completed from its own page
+wintergrab crawl https://books.toscrape.com --auto --deep --paginate -o books.csv
+
 # Only follow URLs matching a pattern
 wintergrab crawl https://example.com --allow "/blog/" --deny "\?replytocom=" --max-depth 3
 ```
@@ -125,6 +134,8 @@ wintergrab crawl https://example.com --allow "/blog/" --deny "\?replytocom=" --m
 | `--allow REGEX`, `--deny REGEX` | Filter followed URLs. |
 | `--any-domain` | Allow leaving the start domain. |
 | `--each SEL`, `--field NAME=SEL` | What to extract from each page. |
+| `--auto` | Typed records from each page's main list. |
+| `--deep` | Records from the start page (every listing page with `--paginate`), each completed from its own page. |
 
 ## `wintergrab shell`: explore interactively
 

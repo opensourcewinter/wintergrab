@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.3.0
+
+Complete, typed records without writing selectors.
+
+- **`wintergrab.scrape(url, pages=None, deep=True)`**: reads every listing
+  page, finds the records on each, opens each record's own page and merges
+  what it adds. It returns the records in page order. On books.toscrape.com
+  that means 18 typed fields per book (UPC, stock count, category,
+  description, tax, reviews...) instead of 5 raw text columns. Inside it's a
+  normal spider: it obeys robots.txt, uses AutoThrottle and retries, and can
+  cache. If a record's own page fails, the record keeps its listing values.
+- **`Response.extract_details()`**: one flat record for a product, article,
+  job or event page. It merges schema.org data (JSON-LD or microdata), the
+  block around the `<h1>`, label/value tables and lists, breadcrumbs and the
+  description. It never picks a struck-out "was" price or the logo image.
+- **Typed values** (`wintergrab.parser.normalize`):
+  - prices become numbers plus an ISO `currency` when the symbol is
+    unambiguous, in many number formats;
+  - ratings become numbers (from text, classes or stars);
+  - availability adds `in_stock` and a `stock` count;
+  - counts such as reviews become integers.
+
+  Anything that doesn't parse is kept as it was.
+- **CLI**:
+  - `wintergrab get URL --deep` and `wintergrab crawl URL --auto --deep --paginate`.
+  - `get --auto` on a single item's page now returns that item.
+- **CSV files open correctly in Excel**: they start with a UTF-8 byte order
+  mark, so `£` no longer shows as `Â£`. In Python, read them with
+  `encoding="utf-8-sig"`.
+
+Changed:
+- `auto_extract()`, `RecordGroup.extract()` and `LearnedSchema.extract()`
+  now return typed values by default (`price=51.77, currency="GBP"`, not
+  `"£51.77"`). Pass `clean=False` for the previous raw text.
+- `auto_extract()` puts readable fields first and `url`/`image` last.
+
+Fixed:
+- Availability was dropped when every record on a page said the same thing
+  (e.g. "In stock"), because identical text was treated as boilerplate.
+- Label/value table rows (`<tr><th>UPC</th><td>...</td></tr>`) are no longer
+  mistaken for a list of records.
+- `write_items` to CSV keeps every column any item has, not just the first
+  item's.
+
 ## 0.2.0
 
 First release on PyPI.

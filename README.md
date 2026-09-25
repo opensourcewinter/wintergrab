@@ -29,11 +29,13 @@ thousands of pages), the same API scales up.
   sessions (HTTP + browser, several accounts…), proxy rotation with health
   checks, **AutoThrottle** that backs off when a site pushes back,
   robots.txt support, and **pause/resume** (Ctrl+C, then run again).
-- **Scrape without selectors.** Pull JSON-LD/microdata/OpenGraph, the JSON
-  state that React/Next/Vue apps embed in their HTML, and every table.
-  `auto_extract()` finds a page's product grid or result list and names the
-  fields. `learn({"title": "…", "price": "…"})` writes the selectors for you
-  from values you can see on the page.
+- **Scrape without selectors.** `wintergrab.scrape(url, deep=True)` finds a
+  page's product grid or result list, follows each record to its own page, and
+  returns complete, **typed** records: `"£51.77"` becomes `price=51.77,
+  currency="GBP"`, `"In stock (22 available)"` becomes `in_stock=True, stock=22`.
+  It also reads JSON-LD/microdata/OpenGraph, the JSON state that React/Next/Vue
+  apps embed in their HTML, and every table. `learn({"title": "…", "price": "…"})`
+  writes the selectors for you from values you can see on the page.
 - **Built for big, long crawls.** An HTTP cache that revalidates with `304`s
   and replays whole crawls offline. A disk-backed queue with a Bloom filter
   that keeps memory flat at millions of URLs and survives `kill -9`. Sitemap
@@ -113,8 +115,24 @@ so you know to update the selector. See [docs/adaptive-selectors.md](https://git
 
 ### Scrape without writing selectors
 
+One call from a listing to complete records (all pages, each item's own page merged in):
+
 ```python
-page.auto_extract()          # [{"title", "url", "image", "price", "rating"...}, ...] from the main record list
+books = wg.scrape("https://books.toscrape.com/", pages=None, deep=True, output="books.csv")
+books[0]
+# {"title": "A Light in the Attic", "price": 51.77, "currency": "GBP",
+#  "availability": "In stock (22 available)", "in_stock": True, "stock": 22, "rating": 3.0,
+#  "upc": "a897fe39b1053632", "product_type": "Books", "price_excl_tax": 51.77,
+#  "price_incl_tax": 51.77, "tax": 0.0, "number_of_reviews": 0, "category": "Poetry",
+#  "breadcrumbs": "Home > Books > Poetry", "description": "It's hard to imagine...",
+#  "image": "https://books.toscrape.com/media/cache/fe/72/...jpg", "url": "https://books.toscrape.com/..."}
+```
+
+Or piece by piece:
+
+```python
+page.auto_extract()          # typed records from the main list: title, price, currency, rating, in_stock, url...
+page.extract_details()       # one record from a product/article/job page: schema.org data, specs, breadcrumbs...
 schema = page.learn({"title": "A Light in the Attic", "price": "£51.77"})
 schema.extract(other_page)   # the learned selectors work on every page of that template
 page.structured_data()       # JSON-LD, microdata, OpenGraph, meta tags
@@ -202,7 +220,9 @@ wintergrab get https://books.toscrape.com --each article.product_pod \
     --field title="h3 a::attr(title)" --field price=.price_color::text -o books.csv
 wintergrab get https://quotes.toscrape.com/js/ --browser --wait-for .quote
 
-wintergrab get https://books.toscrape.com --auto                     # records, no selectors
+wintergrab get https://books.toscrape.com --auto                     # typed records, no selectors
+wintergrab get https://books.toscrape.com --deep -o books.csv        # + each book's own page, Excel-ready
+wintergrab crawl https://books.toscrape.com --auto --deep --paginate -o books.jsonl   # all 1,000 books
 wintergrab get https://books.toscrape.com --learn "title=A Light in the Attic" --save-schema books.json
 wintergrab crawl https://books.toscrape.com --schema books.json --paginate -o books.jsonl
 wintergrab get https://shop.example/p/1 --structured                # JSON-LD, OpenGraph...

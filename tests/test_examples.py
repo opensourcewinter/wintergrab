@@ -135,3 +135,11 @@ def test_10_big_crawl(site, tmp_path) -> None:
     rows = sqlite3.connect(tmp_path / "shop.db").execute("SELECT url, title, stock, from_cache FROM items").fetchall()
     assert len(rows) == 12  # upserted, not duplicated
     assert all(row[3] == 1 for row in rows)  # the replay's rows replaced the live ones
+
+
+def test_11_scrape_in_one_call(site, tmp_path, capsys) -> None:
+    out = tmp_path / "books.csv"
+    books = load("11_scrape_in_one_call").main(site.url + "/books/", pages=None, out=str(out))
+    assert [b["upc"] for b in books] == [f"upc{i:04d}" for i in range(1, 13)]
+    assert out.read_bytes().startswith(b"\xef\xbb\xbf")  # Excel-ready
+    assert "12 books saved" in capsys.readouterr().out

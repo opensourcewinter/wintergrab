@@ -3,9 +3,9 @@
 These features take wintergrab beyond "fetch and parse". They cover
 scraping without writing selectors, crawling at scale, and speed.
 
-- [Zero-selector extraction](#zero-selector-extraction): structured data,
-  embedded app state, tables, automatic records, learning by example,
-  pagination
+- [Zero-selector extraction](#zero-selector-extraction): one-call scraping,
+  typed values, detail pages, structured data, embedded app state, tables,
+  automatic records, learning by example, pagination
 - [HTTP cache and offline replay](#http-cache-and-offline-replay)
 - [Capturing a page's API calls](#capturing-a-pages-api-calls)
 - [Handing a browser session to fast HTTP](#handing-a-browser-session-to-fast-http)
@@ -19,6 +19,82 @@ scraping without writing selectors, crawling at scale, and speed.
 
 Selectors are the part of a scraper that breaks. A lot of the time you don't
 need them.
+
+### One call: `scrape()`
+
+```python
+books = wg.scrape("https://books.toscrape.com/", pages=None, deep=True, output="books.csv")
+```
+
+This reads every listing page (following next-page links) and finds the
+records on each. With `deep=True` it also opens each record's own page and
+merges what that page adds. The result is a list of typed records in page order:
+
+```python
+{"title": "A Light in the Attic", "price": 51.77, "currency": "GBP",
+ "availability": "In stock (22 available)", "in_stock": True, "stock": 22, "rating": 3.0,
+ "upc": "a897fe39b1053632", "product_type": "Books", "price_excl_tax": 51.77,
+ "price_incl_tax": 51.77, "tax": 0.0, "number_of_reviews": 0, "category": "Poetry",
+ "breadcrumbs": "Home > Books > Poetry", "description": "It's hard to imagine...",
+ "image": "https://books.toscrape.com/media/cache/...jpg", "url": "https://books.toscrape.com/catalogue/..."}
+```
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `pages` | `1` | Listing pages to read. `None` reads all of them. |
+| `deep` | `False` | Open each record's own page and merge its details. |
+| `max_items` | `None` | Stop after this many records. |
+| `clean` | `True` | Typed values. `False` keeps the raw text. |
+| `**settings` | | Any spider setting, e.g. `output="books.csv"`, `cache=".cache"`, `concurrency=8`, `use_browser=True`, `proxies=[...]`. |
+
+Inside, it's a normal spider, so it obeys robots.txt, adapts its speed with
+AutoThrottle, retries, and can cache. If a record's own page can't be read,
+the record keeps what the listing had. Pointed at a single item's page, it
+returns that item.
+
+From the command line:
+
+```bash
+wintergrab get https://books.toscrape.com --deep -o books.csv                        # one listing page
+wintergrab crawl https://books.toscrape.com --auto --deep --paginate -o books.jsonl  # every page
+```
+
+### Typed values
+
+Every automatic extractor (`scrape`, `auto_extract`, `extract_details`, and
+learned schemas) returns typed values:
+
+| Scraped text | Becomes |
+|---|---|
+| `£51.77`, `1.234,56 €`, `CHF 1'234.50`, `₹ 1,49,999` | `price=51.77`, `currency="GBP"` (an ISO code when the symbol is unambiguous) |
+| `$1,299.99` | `price=1299.99`, `currency="$"`: `$` could be USD, CAD, AUD..., so it stays as written |
+| `star-rating Three`, `4.5 out of 5`, `stars-45`, `★★★☆☆` | `rating=3.0` / `4.5` / `4.5` / `3.0` |
+| `In stock (22 available)`, `Only 3 left`, `Sold out`, `https://schema.org/InStock` | `availability` (the text), `in_stock` (bool), `stock` (int) |
+| `1,204 reviews`, `2.5k` | `1204`, `2500` |
+
+The field's name decides the parser (`price`, `price_incl_tax`, `tax`,
+`rating`, `availability`, `number_of_reviews`...). Anything that doesn't
+parse is kept as it was, so no data is lost. Pass `clean=False` for raw text,
+or use the parsers directly: `from wintergrab.parser.normalize import
+parse_price, parse_rating, parse_availability, clean_record`.
+
+### Detail pages
+
+```python
+page = wg.get("https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html")
+page.extract_details()   # the same 18 fields as above
+```
+
+It merges, most trusted first:
+1. **schema.org data** (JSON-LD or microdata): Product, Book, Recipe, Event,
+   JobPosting, Article and more, with offers, ratings, brand and identifiers.
+2. **The block around the page's `<h1>`:** price (never a struck-out "was"
+   price), stock, rating, and the main image (never the logo).
+3. **Label/value pairs:** two-column tables, `<dl>` lists, and
+   `Label: value` list items. These become fields such as `upc`, `weight`
+   and `colour_temperature`.
+4. **Breadcrumbs:** `category` and the `breadcrumbs` path.
+5. **The description**, with meta tags as a last resort.
 
 ### Structured data
 
@@ -63,8 +139,8 @@ tables are kept separate.
 
 ```python
 page.auto_extract()
-# [{"title": "A Light in the Attic", "url": "https://...", "image": "https://...",
-#   "price": "£51.77", "rating": "Three", "availability": "In stock"}, ...]
+# [{"title": "A Light in the Attic", "price": 51.77, "currency": "GBP", "rating": 3.0,
+#   "availability": "In stock", "in_stock": True, "url": "https://...", "image": "https://..."}, ...]
 ```
 
 wintergrab finds the page's main repeating structure (a product grid, search
@@ -226,6 +302,10 @@ class Catalog(Spider):
     output = "catalog.db"      # .sqlite / .sqlite3 / .db -> an "items" table; new fields become columns
     unique_key = "url"         # duplicates dropped; re-crawls update rows in place
 ```
+
+CSV files start with a UTF-8 byte order mark, so Excel shows `£` and `é`
+correctly instead of `Â£` and `Ã©`. In Python, read them with
+`encoding="utf-8-sig"`, which handles files with or without the mark.
 
 JSON Lines, JSON and CSV outputs are buffered (flushed every 64 items or
 every second, and at every checkpoint), so writing is cheap even at

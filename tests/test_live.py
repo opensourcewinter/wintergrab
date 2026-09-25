@@ -105,3 +105,15 @@ def test_browser_gets_the_whole_pypi_page() -> None:
     assert not looks_blocked(page)
     assert page.css("h1.project-header__name::text").get("").strip().startswith("lxml")
     assert len(page.body) > 100_000
+
+
+def test_scrape_books_deep() -> None:
+    # The first book's real values on books.toscrape.com.
+    books = wg.scrape("https://books.toscrape.com/", deep=True)
+    assert len(books) == 20
+    first = books[0]
+    assert first["title"] == "A Light in the Attic"
+    assert (first["price"], first["currency"], first["rating"]) == (51.77, "GBP", 3.0)
+    assert (first["in_stock"], first["stock"]) == (True, 22)
+    assert (first["upc"], first["category"], first["number_of_reviews"]) == ("a897fe39b1053632", "Poetry", 0)
+    assert first["description"].startswith("It's hard to imagine a world without A Light in the Attic")
