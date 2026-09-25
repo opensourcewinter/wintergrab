@@ -243,7 +243,7 @@ kept: raise the budget and run again to continue.
 | `max_errors` | URLs given up on |
 | `max_error_rate` | failed / started pages, after `error_rate_min_pages` (50) pages |
 | `max_memory`, `max_cpu_seconds` | resident memory (bytes), CPU seconds of this run |
-| `max_output_bytes` | bytes written to `output` in this run |
+| `max_output_bytes` | bytes written to `output` in this run, checked after every item (SQLite output: the file's growth, checked once a second) |
 
 To degrade gracefully instead, set `budget_soft_limit = 0.9`: once any budget
 is 90% used only requests with `priority >= budget_soft_priority` (default 1)

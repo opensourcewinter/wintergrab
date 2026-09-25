@@ -64,6 +64,8 @@
   `--events`, `--retry-failed`.
 - Fix: exceptions raised by callbacks no longer show a misleading
   "RuntimeError: no running event loop" as their context in logs.
+- `max_output_bytes` counts the bytes each exporter produces and is checked
+  after every item, so it no longer depends on when buffers reach the disk.
 - Measured: crawl throughput is unchanged (1,038 pages/s median before and
   after on the benchmark site, concurrency 64, 5 alternating runs each).
 

@@ -58,11 +58,31 @@ def dumps(item: Any) -> str:
     return json.dumps(data, ensure_ascii=False, default=_json_default)
 
 
+def _size(text: str) -> int:
+    """UTF-8 size of ``text`` (cheap for ASCII, the usual case)."""
+    return len(text) if text.isascii() else len(text.encode("utf-8"))
+
+
+class _CountingWriter:
+    """A file-like wrapper counting the UTF-8 bytes written through it (for the csv module)."""
+
+    def __init__(self, fh: Any, exporter: Exporter) -> None:
+        self._fh = fh
+        self._exporter = exporter
+
+    def write(self, text: str) -> int:
+        assert self._exporter.bytes_written is not None
+        self._exporter.bytes_written += _size(text)
+        return int(self._fh.write(text))
+
+
 class Exporter:
     def __init__(self, path: Path, *, append: bool) -> None:
         self.path = path
         self.append = append
         self.count = 0
+        #: Bytes this exporter produced in this run, buffered ones included (``None``: not measurable).
+        self.bytes_written: int | None = 0
         self._unflushed = 0
         self._last_flush = time.monotonic()
 
@@ -92,7 +112,9 @@ class JsonLinesExporter(Exporter):
         self._fh = open(path, "a" if append else "w", encoding="utf-8")  # noqa: SIM115 - closed in close()
 
     def write(self, item: Any) -> None:
-        self._fh.write(dumps(item) + "\n")
+        line = dumps(item) + "\n"
+        self._fh.write(line)
+        self.bytes_written += _size(line)  # type: ignore[operator]
         self.count += 1
         self._maybe_flush()
 
@@ -145,7 +167,9 @@ class JsonExporter(Exporter):
         raise ValueError(f"{path} is not a JSON array wintergrab can extend; move it away or use .jsonl output")
 
     def write(self, item: Any) -> None:
-        self._fh.write(("\n" if self._first else ",\n") + dumps(item))
+        chunk = ("\n" if self._first else ",\n") + dumps(item)
+        self._fh.write(chunk)
+        self.bytes_written += _size(chunk)  # type: ignore[operator]
         self._first = False
         self.count += 1
         self._maybe_flush()
@@ -170,9 +194,10 @@ class CsvExporter(Exporter):
                 header = next(csv.reader(fh), None)
             self._fields = header or None
         self._fh = open(path, "a" if resuming else "w", newline="", encoding="utf-8")  # noqa: SIM115 - closed in close()
+        self._out = _CountingWriter(self._fh, self)
         self._writer: csv.DictWriter[str] | None = None
         if self._fields:
-            self._writer = csv.DictWriter(self._fh, fieldnames=self._fields, extrasaction="ignore")
+            self._writer = csv.DictWriter(self._out, fieldnames=self._fields, extrasaction="ignore")
 
     def write(self, item: Any) -> None:
         row = to_dict(item)
@@ -188,7 +213,7 @@ class CsvExporter(Exporter):
         }
         if self._writer is None:
             self._fields = list(flat)
-            self._writer = csv.DictWriter(self._fh, fieldnames=self._fields, extrasaction="ignore")
+            self._writer = csv.DictWriter(self._out, fieldnames=self._fields, extrasaction="ignore")
             self._writer.writeheader()
         self._writer.writerow(flat)
         self.count += 1
@@ -232,6 +257,7 @@ class SqliteExporter(Exporter):
 
     def __init__(self, path: Path, *, append: bool, unique_key: str | None = None) -> None:
         super().__init__(path, append=append)
+        self.bytes_written = None  # pages are allocated in blocks: the file size is measured instead
         self.unique_key = unique_key
         self._conn = sqlite3.connect(str(path))
         self._conn.execute("PRAGMA journal_mode=WAL")
@@ -325,7 +351,9 @@ class StdoutExporter(Exporter):
         super().__init__(path, append=append)
 
     def write(self, item: Any) -> None:
-        sys.stdout.write(dumps(item) + "\n")
+        line = dumps(item) + "\n"
+        sys.stdout.write(line)
+        self.bytes_written += _size(line)  # type: ignore[operator]
         self.count += 1
         self._maybe_flush()
 

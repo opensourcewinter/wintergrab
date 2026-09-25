@@ -93,6 +93,28 @@ class BudgetMonitor:
         self.active = bool(self.limits)
         self._cpu_start = time.process_time()
         self._output_start: int | None = None
+        self._exporter: Any = None
+
+    def attach_output(self, exporter: Any) -> None:
+        """Measure ``max_output_bytes`` with the exporter's own count (exact, and buffered bytes included)."""
+        self._exporter = exporter
+
+    def check_output(self) -> BudgetStatus | None:
+        """``max_output_bytes`` after an item was written, when the exporter counts its bytes."""
+        limit = self.limits.get("max_output_bytes")
+        written = getattr(self._exporter, "bytes_written", None)
+        if limit is None or written is None:
+            return None
+        return BudgetStatus("max_output_bytes", written, limit) if written >= limit else None
+
+    def _output_bytes(self) -> int:
+        written = getattr(self._exporter, "bytes_written", None)
+        if written is not None:
+            return int(written)
+        try:  # SQLite output: the file on disk (updated when the exporter commits)
+            return max(0, os.path.getsize(self.output_path or "") - (self._output_start or 0))
+        except OSError:
+            return 0
 
     def start(self, append: bool) -> None:
         """Remember what the output file held before this run (only this run's writes count)."""
@@ -145,11 +167,7 @@ class BudgetMonitor:
                 )
             )
         if "max_output_bytes" in limits and self.output_path:
-            try:
-                size = os.path.getsize(self.output_path) - (self._output_start or 0)
-            except OSError:
-                size = 0
-            out.append(BudgetStatus("max_output_bytes", max(0, size), limits["max_output_bytes"]))
+            out.append(BudgetStatus("max_output_bytes", self._output_bytes(), limits["max_output_bytes"]))
         return out
 
     def usage(self, stats: dict[str, Any], elapsed_total: float) -> dict[str, BudgetStatus]:

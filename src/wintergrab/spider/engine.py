@@ -134,6 +134,7 @@ class Engine:
         self._emit_response = False  # someone subscribed to high-volume events (re-checked periodically)
         self._emit_item = False
         self._min_priority: int | None = None  # set by budget_soft_limit
+        self._output_budget = False  # max_output_bytes set, checked after every written item
         self._elapsed_final = False
         self._last_sample = 0.0
         # extension points (bound methods of the hooks that exist, so unused ones cost nothing)
@@ -255,6 +256,8 @@ class Engine:
             # A frontier that survived a crash means earlier output is part of this crawl.
             self._setup_output(append=state is not None or frontier_existed)
             self.budget.start(append=state is not None or frontier_existed)
+            self.budget.attach_output(self.exporter)
+            self._output_budget = "max_output_bytes" in self.budget.limits and self.exporter is not None
             self._setup_events()
             self._bind_extensions()
             spider.configure_sessions(self.sessions)
@@ -1387,6 +1390,10 @@ class Engine:
             except Exception as exc:
                 self.stats.inc("export_errors")
                 log.error("could not write item to %s: %s", self.spider.output, describe(exc))
+            if self._output_budget:
+                exhausted = self.budget.check_output()
+                if exhausted is not None:
+                    self._budget_exhausted(exhausted)
         if spider.keep_items:
             self.items.append(processed)
         if self._emit_item:

@@ -87,6 +87,18 @@ def test_max_output_bytes(fresh_site, tmp_path) -> None:
     assert 300 <= out.stat().st_size < 3_000
 
 
+@pytest.mark.parametrize("suffix", [".jsonl", ".json", ".csv"])
+def test_max_output_bytes_does_not_wait_for_buffers(fresh_site, tmp_path, monkeypatch, suffix: str) -> None:
+    # Items are buffered before they reach the disk, and a fast crawl can end
+    # before the once-a-second checks run: the exporter's own byte count stops it.
+    monkeypatch.setattr(BudgetMonitor, "check_resources", lambda self, elapsed: None)
+    out = tmp_path / f"items{suffix}"
+    result = links(fresh_site, max_output_bytes=300, output=str(out)).run()
+    assert result.limit_reason == "max_output_bytes"
+    assert 3 <= result.stats["items"] <= 10  # each item is about 50 bytes
+    assert 300 <= out.stat().st_size < 1_000
+
+
 def test_soft_limit_keeps_the_budget_for_important_pages(fresh_site) -> None:
     class Focused(Links):
         def parse(self, response):
