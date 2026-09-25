@@ -31,8 +31,8 @@ First release on PyPI.
   status 200) and DataDome, and a spider that gives up on a block page says
   so instead of reporting a bare "HTTP 200".
 - **Browser**: after a bot check passes, the capture waits until the real
-  page is fully parsed. Checks that write the page into the document (as
-  pypi.org's does) used to be captured half-written.
+  page is fully parsed. Behind pypi.org's check, the browser used to return
+  a half-loaded page.
 - **Security**: a page on an allowed domain that redirects elsewhere
   (possibly to an internal address) is no longer passed to the callbacks
   (`offsite_redirects` stat).
