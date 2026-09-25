@@ -169,3 +169,24 @@ async def test_aget(site) -> None:
     assert page.css("#title::text").get() == "Test shop"
     posted = await wg.apost(site.url + "/post", json={"x": 1})
     assert posted.json()["body"] == '{"x":1}'
+
+
+async def test_no_proactor_warning_from_curl_cffi(site, monkeypatch) -> None:
+    # On Windows curl_cffi warns that the Proactor loop needs a helper thread.
+    # Simulate that anywhere and check the warning doesn't reach the user.
+    import warnings
+
+    import curl_cffi.aio
+
+    real = curl_cffi.aio.get_selector
+
+    def windows_like(loop):
+        warnings.warn("\n    Proactor event loop does not implement add_reader ...", UserWarning, stacklevel=2)
+        return real(loop)
+
+    monkeypatch.setattr(curl_cffi.aio, "get_selector", windows_like)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        async with AsyncFetcher() as http:
+            assert (await http.get(site.url + "/products/page/1")).status == 200
+    assert not [w for w in caught if "Proactor" in str(w.message)]
