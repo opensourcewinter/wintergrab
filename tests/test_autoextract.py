@@ -317,12 +317,24 @@ def test_auto_extract_catalogue() -> None:
     assert first["title"] == "A Light in the Attic"  # full title from a[title], not the truncated text
     assert first["url"] == BASE + "catalogue/a-light-in-the-attic_1000/index.html"
     assert first["image"] == BASE + "media/cache/a-light-in-the-attic_1000.jpg"
-    assert first["price"] == "£51.77"
-    assert "Three" in first["rating"]
-    assert first["availability"] == "In stock"
+    assert (first["price"], first["currency"]) == (51.77, "GBP")  # typed, not "£51.77"
+    assert first["rating"] == 3.0  # from class="star-rating Three"
+    assert (first["availability"], first["in_stock"]) == ("In stock", True)
     assert [r["availability"] for r in records].count("Out of stock") == 1
     assert [r["title"] for r in records] == [b[0] for b in PAGE_1_BOOKS]
     assert all("Add to basket" not in r.values() for r in records)  # constant boilerplate is skipped
+    raw = auto_extract(wg.parse(catalogue(PAGE_1_BOOKS), url=BASE).root, clean=False)[0]
+    assert raw["price"] == "£51.77" and "Three" in raw["rating"]
+
+
+def test_auto_extract_keeps_availability_that_is_the_same_everywhere() -> None:
+    # On the real books.toscrape.com page 1 every book is "In stock". Identical text is
+    # usually boilerplate ("Add to basket"), but stock wording must survive.
+    books = [(t, slug, p, r, "In stock") for t, slug, p, r, _ in PAGE_1_BOOKS]
+    records = auto_extract(wg.parse(catalogue(books), url=BASE).root)
+    assert [(r["availability"], r["in_stock"]) for r in records] == [("In stock", True)] * len(books)
+    assert all("Add to basket" not in r.values() for r in records)
+    assert list(records[0])[-2:] == ["url", "image"]  # long URLs last, readable columns first
 
 
 def test_auto_extract_accepts_selector_response_and_markup() -> None:
@@ -355,8 +367,9 @@ def test_auto_extract_table_rows_named_by_headers() -> None:
     assert records[0] == {
         "title": "Widget",
         "url": "https://shop.example/p/widget",
-        "price": "$9.99",
-        "in_stock": "120",
+        "price": 9.99,
+        "currency": "$",  # "$" alone is ambiguous: kept as written
+        "in_stock": 120,
         "updated": "2024-05-01",
     }
     assert [r["title"] for r in records] == [row[0] for row in INVENTORY]
@@ -371,7 +384,7 @@ def test_auto_extract_with_generated_class_names() -> None:
     assert len(page.css(best.container_selector)) == len(ITEMS)
     _selectors_are_valid(page, best.container_selector, best.fields)
     records = auto_extract(page)
-    assert [(r["title"], r["price"]) for r in records] == ITEMS
+    assert [(r["title"], r["price"]) for r in records] == [(n, float(p.lstrip("$"))) for n, p in ITEMS]
     assert records[2]["url"] == "https://shop.example/items/2"
     assert records[2]["image"] == "https://shop.example/img/2.jpg"
 
@@ -393,7 +406,7 @@ def test_cards_split_over_grid_rows_are_one_list() -> None:
     records = auto_extract(html, "https://audio.example/")
     assert [r["title"] for r in records] == names
     assert records[1]["image"] == "https://audio.example/img/1.jpg"  # lazy-loaded data-src, not the placeholder
-    assert records[1]["price"] == "€49,00"
+    assert (records[1]["price"], records[1]["currency"]) == (49.0, "EUR")  # "€49,00": decimal comma
     assert records[1]["card_text"] == "Bravo Headphones with a 3 year warranty."
 
 
@@ -424,10 +437,10 @@ def test_learn_schema_from_one_record_generalizes_to_other_pages() -> None:
     assert schema.fields == {"title": "h3 a::attr(title)", "price": "p.price_color::text"}
     _selectors_are_valid(page_1, schema.container, schema.fields)
 
-    assert schema.extract(page_1) == [{"title": t, "price": p} for t, _, p, _, _ in PAGE_1_BOOKS]
+    assert schema.extract(page_1, clean=False) == [{"title": t, "price": p} for t, _, p, _, _ in PAGE_1_BOOKS]
     page_2 = wg.parse(catalogue(PAGE_2_BOOKS, page=2), url=BASE + "catalogue/page-2.html")
-    assert schema.extract(page_2) == [{"title": t, "price": p} for t, _, p, _, _ in PAGE_2_BOOKS]
-    assert schema.extract_one(page_2) == {"title": "In Her Wake", "price": "£12.84"}
+    assert schema.extract(page_2, clean=False) == [{"title": t, "price": p} for t, _, p, _, _ in PAGE_2_BOOKS]
+    assert schema.extract_one(page_2) == {"title": "In Her Wake", "price": 12.84, "currency": "GBP"}
 
 
 def test_learn_schema_matches_urls_images_and_attributes() -> None:
@@ -457,6 +470,7 @@ def test_learn_schema_matches_urls_images_and_attributes() -> None:
         "url": BASE + "catalogue/how-music-works_979/index.html",
         "image": BASE + "media/cache/how-music-works_979.jpg",
         "stock": "In stock",
+        "in_stock": True,
     }
 
 
@@ -505,9 +519,10 @@ def test_learn_schema_on_a_detail_page() -> None:
     assert schema.fields["title"] == "h1::text"  # not the breadcrumb item with the same text
     assert not any(":scope" in s for s in schema.fields.values())  # no positional paths needed
     _selectors_are_valid(page, None, schema.fields)
-    assert schema.extract_one(page) == example
+    assert schema.extract_one(page, clean=False) == example
+    assert schema.extract_one(page)["price"] == 51.77
     other = wg.parse(DETAIL_2, url=BASE + "catalogue/tipping/index.html")
-    assert schema.extract(other) == [
+    assert schema.extract(other, clean=False) == [
         {
             "title": "Tipping the Velvet",
             "price": "£53.74",
@@ -523,7 +538,7 @@ def test_learn_schema_on_hashed_classes_and_tables() -> None:
     page = wg.parse(HASHED, url="https://shop.example/")
     schema = learn_schema(page, {"name": "Office Chair", "price": "$149.00"})
     assert "css-" not in (schema.container or "") and not any("css-" in s for s in schema.fields.values())
-    assert [(r["name"], r["price"]) for r in schema.extract(page)] == ITEMS
+    assert [(r["name"], r["price"]) for r in schema.extract(page, clean=False)] == ITEMS
 
     table = wg.parse(TABLE, url="https://shop.example/")
     schema = learn_schema(table, {"product": "Gadget", "updated": "2024-05-03"})

@@ -718,17 +718,19 @@ class Selector:
 
         return detect_records(self._root, min_records=min_records) if self._root is not None else []
 
-    def auto_extract(self, *, min_records: int = 3) -> list[dict[str, Any]]:
+    def auto_extract(self, *, min_records: int = 3, clean: bool = True) -> list[dict[str, Any]]:
         """Records from the page's main repeating list, with fields inferred automatically.
 
         Finds the product grid / result list / table, names the fields
-        (title, url, image, price, rating...) and returns one dict per record.
+        (title, price, rating, availability, url, image...) and returns one dict per
+        record. Values are typed (``"£51.77"`` -> ``price=51.77, currency="GBP"``);
+        pass ``clean=False`` for the raw text.
         """
         from .autoextract import auto_extract
 
         if self._root is None:
             return []
-        return auto_extract(self._root, self._doc.base_url(self._top()), min_records=min_records)
+        return auto_extract(self._root, self._doc.base_url(self._top()), min_records=min_records, clean=clean)
 
     def learn(self, examples: Mapping[str, str] | list[Mapping[str, str]]) -> Any:
         """Learn an extraction schema from example values ("scraping by example").

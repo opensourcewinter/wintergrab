@@ -55,7 +55,7 @@ def test_auto_extract_catalogue(site) -> None:
     first = books[0]
     assert first["title"].startswith("Book number 1")
     assert first["url"] == site.url + "/books/catalogue/book-1/index.html"
-    assert first["price"] == "£11.50"
+    assert (first["price"], first["currency"], first["in_stock"]) == (11.5, "GBP", True)
 
 
 def test_learn_on_one_page_extract_on_another(site) -> None:
@@ -64,7 +64,7 @@ def test_learn_on_one_page_extract_on_another(site) -> None:
     rows = schema.extract(page1)
     assert [r["title"] for r in rows] == [f"Book number {i}" for i in range(1, 5)]
     page2 = wg.get(site.url + "/books/catalogue/page-2.html")
-    assert [r["price"] for r in schema.extract(page2)][:2] == ["£17.50", "£19.00"]
+    assert [r["price"] for r in schema.extract(page2)][:2] == [17.5, 19.0]
     again = type(schema).from_dict(json.loads(json.dumps(schema.to_dict())))
     assert again.extract(page2) == schema.extract(page2)
 
@@ -81,7 +81,7 @@ def test_cli_structured_json_data_tables_next(site, capsys) -> None:
 def test_cli_auto_and_learn(site, capsys, tmp_path) -> None:
     assert main(["-q", "get", site.url + "/books/", "--auto"]) == 0
     rows = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert len(rows) == 4 and rows[0]["price"] == "£11.50"
+    assert len(rows) == 4 and rows[0]["price"] == 11.5 and rows[0]["currency"] == "GBP"
 
     schema_file = tmp_path / "books.json"
     code = main(

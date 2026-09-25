@@ -28,6 +28,7 @@ from lxml import etree
 from ..adaptive.fingerprint import similar_elements
 from ..errors import SelectorSyntaxError
 from .css import css_to_xpath, looks_like_xpath
+from .normalize import clean_record
 from .selector import Selector, parse_document
 from .text import SKIP_TAGS, normalize_space, own_text, tag_name, text_content
 
@@ -59,6 +60,11 @@ _CURRENCY = r"(?:US\$|C\$|A\$|R\$|[$€£¥₹₩₽₺₪฿₫]|\b(?:USD|EUR|G
 _PRICE_RE = re.compile(rf"{_CURRENCY}\s?\d[\d,.]*|\d[\d,.]*\s?{_CURRENCY}")
 _RATING_TEXT_RE = re.compile(r"\b\d(?:[.,]\d+)?\s*(?:out of|/)\s*(?:5|10)\b|\b\d(?:[.,]\d+)?\s*stars?\b", re.I)
 _RATING_CLASS_RE = re.compile(r"rating|(?:^|[\s_-])stars?(?:$|[\s_-])", re.I)
+# Stock wording ("In stock", "Only 3 left") or a stock-ish class; not "Add to basket" buttons.
+_STOCK_TEXT_RE = re.compile(
+    r"in[\s-]*stock|out[\s-]*of[\s-]*stock|sold[\s-]*out|\b(?:un)?availab|pre-?order|back-?order|\bleft\b", re.I
+)
+_STOCK_CLASS_RE = re.compile(r"availab|stock", re.I)
 _IMAGE_ATTRS = ("data-src", "data-lazy-src", "data-original", "src", "srcset", "data-srcset")
 _URL_ATTRS = frozenset(
     {"href", "src", "srcset", "data-src", "data-lazy-src", "data-original", "data-srcset", "poster", "action"}
@@ -949,6 +955,17 @@ def _infer_fields(group: _Group) -> dict[str, str]:
                 used.add(p)
                 break
 
+    for p in text_paths:
+        if p in used:
+            continue
+        present = [e for e in group.column(p) if e is not None]
+        classed = sum(1 for e in present if _STOCK_CLASS_RE.search(e.get("class") or "")) >= need
+        worded = sum(1 for v in texts(p) if len(v) <= 60 and _STOCK_TEXT_RE.search(v)) >= need
+        if classed or worded:  # kept even when every record says the same ("In stock")
+            slots["availability"] = _Slot(p)
+            used.add(p)
+            break
+
     headers = _column_names(group.members)
     for p in text_paths:
         if p in used or not varies(p):  # constant text is boilerplate ("Add to basket")
@@ -957,6 +974,8 @@ def _infer_fields(group: _Group) -> dict[str, str]:
         slots[_unique_name(name, slots)] = _Slot(p)
         used.add(p)
 
+    tail = [name for name in ("url", "image") if name in slots]
+    slots = {**{k: v for k, v in slots.items() if k not in tail}, **{k: slots[k] for k in tail}}
     fields: dict[str, str] = {}
     for name, slot in slots.items():
         query = _pick_selector(group.members, group.column(slot.path), group.vocab)
@@ -992,8 +1011,13 @@ class RecordGroup:
     score: float
     fields: dict[str, str]
 
-    def extract(self, base_url: str | None = None) -> list[dict[str, Any]]:
-        """One dict per record (URLs absolute, missing values left out)."""
+    def extract(self, base_url: str | None = None, *, clean: bool = True) -> list[dict[str, Any]]:
+        """One dict per record (URLs absolute, missing values left out).
+
+        With ``clean`` (the default) values are typed: prices become numbers plus a
+        ``currency``, ratings numbers, availability ``in_stock``/``stock`` (see
+        :func:`~wintergrab.parser.normalize.clean_record`). ``clean=False`` keeps the raw text.
+        """
         if not self.elements:
             return []
         base = _document_base(self.elements[0], base_url)
@@ -1001,7 +1025,7 @@ class RecordGroup:
         for el in self.elements:
             record = {k: v for k, v in _record(el, self.fields, base).items() if v is not None}
             if record:
-                records.append(record)
+                records.append(clean_record(record) if clean else record)
         return records
 
     def as_schema(self) -> LearnedSchema:
@@ -1050,7 +1074,9 @@ def detect_records(root: Any, *, min_records: int = 3, max_groups: int = 5) -> l
     return results
 
 
-def auto_extract(root: Any, base_url: str | None = None, *, min_records: int = 3) -> list[dict[str, Any]]:
+def auto_extract(
+    root: Any, base_url: str | None = None, *, min_records: int = 3, clean: bool = True
+) -> list[dict[str, Any]]:
     """Records of the page's main repeating list, as dicts - no selectors needed.
 
     Returns ``[]`` when nothing on the page convincingly looks like a list of records.
@@ -1064,7 +1090,7 @@ def auto_extract(root: Any, base_url: str | None = None, *, min_records: int = 3
     groups = detect_records(doc, min_records=min_records, max_groups=1)
     if not groups or groups[0].score < _MIN_AUTO_SCORE or not groups[0].fields:
         return []
-    return groups[0].extract(base_url or url)
+    return groups[0].extract(base_url or url, clean=clean)
 
 
 # --------------------------------------------------------------------------- #
@@ -1085,20 +1111,22 @@ class LearnedSchema:
     container: str | None
     fields: dict[str, str]
 
-    def extract(self, source: Any, *, base_url: str | None = None) -> list[dict[str, Any]]:
+    def extract(self, source: Any, *, base_url: str | None = None, clean: bool = True) -> list[dict[str, Any]]:
         """One dict per record of ``source`` (lxml element, Selector, Response or HTML).
 
         Missing values are ``None``; records where every value is missing are skipped.
+        ``clean`` types the values as :meth:`RecordGroup.extract` does.
         """
         doc, url = _resolve(source)
         base = _document_base(doc, base_url or url)
         scopes = [doc] if self.container is None else _select(doc, self.container)
         records = [_record(scope, self.fields, base) for scope in scopes]
-        return [r for r in records if any(v is not None for v in r.values())]
+        records = [r for r in records if any(v is not None for v in r.values())]
+        return [clean_record(r) for r in records] if clean else records
 
-    def extract_one(self, source: Any, *, base_url: str | None = None) -> dict[str, Any] | None:
+    def extract_one(self, source: Any, *, base_url: str | None = None, clean: bool = True) -> dict[str, Any] | None:
         """The first record (``None`` if there is none)."""
-        records = self.extract(source, base_url=base_url)
+        records = self.extract(source, base_url=base_url, clean=clean)
         return records[0] if records else None
 
     def to_dict(self) -> dict[str, Any]:
