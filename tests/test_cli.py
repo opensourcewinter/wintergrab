@@ -168,3 +168,22 @@ def test_output_survives_a_narrow_locale_encoding(monkeypatch) -> None:
     print("₹ 中文 £")  # UnicodeEncodeError in cp1252
     sys.stdout.flush()
     assert raw.getvalue().decode("utf-8").strip() == "₹ 中文 £"
+
+
+def test_public_only_refuses_local_addresses(fresh_site, capsys) -> None:
+    code, _, err = run(capsys, "get", fresh_site.url + "/product/1", "--public-only")
+    assert code == 1 and "Blocked by network policy" in err and "loopback" in err
+    code, out, err = run(capsys, "crawl", fresh_site.url + "/products/page/1", "--public-only", "--no-robots")
+    assert out == "" and "0 items" in err
+    assert sum(fresh_site.site.hits.values()) == 0
+
+
+def test_crawl_normalize_urls_and_default_url_rules(fresh_site, capsys) -> None:
+    code, out, _ = run(
+        capsys, "crawl", fresh_site.url + "/tracking-links", "--normalize-urls", "--no-robots",
+        "--allow", r"/item/|/img/|/a/b/|tracking-links",
+    )  # fmt: skip
+    assert code == 0
+    urls = sorted(json.loads(line)["url"] for line in out.splitlines())
+    assert urls == [fresh_site.url + f"/item/{i}" for i in range(3)] + [fresh_site.url + "/tracking-links"]
+    assert fresh_site.site.hits["/img/photo.jpg"] == 0  # skipped by the default URL rules

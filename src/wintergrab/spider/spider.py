@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import inspect
 import logging
 import re
 import sys
@@ -18,6 +19,7 @@ from ..fetchers.blocking import looks_blocked
 from ..fetchers.browser import AsyncBrowserFetcher
 from ..fetchers.cache import HTTPCache
 from ..fetchers.http import DEFAULT_RETRY_STATUSES, AsyncFetcher
+from ..netpolicy import NetworkPolicy
 from ..proxy import ProxyRotator
 from ..request import Request
 from ..sitemaps import parse_lastmod, parse_sitemap, robots_sitemaps
@@ -111,6 +113,15 @@ class Spider:
     sitemap_follow: Sequence[str] = ()
     #: Only crawl sitemap entries modified at/after this date (incremental crawls).
     sitemap_since: str | datetime | None = None
+    #: Rewrite URLs before queueing them. ``True`` drops tracking parameters
+    #: (``utm_*``, ``gclid``...), session ids and fragments, resolves ``..`` and
+    #: sorts the query (see :class:`~wintergrab.urls.URLNormalizer`); or pass a
+    #: normalizer, a dict of its options, or any ``url -> url`` callable.
+    url_normalizer: Any = None
+    #: Which discovered links get queued: a :class:`~wintergrab.urls.URLRules`,
+    #: a dict of its options, or ``True`` for the defaults (skip images, media and
+    #: archives; guard against crawler traps). Start URLs are never filtered.
+    url_rules: Any = None
 
     # -- speed ------------------------------------------------------------ #
     #: Maximum requests in flight overall.
@@ -156,6 +167,13 @@ class Spider:
     #: Respect robots.txt rules and Crawl-delay.
     obey_robots_txt: bool = True
     robots_user_agent: str = "*"
+    #: Where requests may go. ``"public"`` refuses private, loopback and cloud-metadata
+    #: addresses (SSRF protection; also checked on every redirect hop); pass a
+    #: :class:`~wintergrab.netpolicy.NetworkPolicy` for finer control. ``None`` = anywhere.
+    network_policy: Any = None
+    #: Browser sessions: block ads, analytics and trackers too (``True``, a dict of
+    #: :class:`~wintergrab.fetchers.resources.ResourceFilter` options, or a filter).
+    resource_filter: Any = None
     #: Drop requests for URLs already seen.
     dedupe: bool = True
     #: ``"memory"`` (fastest) or ``"disk"``: an SQLite queue + Bloom filter that keeps
@@ -194,7 +212,8 @@ class Spider:
 
     def __init__(self, **overrides: Any) -> None:
         for key, value in overrides.items():
-            if key.startswith("_") or not hasattr(type(self), key) or callable(getattr(type(self), key)):
+            # Methods are not settings; callable *values* (a URL normalizer, a priority function) are fine.
+            if key.startswith("_") or not hasattr(type(self), key) or inspect.isroutine(getattr(type(self), key)):
                 raise TypeError(f"{type(self).__name__} has no setting {key!r}")
             setattr(self, key, value)
         if not self.name:
@@ -203,12 +222,19 @@ class Spider:
         self._engine: Engine | None = None
         self._pending_command: str | None = None
         self._http_cache: HTTPCache | None = None
+        self._network_policy: NetworkPolicy | bool | None = False  # False = not resolved yet
 
     def http_cache(self) -> HTTPCache | None:
         """The spider's shared :class:`HTTPCache` (``None`` unless :attr:`cache` is set)."""
         if self._http_cache is None and self.cache:
             self._http_cache = HTTPCache.coerce(self.cache, mode=self.cache_mode, ttl=self.cache_ttl)
         return self._http_cache
+
+    def get_network_policy(self) -> NetworkPolicy | None:
+        """The spider's shared :class:`~wintergrab.netpolicy.NetworkPolicy` (``None`` = no restriction)."""
+        if self._network_policy is False:
+            self._network_policy = NetworkPolicy.coerce(self.network_policy)
+        return self._network_policy  # type: ignore[return-value]
 
     # ------------------------------------------------------------------ #
     # hooks to override
@@ -277,6 +303,7 @@ class Spider:
                 retries=0,
                 max_connections=max(16, self.concurrency * 2),
                 cache=self.http_cache(),
+                network_policy=self.get_network_policy(),
             ),
             default=not self.use_browser,
         )
@@ -288,6 +315,8 @@ class Spider:
                     retries=0,
                     max_pages=max(1, min(self.concurrency, 8)),
                     cache=self.http_cache(),
+                    resource_filter=self.resource_filter,
+                    network_policy=self.get_network_policy(),
                 ),
                 default=self.use_browser,
             )

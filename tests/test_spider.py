@@ -169,6 +169,8 @@ def test_retries_and_errors(fresh_site) -> None:
 
         def failed(self, request, error):
             errors.append(f"{request.url} {type(error).__name__}")
+            if request.url.endswith("/unreachable"):
+                assert isinstance(error, wg.FetchError) and error.kind == "connect"
 
         def on_error(self, request, error):
             errors.append(f"on_error {request.url}")
@@ -179,7 +181,7 @@ def test_retries_and_errors(fresh_site) -> None:
     assert result.stats["retries"] >= 4
     assert f"on_error {fresh_site.url}/flaky/b?fail=9" in errors
     assert f"{fresh_site.url}/status/404 HTTPStatusError" in errors
-    assert "http://127.0.0.1:9/unreachable FetchError" in errors
+    assert "http://127.0.0.1:9/unreachable NetworkError" in errors  # a FetchError subclass
 
 
 def test_allowed_statuses_reach_the_callback(site) -> None:

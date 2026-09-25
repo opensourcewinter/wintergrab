@@ -14,19 +14,30 @@ import sys
 import threading
 import time
 import weakref
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from ..errors import BrowserNotAvailable, FetchError, describe
+from ..errors import (
+    BrowserFetchError,
+    BrowserNotAvailable,
+    FetchError,
+    FetchTimeout,
+    NetworkError,
+    NetworkPolicyError,
+    ProxyError,
+    describe,
+)
+from ..netpolicy import NetworkPolicy
 from ..proxy import ProxyRotator, proxy_for_playwright, proxy_label
 from ..request import Request
 from ..utils import ensure_scheme, maybe_await
 from .blocking import has_challenge_markers
 from .cache import CacheLayer, HTTPCache
 from .http import DEFAULT_RETRY_STATUSES, PROXY_FAILURE_STATUSES
+from .resources import DEFAULT_BLOCKED_RESOURCES, ResourceFilter
 from .response import Headers, Response
 
 if TYPE_CHECKING:
@@ -36,8 +47,18 @@ log = logging.getLogger("wintergrab.browser")
 
 T = TypeVar("T")
 
-DEFAULT_BLOCKED_RESOURCES = ("image", "media", "font")
-MAX_IDLE_CONTEXTS = 16  # browser contexts (one per proxy) kept open when idle
+MAX_IDLE_CONTEXTS = 16
+# Chromium net errors that mean "could not connect" (worth retrying).
+_CONNECTION_ERRORS = (
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_RESET",
+    "ERR_CONNECTION_CLOSED",
+    "ERR_CONNECTION_TIMED_OUT",
+    "ERR_ADDRESS_UNREACHABLE",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_NETWORK_CHANGED",
+    "ERR_EMPTY_RESPONSE",
+)  # browser contexts (one per proxy) kept open when idle
 
 INSTALL_HINT = (
     "Browser fetching needs Playwright and a Chromium build:\n"
@@ -199,6 +220,15 @@ class AsyncBrowserFetcher:
             you open) or Playwright cookie dicts.
         block_resources: Resource types not to download (``"image"``,
             ``"media"``, ``"font"``, ``"stylesheet"``...). Saves bandwidth.
+        resource_filter: Also block ads, analytics and trackers: ``True`` for
+            the built-in lists, a dict of :class:`~wintergrab.fetchers.resources.ResourceFilter`
+            options, or a ``ResourceFilter``. ``response.blocked_resources``
+            counts what was blocked, by reason.
+        network_policy: Refuse requests to forbidden destinations (SSRF
+            protection), e.g. ``"public"``. Every request the page makes is
+            checked; redirect hops of the page itself are checked after the
+            fact (Playwright cannot intercept them), and a page reached
+            through a forbidden hop is discarded.
         timeout: Navigation timeout in seconds.
         wait_until: ``"load"``, ``"domcontentloaded"``, ``"networkidle"`` or ``"commit"``.
         max_pages: How many tabs may be open at once.
@@ -243,6 +273,8 @@ class AsyncBrowserFetcher:
         cache: HTTPCache | str | bool | None = None,
         cache_mode: str | None = None,
         cache_ttl: float | None = None,
+        resource_filter: ResourceFilter | Mapping[str, Any] | bool | None = None,
+        network_policy: NetworkPolicy | str | bool | None = None,
     ) -> None:
         if proxy and proxies:
             raise ValueError("Pass either proxy= or proxies=, not both")
@@ -261,6 +293,8 @@ class AsyncBrowserFetcher:
         self.extra_headers = dict(extra_headers or {})
         self.cookies = cookies
         self.block_resources = frozenset(block_resources or ())
+        self.resource_filter = ResourceFilter.coerce(resource_filter, block_types=self.block_resources)
+        self.network_policy = NetworkPolicy.coerce(network_policy)
         self.timeout = timeout
         self.wait_until = wait_until
         self.max_pages = max(1, max_pages)
@@ -389,16 +423,6 @@ class AsyncBrowserFetcher:
             lang = self.locale.split("-")[0]
             languages = f"['{self.locale}', '{lang}']" if lang != self.locale else f"['{self.locale}']"
             await context.add_init_script(STEALTH_SCRIPT.replace("__LANGUAGES__", languages))
-        if self.block_resources:
-            blocked = self.block_resources
-
-            async def router(route: Any) -> None:
-                if route.request.resource_type in blocked:
-                    await route.abort()
-                else:
-                    await route.continue_()
-
-            await context.route("**/*", router)
         if self.cookies and not isinstance(self.cookies, Mapping):
             await context.add_cookies([dict(c) for c in self.cookies])
 
@@ -541,6 +565,8 @@ class AsyncBrowserFetcher:
                 if capture or screenshot:
                     log.warning("offline: %s served from cache without captures/screenshot", url)
                 return cached
+        if self.network_policy is not None:
+            await self.network_policy.check(url, proxied=self._proxied(proxy))
         await self.start()
         assert self._sem is not None
         attempts = 1 + (self.retries if retries is None else max(0, retries))
@@ -563,7 +589,7 @@ class AsyncBrowserFetcher:
                         screenshot,
                         _capture_matcher(capture),
                     )
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, NetworkPolicyError):
                 raise
             except Exception as exc:
                 last_error = exc if isinstance(exc, FetchError) else self._wrap(exc, url, chosen)
@@ -587,21 +613,83 @@ class AsyncBrowserFetcher:
         assert last_error is not None  # pragma: no cover
         raise last_error  # pragma: no cover
 
+    def _proxied(self, proxy: str | None) -> bool:
+        return bool(proxy or self.proxy or self.proxies)
+
     def _wrap(self, exc: BaseException, url: str, proxy: str | None) -> FetchError:
+        """Turn a Playwright/Chromium error into the matching :class:`FetchError` subclass."""
         text = str(exc)
-        is_timeout = "Timeout" in type(exc).__name__ or "timeout" in text.lower()
-        is_proxy = "ERR_PROXY" in text or "ERR_TUNNEL" in text
-        retryable = "ERR_NAME_NOT_RESOLVED" not in text and "invalid url" not in text.lower()
-        where = f" via {proxy_label(proxy)}" if proxy else ""
-        return FetchError(
-            url,
-            f"{describe(exc)}{where}",
-            cause=exc,
-            proxy=proxy,
-            is_proxy_error=is_proxy,
-            is_timeout=is_timeout,
-            retryable=retryable,
-        )
+        message = f"{describe(exc)}{f' via {proxy_label(proxy)}' if proxy else ''}"
+        common: dict[str, Any] = {"cause": exc, "proxy": proxy}
+        if "Timeout" in type(exc).__name__ or "timeout" in text.lower():
+            return FetchTimeout(url, message, **common)
+        if "ERR_PROXY" in text or "ERR_TUNNEL" in text:
+            return ProxyError(url, message, **common)
+        if "ERR_NAME_NOT_RESOLVED" in text:
+            return NetworkError(url, message, kind="dns", retryable=False, **common)
+        if "ERR_CERT" in text:
+            return NetworkError(url, message, kind="tls", retryable=False, **common)
+        if "ERR_SSL" in text:
+            return NetworkError(url, message, kind="tls", **common)
+        if "ERR_TOO_MANY_REDIRECTS" in text:
+            return NetworkError(url, message, kind="redirects", retryable=False, **common)
+        if "invalid url" in text.lower() or "ERR_INVALID_URL" in text:
+            return NetworkError(url, message, kind="invalid_url", retryable=False, **common)
+        if any(code in text for code in _CONNECTION_ERRORS):
+            return NetworkError(url, message, kind="connect", **common)
+        return BrowserFetchError(url, message, **common)
+
+    def _router(self, page: Any, blocked: Counter[str], proxied: bool) -> Callable[[Any], Awaitable[None]]:
+        """A route handler applying the resource filter and the network policy to every request of ``page``."""
+        resource_filter, policy = self.resource_filter, self.network_policy
+
+        async def handle(route: Any) -> None:
+            request = route.request
+            url = request.url
+            try:
+                main = request.is_navigation_request() and request.frame == page.main_frame
+            except Exception:  # pragma: no cover - frame detached
+                main = False
+            reason: str | None = None
+            if policy is not None and url.startswith(("http:", "https:")):
+                try:
+                    await policy.check(url, proxied=proxied)
+                except NetworkPolicyError:
+                    reason = "policy"
+                except FetchError:
+                    pass  # e.g. a name that does not resolve: let the browser report it
+            if reason is None and resource_filter is not None:
+                reason = resource_filter.reason(url, request.resource_type, page.url, main_document=main)
+                if reason is not None:
+                    resource_filter.stats[reason] += 1
+            try:
+                if reason is None:
+                    await route.continue_()
+                else:
+                    blocked[reason] += 1
+                    await route.abort("blockedbyclient")
+            except Exception:  # pragma: no cover - the page is closing
+                pass
+
+        return handle
+
+    async def _check_navigation(self, hops: list[str], main: Any, proxied: bool) -> str | None:
+        """Check the page's redirect hops (Playwright's router only sees the first) and the address
+        the page came from. Raises :class:`NetworkPolicyError`; returns the server IP if known."""
+        policy = self.network_policy
+        for hop in dict.fromkeys(hops):
+            if hop.startswith(("http:", "https:")):
+                await policy.check(hop, proxied=proxied)  # type: ignore[union-attr]
+        address = None
+        if main is not None:
+            try:
+                server = await main.server_addr()
+            except Exception:  # pragma: no cover - not available for every response
+                server = None
+            address = (server or {}).get("ipAddress") or None
+        if policy is not None and hops:
+            policy.check_connected(hops[-1], address, proxied=proxied)
+        return address
 
     async def _fetch_once(
         self,
@@ -625,7 +713,11 @@ class AsyncBrowserFetcher:
             self._release_context(context_key)
             raise
         started = time.monotonic()
+        blocked: Counter[str] = Counter()
+        proxied = self._proxied(proxy)
         try:
+            if self.resource_filter or self.network_policy is not None:
+                await page.route("**/*", self._router(page, blocked, proxied))
             if headers:
                 await page.set_extra_http_headers(dict(headers))
             if isinstance(self.cookies, Mapping) and self.cookies:
@@ -686,6 +778,9 @@ class AsyncBrowserFetcher:
             if grabbing:
                 await asyncio.wait(grabbing, timeout=10)
             main = last_nav[-1] if last_nav else nav
+            address = None
+            if self.network_policy is not None:
+                address = await self._check_navigation([r.url for r in last_nav] + [page.url], main, proxied)
             status = main.status if main is not None else 200
             raw_headers: dict[str, str] = await main.all_headers() if main is not None else {}
             ctype = raw_headers.get("content-type", "")
@@ -719,6 +814,8 @@ class AsyncBrowserFetcher:
             )
             response.captured = sorted(captured, key=lambda c: c.order)
             response.cookie_jar = [dict(c) for c in jar]
+            response.blocked_resources = dict(blocked)
+            response.ip = address
             return response
         finally:
             try:

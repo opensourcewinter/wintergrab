@@ -8,6 +8,7 @@ from .blocking import has_challenge_markers, looks_blocked
 from .browser import AsyncBrowserFetcher, BrowserFetcher, CapturedResponse
 from .cache import CacheMiss, HTTPCache
 from .http import DEFAULT_RETRY_STATUSES, AsyncFetcher, Fetcher
+from .resources import ResourceFilter
 from .response import Headers, Response
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "Fetcher",
     "HTTPCache",
     "Headers",
+    "ResourceFilter",
     "Response",
     "aget",
     "apost",
@@ -49,6 +51,7 @@ _CLIENT_OPTIONS = {
     "cache",
     "cache_mode",
     "cache_ttl",
+    "network_policy",
 }
 _BROWSER_CLIENT_OPTIONS = {
     "headless",
@@ -77,6 +80,8 @@ _BROWSER_CLIENT_OPTIONS = {
     "cache",
     "cache_mode",
     "cache_ttl",
+    "resource_filter",
+    "network_policy",
 }
 
 

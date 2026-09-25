@@ -14,11 +14,20 @@ from collections.abc import AsyncIterable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..errors import BrowserNotAvailable, CheckpointError, FetchError, HTTPStatusError, describe
+from ..errors import (
+    BrowserNotAvailable,
+    CheckpointError,
+    FetchError,
+    FetchTimeout,
+    HTTPStatusError,
+    NetworkPolicyError,
+    describe,
+)
 from ..fetchers.cache import HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
+from ..urls import URLNormalizer, URLRules
 from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
 from .checkpoint import Checkpoint
 from .exporters import Exporter, open_exporter, to_dict
@@ -79,6 +88,10 @@ class Engine:
             max_concurrency=spider.concurrency_per_domain,
         )
         self.proxies = ProxyRotator.coerce(spider.proxies)
+        self.url_normalizer = URLNormalizer.coerce(spider.url_normalizer)
+        self.url_rules = URLRules.coerce(spider.url_rules)
+        self.network_policy = spider.get_network_policy()
+        self._policy_warned: set[str] = set()
         self.sessions = SessionManager()
         self.checkpoint = Checkpoint(spider.crawl_dir) if spider.crawl_dir else None
         self.exporter: Exporter | None = None
@@ -206,6 +219,7 @@ class Engine:
                     retries=1,
                     verify=spider.verify,
                     cache=spider.http_cache(),
+                    network_policy=self.network_policy,
                 )
                 self.robots = RobotsPolicy(self._fetch_robots, spider.robots_user_agent)
             await maybe_await(spider.on_start())
@@ -428,6 +442,8 @@ class Engine:
         request = Request(ensure_scheme(entry)) if isinstance(entry, str) else entry
         if not isinstance(request, Request):
             raise TypeError(f"start_requests() must yield Request objects or URLs, got {entry!r}")
+        if self.url_normalizer is not None:
+            request.url = self.url_normalizer(request.url)
         request.meta.setdefault("depth", 0)
         self._check_serializable(request)
         self.scheduler.push(request)
@@ -588,6 +604,16 @@ class Engine:
         spider = self.spider
         domain = slot.domain
         try:
+            if self.network_policy is not None:
+                try:
+                    await self.network_policy.check(
+                        request.url, proxied=request.proxy is not None or self.proxies is not None
+                    )
+                except NetworkPolicyError as exc:
+                    await self._refused(request, exc)
+                    return
+                except FetchError:
+                    pass  # e.g. DNS trouble: the fetch reports (and retries) it
             if self.robots is not None and not await self._robots_allow(request, domain):
                 return
             session_name = request.session
@@ -625,9 +651,12 @@ class Engine:
                 self._requeue(request)
                 self.fail(exc)
                 return
+            except NetworkPolicyError as exc:  # a redirect hop, or DNS rebinding
+                await self._refused(request, exc)
+                return
             except (FetchError, asyncio.TimeoutError) as exc:
                 if isinstance(exc, asyncio.TimeoutError):
-                    exc = FetchError(request.url, "Hard timeout", is_timeout=True)
+                    exc = FetchTimeout(request.url, "Hard timeout")
                 if rotated and exc.retryable and self.proxies is not None:
                     self.proxies.report_failure(proxy)
                 if exc.is_timeout:
@@ -790,6 +819,15 @@ class Engine:
 
         self._delayed[key] = (request, self._loop.call_later(delay, release), original)
 
+    async def _refused(self, request: Request, error: NetworkPolicyError) -> None:
+        """The network policy refused a request: count it, say so once per host, and give up on it."""
+        self.stats.inc("policy_blocked")
+        host = request.host
+        if host not in self._policy_warned:
+            self._policy_warned.add(host)
+            log.warning("network policy refused %s: %s", host, error.reason)
+        await self._give_up(request, error, quiet=True)
+
     async def _give_up(self, request: Request, error: BaseException, quiet: bool = False) -> None:
         self.stats.inc("failed")
         spider = self.spider
@@ -860,9 +898,17 @@ class Engine:
         if spider.max_depth is not None and depth > spider.max_depth:
             self.stats.inc("depth_filtered")
             return
+        if self.url_normalizer is not None:
+            request.url = self.url_normalizer(request.url)
         if spider.allowed_domains and not domain_matches(request.host, spider.allowed_domains):
             self.stats.inc("offsite_filtered")
             return
+        if self.url_rules is not None:
+            reason = self.url_rules.check(request.url)
+            if reason is not None:
+                self.stats.inc("rules_filtered")
+                self.stats.inc(f"rules_filtered/{reason}")
+                return
         self._check_serializable(request)
         if self.scheduler.push(request):
             self.stats.inc("enqueued")

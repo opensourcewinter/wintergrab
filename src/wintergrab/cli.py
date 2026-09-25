@@ -179,6 +179,8 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             retries=args.retries,
             cookies=cookies or None,
             extra_headers=headers or None,
+            resource_filter=True if args.block_trackers else None,
+            network_policy="public" if args.public_only else None,
             **cache,
         )
         options: dict[str, Any] = {"wait_for": args.wait_for, "wait": args.wait, "scroll": args.scroll}
@@ -197,6 +199,7 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             verify=not args.insecure,
             headers=headers,
             cookies=cookies,
+            network_policy="public" if args.public_only else None,
             **cache,
         )
         options = {}
@@ -349,6 +352,8 @@ class QuickSpider(Spider):
     schema: dict[str, Any] | None = None
     #: Follow every same-domain link when no --follow/--paginate is given.
     wander: bool = True
+    #: Skip links to images, media, archives and crawler traps (``-s url_rules=null`` turns it off).
+    url_rules = True
 
     def parse(self, response: Response) -> Any:
         if self.schema:
@@ -475,6 +480,12 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         overrides["obey_robots_txt"] = False
     if args.browser:
         overrides["use_browser"] = True
+    if args.public_only:
+        overrides["network_policy"] = "public"
+    if args.normalize_urls:
+        overrides["url_normalizer"] = True
+    if args.block_trackers:
+        overrides["resource_filter"] = True
     cache = _cache_options(args)
     if cache:
         overrides["cache"] = cache["cache"]
@@ -601,6 +612,14 @@ def _add_network_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--proxy", action="append", metavar="URL", help="proxy to use (repeat to rotate several)")
     p.add_argument("--proxy-file", metavar="FILE", help="file with one proxy per line")
     p.add_argument("--browser", "-b", action="store_true", help="use a headless browser (renders JavaScript)")
+    p.add_argument(
+        "--public-only",
+        action="store_true",
+        help="refuse private, loopback and cloud-metadata addresses (SSRF protection for untrusted sites)",
+    )
+    p.add_argument(
+        "--block-trackers", action="store_true", help="(browser) also block ads, analytics and tracker requests"
+    )
 
 
 def _add_cache_options(p: argparse.ArgumentParser) -> None:
@@ -724,6 +743,11 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--schema", metavar="FILE", help="(URL mode) extract with a schema saved by get --save-schema")
     c.add_argument("--sitemap", action="append", metavar="URL", help="take pages from a sitemap or robots.txt")
     c.add_argument("--unique-key", metavar="FIELD", help="drop duplicate items (and upsert into .sqlite output)")
+    c.add_argument(
+        "--normalize-urls",
+        action="store_true",
+        help="drop tracking parameters, session ids and fragments from URLs before queueing them",
+    )
     c.add_argument(
         "--progress",
         action=argparse.BooleanOptionalAction,

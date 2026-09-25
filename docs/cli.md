@@ -67,6 +67,8 @@ Options:
 | `--proxy URL` (repeatable), `--proxy-file FILE` | Proxies (several = rotation). |
 | `-b/--browser` | Use a headless browser. |
 | `--wait-for SEL`, `--wait SEC`, `--scroll`, `--headful`, `--screenshot FILE` | Browser options. |
+| `--block-trackers` | (browser) Also block ads, analytics and tracker requests. |
+| `--public-only` | Refuse private, loopback and cloud-metadata addresses ([SSRF protection](fetching.md#network-policy-ssrf-protection)). |
 
 The exit code is 1 if any URL failed or returned a 4xx/5xx status.
 
@@ -101,12 +103,17 @@ Options for any crawl:
 | `--no-robots` | `obey_robots_txt = False` |
 | `--proxy URL`, `--proxy-file FILE` | `proxies` |
 | `-b/--browser` | `use_browser = True` |
+| `--public-only` | `network_policy = "public"` |
+| `--normalize-urls` | `url_normalizer = True` |
+| `--block-trackers` | `resource_filter = True` |
 | `-s/--set NAME=VALUE` | any attribute; values are parsed as JSON when possible (`-s retries=5`, `-s 'allowed_statuses=[404]'`) |
 
 ### Quick crawls from a URL
 
 Without a spider file, `crawl URL` follows links on the same domain and
-emits one record per page (`url`, `status`, `title`) unless told otherwise:
+emits one record per page (`url`, `status`, `title`) unless told otherwise.
+Links to images, media, archives and crawler traps are skipped
+(`-s url_rules=null` follows them anyway):
 
 ```bash
 # Follow pagination and product links, extract fields from product pages

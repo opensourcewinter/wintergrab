@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Foundation: errors, URLs, network safety
+
+- **Error taxonomy.** Every error has a `category` and a `context` dict and
+  pickles cleanly. Fetch failures are now specific `FetchError` subclasses:
+  `NetworkError` (with `kind`: `dns`, `connect`, `tls`, `redirects`,
+  `invalid_url`, `protocol`), `ProxyError`, `FetchTimeout`, `PolicyError`
+  (`NetworkPolicyError`, `RobotsPolicyError`), `BrowserFetchError`. New
+  `ConfigurationError`, `SchemaError`, `ParserError`, `ExtractionError`,
+  `ValidationError`, `StorageError`/`ExportError`, `BudgetExceeded`; `HTTPError`
+  is an alias of `HTTPStatusError`. Existing `except FetchError` clauses keep
+  working. Invalid URLs and redirect loops are no longer retried.
+- **Network policy (SSRF protection).** `network_policy="public"` on fetchers,
+  browsers and spiders (`--public-only` on the CLI) refuses private, loopback,
+  link-local/cloud-metadata, multicast and reserved addresses before
+  connecting. Names are resolved and every address checked, every redirect hop
+  is checked, and the address actually connected to is checked afterwards
+  (DNS rebinding). `Response.ip` records the server address.
+- **URL normalization and rules.** `Spider.url_normalizer` drops tracking
+  parameters, session ids and fragments, resolves dot segments and normalizes
+  escapes and query order, without ever changing which page a URL means.
+  `Spider.url_rules` filters discovered links by pattern, domain, extension
+  and crawler-trap guards. `url_template()` turns URLs into route patterns.
+  `wintergrab crawl URL` now skips media/archive links and crawler traps.
+- **Browser resource control.** `resource_filter=` blocks ads, analytics and
+  trackers (built-in lists, hosts/Adblock list files, third-party blocking);
+  `Response.blocked_resources` reports what was blocked.
+- Spider settings can now hold callable values (a URL normalizer, a
+  priority function); only methods are rejected as overrides.
+
 ## 0.2.0
 
 First release on PyPI.

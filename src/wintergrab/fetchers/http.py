@@ -9,12 +9,13 @@ import time
 import warnings
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from curl_cffi import requests as curl_requests
 from curl_cffi.requests import exceptions as curl_exc
 
-from ..errors import FetchError, describe
+from ..errors import FetchError, FetchTimeout, NetworkError, PolicyError, ProxyError, describe
+from ..netpolicy import NetworkPolicy
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
 from ..utils import ensure_scheme, resolve_verify
@@ -34,6 +35,8 @@ PROXY_FAILURE_STATUSES: frozenset[int] = frozenset({403, 407, 429, 502, 504})
 REFERERS = {"google": "https://www.google.com/", "bing": "https://www.bing.com/"}
 
 _HTTP_VERSIONS = {1: "HTTP/1.0", 2: "HTTP/1.1", 3: "HTTP/2", 30: "HTTP/3"}
+
+REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 # Per-request options that only make sense for browser fetchers.
 BROWSER_ONLY_OPTIONS = frozenset({"wait_for", "wait", "wait_until", "scroll", "page_action", "screenshot"})
@@ -65,6 +68,7 @@ class _HTTPBase:
         cache: HTTPCache | str | bool | None = None,
         cache_mode: str | None = None,
         cache_ttl: float | None = None,
+        network_policy: NetworkPolicy | str | bool | None = None,
     ) -> None:
         """
         Args:
@@ -96,6 +100,12 @@ class _HTTPBase:
             cache_mode: ``"revalidate"`` (default), ``"prefer"``, ``"offline"``
                 or ``"refresh"`` - see :class:`~wintergrab.HTTPCache`.
             cache_ttl: Seconds a cached response counts as fresh.
+            network_policy: Refuse requests to forbidden destinations (SSRF
+                protection): ``"public"`` allows public internet addresses only,
+                or pass a :class:`~wintergrab.netpolicy.NetworkPolicy`. Every
+                redirect hop is checked, and so is the address actually
+                connected to. Refusals raise
+                :class:`~wintergrab.errors.NetworkPolicyError`.
         """
         if proxy and proxies:
             raise ValueError("Pass either proxy= or proxies=, not both")
@@ -118,6 +128,7 @@ class _HTTPBase:
         self.adaptive_storage = adaptive_storage
         self.cache = HTTPCache.coerce(cache, mode=cache_mode, ttl=cache_ttl)
         self._cache_layer = CacheLayer(self.cache) if self.cache is not None else None
+        self.network_policy = NetworkPolicy.coerce(network_policy)
 
     # -- helpers ---------------------------------------------------------- #
     def _session_kwargs(self) -> dict[str, Any]:
@@ -181,13 +192,13 @@ class _HTTPBase:
         kwargs.update({k: v for k, v in extra.items() if k not in BROWSER_ONLY_OPTIONS})
         return kwargs
 
-    def _to_response(self, raw: Any, request: Request, elapsed: float) -> Response:
+    def _to_response(self, raw: Any, request: Request, elapsed: float, history: list[str] | None = None) -> Response:
         headers = Headers((k, v or "") for k, v in raw.headers.multi_items())
         try:
             cookies = {name: value for name, value in raw.cookies.items()}
         except Exception:  # pragma: no cover - defensive, cookie jars vary
             cookies = {}
-        return Response(
+        response = Response(
             raw.url or request.url,
             status=raw.status_code,
             headers=headers,
@@ -196,29 +207,73 @@ class _HTTPBase:
             reason=raw.reason or "",
             cookies=cookies,
             elapsed=elapsed,
-            history=[h.url for h in (raw.history or [])],
+            history=history if history is not None else [h.url for h in (raw.history or [])],
             http_version=_HTTP_VERSIONS.get(int(raw.http_version or 0)),
             source="http",
             adaptive_storage=self.adaptive_storage,
         )
+        response.ip = getattr(raw, "primary_ip", None) or None
+        return response
 
     def _wrap_error(self, exc: BaseException, url: str, proxy: str | None) -> FetchError:
-        is_timeout = isinstance(exc, (curl_exc.Timeout, asyncio.TimeoutError, TimeoutError))
-        is_proxy = isinstance(exc, curl_exc.ProxyError) or (
-            proxy is not None and "proxy" in str(exc).lower() and not is_timeout
-        )
-        # Bad URLs, bad arguments and invalid certificates will not fix themselves.
-        retryable = not isinstance(exc, (curl_exc.CertificateVerifyError, TypeError, ValueError))
+        """Turn a curl/asyncio exception into the matching :class:`FetchError` subclass."""
         where = f" via {proxy_label(proxy)}" if proxy else ""
-        return FetchError(
-            url,
-            f"{describe(exc)}{where}",
-            cause=exc,
-            proxy=proxy,
-            is_proxy_error=is_proxy,
-            is_timeout=is_timeout,
-            retryable=retryable,
-        )
+        message = f"{describe(exc)}{where}"
+        common: dict[str, Any] = {"cause": exc, "proxy": proxy}
+        if isinstance(exc, (curl_exc.Timeout, asyncio.TimeoutError, TimeoutError)):
+            return FetchTimeout(url, message, **common)
+        if isinstance(exc, curl_exc.ProxyError) or (proxy is not None and "proxy" in str(exc).lower()):
+            return ProxyError(url, message, **common)
+        if isinstance(exc, curl_exc.CertificateVerifyError):
+            return NetworkError(url, message, kind="tls", retryable=False, **common)  # will not fix itself
+        if isinstance(exc, curl_exc.SSLError):
+            return NetworkError(url, message, kind="tls", **common)
+        if isinstance(exc, curl_exc.DNSError):
+            return NetworkError(url, message, kind="dns", **common)
+        if isinstance(exc, curl_exc.TooManyRedirects):
+            return NetworkError(url, message, kind="redirects", retryable=False, **common)
+        if isinstance(exc, (curl_exc.InvalidURL, curl_exc.InvalidSchema, curl_exc.MissingSchema, curl_exc.URLRequired)):
+            return NetworkError(url, message, kind="invalid_url", retryable=False, **common)
+        if isinstance(exc, (curl_exc.IncompleteRead, curl_exc.ChunkedEncodingError, curl_exc.ContentDecodingError)):
+            return NetworkError(url, message, kind="protocol", **common)
+        if isinstance(exc, (TypeError, ValueError)):
+            # Bad arguments will not fix themselves.
+            return FetchError(url, message, retryable=False, kind="invalid_request", **common)
+        return NetworkError(url, message, **common)
+
+    def _redirect(self, kwargs: dict[str, Any], status: int, target: str) -> dict[str, Any]:
+        """Request arguments for following a redirect by hand (what curl does itself when allowed to)."""
+        new = dict(kwargs, url=target)
+        method = str(kwargs["method"]).upper()
+        if (status == 303 and method != "HEAD") or (status in (301, 302) and method == "POST"):
+            new["method"] = "GET"
+            new.pop("data", None)
+            new.pop("json", None)
+            if new.get("headers"):
+                new["headers"] = {
+                    k: v for k, v in new["headers"].items() if k.lower() not in ("content-type", "content-length")
+                }
+        if urlsplit(target).hostname != urlsplit(str(kwargs["url"])).hostname:
+            # Credentials meant for one host must not leak to another.
+            new["cookies"] = None
+            if new.get("headers"):
+                new["headers"] = {
+                    k: v for k, v in new["headers"].items() if k.lower() not in ("authorization", "cookie")
+                }
+        return new
+
+    def _next_hop(self, raw: Any, kwargs: dict[str, Any], history: list[str]) -> dict[str, Any] | None:
+        """Arguments for the next redirect hop, or ``None`` when ``raw`` is the final response."""
+        location = raw.headers.get("location")
+        if raw.status_code not in REDIRECT_STATUSES or not location:
+            return None
+        current = raw.url or str(kwargs["url"])
+        if len(history) >= self.max_redirects:
+            raise NetworkError(
+                str(kwargs["url"]), f"Exceeded {self.max_redirects} redirects", kind="redirects", retryable=False
+            )
+        history.append(current)
+        return self._redirect(kwargs, raw.status_code, urljoin(current, location.strip()))
 
     def _cache_before(
         self, req: Request, headers: Mapping[str, str] | None
@@ -331,9 +386,11 @@ class Fetcher(_HTTPBase):
             )
             start = time.monotonic()
             try:
-                raw = self._session.request(**kwargs)
+                raw, history = self._send(kwargs, chosen)
+            except PolicyError:
+                raise  # a refusal: never retried, and not the proxy's fault
             except Exception as exc:  # curl_cffi raises many exception types
-                err = self._wrap_error(exc, req.url, chosen)
+                err = exc if isinstance(exc, FetchError) else self._wrap_error(exc, req.url, chosen)
                 if err.retryable:  # bad URLs/arguments are not the proxy's fault
                     self._report(chosen, rotated, ok=False)
                 if attempt + 1 < attempts and err.retryable:
@@ -342,7 +399,7 @@ class Fetcher(_HTTPBase):
                     time.sleep(delay)
                     continue
                 raise err from exc
-            response = self._to_response(raw, req, time.monotonic() - start)
+            response = self._to_response(raw, req, time.monotonic() - start, history)
             self._report(chosen, rotated, ok=response.status not in PROXY_FAILURE_STATUSES)
             if response.status in self.retry_statuses and attempt + 1 < attempts:
                 delay = self._retry_delay(attempt, response)
@@ -351,6 +408,23 @@ class Fetcher(_HTTPBase):
                 continue
             return self._finish(req, response, stale)
         raise AssertionError("unreachable")  # pragma: no cover
+
+    def _send(self, kwargs: dict[str, Any], proxy: str | None) -> tuple[Any, list[str] | None]:
+        """One request (following redirects). With a network policy every hop is checked."""
+        policy = self.network_policy
+        if policy is None:
+            return self._session.request(**kwargs), None
+        follow = kwargs["allow_redirects"]
+        kwargs = dict(kwargs, allow_redirects=False)
+        history: list[str] = []
+        while True:
+            policy.check_sync(str(kwargs["url"]), proxied=proxy is not None)
+            raw = self._session.request(**kwargs)
+            policy.check_connected(str(kwargs["url"]), getattr(raw, "primary_ip", None), proxied=proxy is not None)
+            hop = self._next_hop(raw, kwargs, history) if follow else None
+            if hop is None:
+                return raw, history
+            kwargs = hop
 
     def get(self, url: str, **kwargs: Any) -> Response:
         return self.request("GET", url, **kwargs)
@@ -499,11 +573,11 @@ class AsyncFetcher(_HTTPBase):
             )
             start = time.monotonic()
             try:
-                raw = await session.request(**kwargs)
-            except asyncio.CancelledError:
-                raise
+                raw, history = await self._send(session, kwargs, chosen)
+            except (asyncio.CancelledError, PolicyError):
+                raise  # a refusal is never retried, and not the proxy's fault
             except Exception as exc:
-                err = self._wrap_error(exc, req.url, chosen)
+                err = exc if isinstance(exc, FetchError) else self._wrap_error(exc, req.url, chosen)
                 if err.retryable:  # bad URLs/arguments are not the proxy's fault
                     self._report(chosen, rotated, ok=False)
                 if attempt + 1 < attempts and err.retryable:
@@ -512,7 +586,7 @@ class AsyncFetcher(_HTTPBase):
                     await asyncio.sleep(delay)
                     continue
                 raise err from exc
-            response = self._to_response(raw, req, time.monotonic() - start)
+            response = self._to_response(raw, req, time.monotonic() - start, history)
             self._report(chosen, rotated, ok=response.status not in PROXY_FAILURE_STATUSES)
             if response.status in self.retry_statuses and attempt + 1 < attempts:
                 delay = self._retry_delay(attempt, response)
@@ -521,6 +595,25 @@ class AsyncFetcher(_HTTPBase):
                 continue
             return self._finish(req, response, stale)
         raise AssertionError("unreachable")  # pragma: no cover
+
+    async def _send(
+        self, session: curl_requests.AsyncSession, kwargs: dict[str, Any], proxy: str | None
+    ) -> tuple[Any, list[str] | None]:
+        """One request (following redirects). With a network policy every hop is checked."""
+        policy = self.network_policy
+        if policy is None:
+            return await session.request(**kwargs), None
+        follow = kwargs["allow_redirects"]
+        kwargs = dict(kwargs, allow_redirects=False)
+        history: list[str] = []
+        while True:
+            await policy.check(str(kwargs["url"]), proxied=proxy is not None)
+            raw = await session.request(**kwargs)
+            policy.check_connected(str(kwargs["url"]), getattr(raw, "primary_ip", None), proxied=proxy is not None)
+            hop = self._next_hop(raw, kwargs, history) if follow else None
+            if hop is None:
+                return raw, history
+            kwargs = hop
 
     async def get(self, url: str, **kwargs: Any) -> Response:
         return await self.request("GET", url, **kwargs)

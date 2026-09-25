@@ -30,8 +30,23 @@ These inputs are trusted, so only use ones you control:
 
 ## Crawling from sensitive networks
 
-A redirect that leaves `allowed_domains` is dropped *after* the request was
-made. That request can reach anything your machine can reach. When you crawl
-sites you don't trust from a machine that can reach internal services (a
-cloud instance's metadata endpoint, an intranet), restrict its outbound
+By default a crawl may connect anywhere your machine can reach. When you
+crawl sites you don't trust from a machine that can reach internal services
+(a cloud instance's metadata endpoint, an intranet), set a network policy:
+
+```python
+class MySpider(Spider):
+    network_policy = "public"   # or wg.get(url, network_policy="public")
+```
+
+Requests to private, loopback, link-local (cloud metadata), multicast and
+reserved addresses are then refused before connecting. Host names are
+resolved and every resulting address is checked; every redirect hop is
+checked; and the address curl actually connected to is checked afterwards,
+which defeats DNS rebinding. Details and limits (proxies, browsers) are in
+[docs/fetching.md](docs/fetching.md#network-policy-ssrf-protection).
+
+A redirect that leaves `allowed_domains` is also dropped, but only *after*
+the request was made. The network policy is the protection that stops the
+request itself. For defence in depth, also restrict the machine's outbound
 network access.

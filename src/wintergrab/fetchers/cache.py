@@ -28,25 +28,20 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..errors import FetchError
+from ..errors import CacheMiss
 from .response import Headers, Response
 
 if TYPE_CHECKING:
     from ..adaptive.storage import AdaptiveStorage
     from ..request import Request
 
+__all__ = ["CACHE_MODES", "CacheLayer", "CacheMiss", "CachedResponse", "HTTPCache"]
+
 CACHE_MODES = ("revalidate", "prefer", "offline", "refresh")
 DEFAULT_CACHE_DIR = ".wintergrab-cache"
 CACHEABLE_STATUSES = frozenset({200, 203, 204, 300, 301, 308, 404, 405, 410, 414, 501})
 # Headers a 304 may update on the stored response (RFC 9111 section 4.3.4).
 _REFRESH_HEADERS = ("cache-control", "expires", "etag", "last-modified", "date", "vary", "content-location")
-
-
-class CacheMiss(FetchError):
-    """Raised in ``"offline"`` mode when a request is not in the cache."""
-
-    def __init__(self, url: str) -> None:
-        super().__init__(url, "Not in the HTTP cache (offline mode)", retryable=False)
 
 
 @dataclass

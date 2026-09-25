@@ -88,6 +88,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length).decode("utf-8", "replace")
+        parts = urlsplit(self.path)
+        if parts.path == "/redirect":
+            query = parse_qs(parts.query)
+            code = int(query.get("code", ["302"])[0])
+            return self.send(code, "", headers={"Location": query.get("to", ["/"])[0]})
         self.send(
             200,
             json.dumps(
@@ -185,7 +190,9 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(float(q("delay", "0.5")))
             return self.send(200, layout("slow", "<p>finally</p>"))
         if path == "/redirect":
-            return self.send(302, "", headers={"Location": q("to", "/")})
+            return self.send(int(q("code", "302")), "", headers={"Location": q("to", "/")})
+        if path == "/echo":
+            return self.send(200, json.dumps({"method": self.command, "path": self.path}), "application/json")
         if path == "/headers":
             return self.send(200, json.dumps(dict(self.headers)), "application/json")
         if path == "/cookies/set":
@@ -380,6 +387,38 @@ class Handler(BaseHTTPRequestHandler):
                     links + "<a href='https://elsewhere.invalid/x'>offsite</a><a href='/private/secret'>private</a>",
                 ),
             )
+        if path == "/tracking-links":
+            # The same pages behind tracking parameters, fragments and dot segments.
+            links = "".join(
+                f"<a href='/item/{i}?utm_source=news&utm_medium=email'>a</a><a href='/item/{i}#reviews'>b</a>"
+                f"<a href='/x/../item/{i}?gclid=abc'>c</a><a href='/item/{i}'>d</a>"
+                for i in range(3)
+            )
+            links += "<a href='/img/photo.jpg'>image</a><a href='/a/b/a/b/a/b/a/b'>trap</a>"
+            return self.send(200, layout("tracking", links))
+        if path == "/thirdparty":
+            host = self.headers.get("Host", "127.0.0.1")
+            html = layout(
+                "third party",
+                f"<img src='http://{host}/img/logo.png'><p id='t'>content</p>"
+                "<script src='https://www.google-analytics.com/analytics.js'></script>"
+                f"<script src='http://{host}/local.js'></script>",
+            )
+            return self.send(200, html)
+        if path == "/local.js":
+            return self.send(200, "document.getElementById('t').textContent = 'scripted';", "application/javascript")
+        if path.startswith("/img/"):
+            return self.send(200, b"\x89PNG\r\n\x1a\n" + b"\0" * 64, "image/png")
+        if path == "/fetch-localhost":
+            port = self.server.server_address[1]
+            html = layout(
+                "fetch",
+                "<p id='out'>waiting</p><script>fetch('http://localhost:"
+                + str(port)
+                + "/api/products?page=7').then(r => r.json()).then(d => {document.getElementById('out').textContent"
+                " = 'leaked'}).catch(e => {document.getElementById('out').textContent = 'refused'});</script>",
+            )
+            return self.send(200, html)
         if path.startswith("/item/"):
             i = path.rsplit("/", 1)[1]
             delay = float(q("delay", "0"))

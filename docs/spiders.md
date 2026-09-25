@@ -216,6 +216,39 @@ include connection errors, 403/407/429/502/504 and block pages. Use
 `Request(proxy=...)` to pin one request to a proxy. See
 [anti-blocking.md](anti-blocking.md#proxies).
 
+## Which URLs get crawled
+
+Three settings decide what a crawl queues and where it may connect:
+
+```python
+class Shop(Spider):
+    allowed_domains = ["shop.example"]
+    url_normalizer = True          # one spelling per page
+    url_rules = {"deny": [r"/cart", r"\?sort="], "max_query_params": 5}
+    network_policy = "public"      # never reach private or cloud-metadata addresses
+```
+
+- `url_normalizer = True` rewrites every queued URL with the default
+  `URLNormalizer`: tracking parameters (`utm_*`, `gclid`, `fbclid`...) and
+  session ids are dropped, `..` segments resolved, escapes normalized, the
+  query sorted and the fragment removed (`#!` routes are kept). Four
+  spellings of a page become one request. Site-dependent options
+  (`strip_www`, `remove_trailing_slash`, `remove_index`, `lowercase_path`,
+  `force_https`) are off by default; pass a dict to turn them on, or any
+  `url -> url` function.
+- `url_rules` filters discovered links (start URLs are never filtered):
+  `allow`/`deny` regexes, `allowed_domains`/`denied_domains`, file extensions
+  (images, media, archives and office files by default) and crawler-trap
+  guards: overlong URLs, too many query parameters, too-deep paths and
+  repeating path segments (`/a/b/a/b/a/b/...`). Each rejection is counted in
+  `stats["rules_filtered/<reason>"]`.
+- `network_policy` (see [fetching.md](fetching.md#network-policy-ssrf-protection))
+  applies to every request, redirect hop and robots.txt fetch. Refused
+  requests are counted in `stats["policy_blocked"]` and logged once per host.
+
+`wintergrab.url_template(url)` turns a URL into its route pattern
+(`/product/123` -> `/product/{int}`), handy for grouping pages by template.
+
 ## robots.txt
 
 `obey_robots_txt = True` (the default) fetches each site's robots.txt once
@@ -262,6 +295,10 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `obey_robots_txt` | `True` | Respect robots.txt. |
 | `robots_user_agent` | `"*"` | User agent used to match robots.txt rules. |
 | `dedupe` | `True` | Filter already-seen URLs. |
+| `url_normalizer` | `None` | Rewrite queued URLs to one canonical spelling (`True`, a dict of options, or a function). |
+| `url_rules` | `None` | Filter discovered links: patterns, domains, extensions, crawler traps (`True`, a dict, or `URLRules`). |
+| `network_policy` | `None` | Where requests may go: `"public"`, `"private"`, a dict, or a `NetworkPolicy`. `None` = anywhere. |
+| `resource_filter` | `None` | Browser sessions: also block ads, analytics and trackers. |
 | `output` | `None` | Stream items to `.jsonl` / `.json` / `.csv`. |
 | `crawl_dir` | `None` | Enables pause/resume. |
 | `checkpoint_interval` | `60` | Seconds between automatic checkpoints. |

@@ -151,6 +151,10 @@ class Response:
         self.captured: list[Any] = []
         #: Full cookie records (domain, path, expiry...) for browser responses.
         self.cookie_jar: list[dict[str, Any]] = []
+        #: IP address of the server that answered (``None`` if unknown, e.g. from the cache).
+        self.ip: str | None = None
+        #: Browser sub-requests blocked while rendering, by reason (``"type:image"``, ``"list"``, ``"policy"``...).
+        self.blocked_resources: dict[str, int] = {}
 
     # ------------------------------------------------------------------ #
     # body

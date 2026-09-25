@@ -101,6 +101,8 @@ runs its event loop in a background thread.
 | `headless` | `True` | Hide the window. `False` is handy for debugging. |
 | `stealth` | `True` | Hide common automation tells: `navigator.webdriver`, the `HeadlessChrome` user agent, empty plugin list, WebGL vendor, … |
 | `block_resources` | image, media, font | Resource types not to download. Faster and lighter. Pass `()` to load everything. |
+| `resource_filter` | – | Also block ads, analytics and trackers: `True` for the built-in lists, or a dict of `ResourceFilter` options (`lists`, `block_domains`, `allow_domains`, `block_third_party`, `block_patterns`...). `ResourceFilter.load_list(path)` reads hosts files and `\|\|domain^` blocklists. `response.blocked_resources` counts what was blocked. |
+| `network_policy` | – | Refuse requests to forbidden destinations, e.g. `"public"` (see [below](#network-policy-ssrf-protection)). |
 | `wait_until` | `"load"` | `"domcontentloaded"`, `"load"`, `"networkidle"` or `"commit"`. |
 | `timeout` | `30` | Navigation timeout in seconds. |
 | `max_pages` | `4` | Tabs open at once. |
@@ -143,15 +145,62 @@ page = browser.get(
 | `urljoin(href)`, `follow(link)`, `follow_all(css)` | URL helpers; `follow` builds spider `Request`s. |
 | `raise_for_status()`, `save(path)` | Errors on 4xx/5xx; write the body to a file. |
 | `request`, `meta`, `elapsed`, `source` | The request that made it, spider metadata, seconds taken, `"http"`/`"browser"`. |
+| `ip` | Address of the server that answered (`None` from the cache). |
+| `blocked_resources` | Browser sub-requests blocked while rendering, by reason (`"type:image"`, `"list"`, `"policy"`...). |
+
+## Network policy (SSRF protection)
+
+A crawler follows links that strangers wrote. A page can link or redirect to
+`http://169.254.169.254/latest/meta-data/` (a cloud machine's credentials),
+`http://localhost:6379` or `http://10.0.0.5/admin`. When you crawl sites you
+don't control from a machine that can reach internal services, turn on a
+network policy:
+
+```python
+page = wg.get(url, network_policy="public")              # public internet only
+Fetcher(network_policy=NetworkPolicy(allowed_networks=["10.1.2.0/24"]))
+BrowserFetcher(network_policy="public")
+```
+
+With `"public"`, requests to private (RFC 1918, carrier-grade NAT, unique
+local IPv6), loopback, link-local (cloud metadata), multicast and reserved
+addresses raise `NetworkPolicyError`, before any connection is made. Host
+names are resolved and every address they resolve to must be allowed, so
+tricks like `http://2130706433/` or a public name pointing at `127.0.0.1` do
+not get through. Every redirect hop is checked, and so is the address curl
+actually connected to (which defeats DNS rebinding).
+
+`NetworkPolicy` options: `allow_private`, `allow_loopback`,
+`allow_link_local`, `allow_reserved`, `allowed_networks`, `denied_networks`,
+`allowed_hosts`, `denied_hosts`, `allowed_ports`, `schemes`. `"private"` is a
+shortcut for "private networks and loopback too".
+
+Limits: through a proxy, the proxy resolves and connects, so only what can be
+resolved locally is checked. In a browser every request the page makes is
+checked, but redirect hops of the page itself can only be checked after the
+fact (the page is then discarded), and Chromium's own DNS lookups cannot be
+pinned. For strong isolation, also restrict the machine's outbound network.
 
 ## Errors
 
-- `FetchError`: the request failed after all retries (connection refused,
-  timeout, DNS, proxy failure…). It has `.url`, `.cause`, `.proxy`,
-  `.is_timeout`, `.is_proxy_error` and `.retryable`.
-- `HTTPStatusError`: raised by `raise_for_status()` (or with
-  `raise_for_status=True`). A 404 or 500 is **not** an exception by default.
-- `BrowserNotAvailable`: Playwright or a Chromium binary is missing. The
-  message tells you what to install.
+Every error is a `wintergrab.WintergrabError` with a `category` (a stable
+name such as `"network"`, `"timeout"`, `"policy"`, `"http"`) and a `context`
+dict (URL, domain, field...). Fetch failures are `FetchError`s with `.url`,
+`.cause`, `.proxy`, `.kind`, `.is_timeout`, `.is_proxy_error` and
+`.retryable`; the subclasses say what went wrong:
 
-All inherit from `wintergrab.WintergrabError`.
+| Error | When |
+|---|---|
+| `NetworkError` | Connection refused/reset, DNS (`kind="dns"`), TLS (`kind="tls"`), too many redirects, invalid URL. |
+| `ProxyError` | The proxy failed (a `NetworkError`). |
+| `FetchTimeout` | The request timed out. |
+| `NetworkPolicyError`, `RobotsPolicyError` | A policy refused the request (`PolicyError`s: never retried). |
+| `BrowserFetchError` | The page failed in the browser (crash, navigation error). |
+| `CacheMiss` | Offline cache mode and the page isn't cached. |
+| `HTTPStatusError` (alias `HTTPError`) | Raised by `raise_for_status()` (or with `raise_for_status=True`). A 404 or 500 is **not** an exception by default. |
+| `BrowserNotAvailable` | Playwright or a Chromium binary is missing. The message tells you what to install. |
+
+Other categories: `ConfigurationError`, `SchemaError`, `ParserError` (e.g.
+`SelectorSyntaxError`), `ExtractionError`, `ValidationError`,
+`StorageError` (`CheckpointError`, `ExportError`) and `BudgetExceeded`.
+Errors pickle cleanly, so they survive being sent between processes.
