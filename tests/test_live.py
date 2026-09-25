@@ -57,7 +57,8 @@ def test_quotes_spider(tmp_path) -> None:
     out = tmp_path / "quotes.jsonl"
     result = load("05_quotes_spider").QuotesSpider(output=str(out), max_pages=4, log_level=None).run()
     rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
-    assert result.status == "finished" and result.stats.get("failed", 0) == 0
+    assert result.status == "limit"  # stopped at max_pages, as asked
+    assert result.stats.get("failed", 0) == 0
     assert any("text" in row for row in rows)
 
 
@@ -76,7 +77,13 @@ def test_browser_rendering() -> None:
 
 def test_pypi_project_page() -> None:
     page = wg.get("https://pypi.org/project/lxml/")
-    assert page.status == 200 and not looks_blocked(page)
+    assert page.status == 200
+    title = page.css("title::text").get("")
+    if looks_blocked(page):
+        # pypi.org's CDN sends some networks a JavaScript bot check instead of
+        # the page. Then it must really be that check, not a misdetected page.
+        assert "challenge" in title.lower(), f"flagged as blocked but not a challenge page: {title!r}"
+        pytest.skip("pypi.org served its bot check to this network (detected correctly)")
     assert page.css("h1.project-header__name::text").get("").strip().startswith("lxml")
     assert page.structured_data()["opengraph"]
 
@@ -88,3 +95,13 @@ def test_pypi_feed_and_cache(tmp_path) -> None:
         second = http.get("https://pypi.org/project/cssselect/")
     assert first.cache_status == "stored"
     assert second.cache_status in ("hit", "revalidated")
+
+
+@pytest.mark.browser
+def test_browser_gets_the_whole_pypi_page() -> None:
+    # pypi.org may put a JavaScript bot check in front of the page. Either way
+    # the browser must end up with the complete real page (about 1.2 MB).
+    page = wg.render("https://pypi.org/project/lxml/")
+    assert not looks_blocked(page)
+    assert page.css("h1.project-header__name::text").get("").strip().startswith("lxml")
+    assert len(page.body) > 100_000

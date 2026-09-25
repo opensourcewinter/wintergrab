@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 import time
+import warnings
 from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -430,6 +431,12 @@ class AsyncFetcher(_HTTPBase):
             if old is not None and old_loop is not None and old_loop.is_running() and not old_loop.is_closed():
                 asyncio.run_coroutine_threadsafe(old.close(), old_loop)
             self._session = curl_requests.AsyncSession(max_clients=self.max_connections, **self._session_kwargs())
+            with warnings.catch_warnings():
+                # On Windows asyncio's default Proactor loop stays (Playwright needs it),
+                # so curl_cffi serves its sockets from a helper selector thread. That
+                # works fine; the warning it prints about it on every run is noise.
+                warnings.filterwarnings("ignore", message=r"\s*Proactor event loop", category=UserWarning)
+                getattr(self._session, "acurl", None)  # create curl_cffi's multi handle now
             self._loop = loop
             for c in self._pending_cookies.values():
                 self._session.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"], secure=c["secure"])

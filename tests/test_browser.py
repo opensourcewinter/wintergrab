@@ -38,6 +38,15 @@ def test_waits_out_challenge_pages(site, browser) -> None:
     assert page.css("#real::text").get() == "Real content"
 
 
+def test_captures_the_whole_page_after_a_challenge_reloads(site, browser) -> None:
+    # pypi.org's check reloads the page, which then streams in (1.2 MB there).
+    # The capture must wait for all of it, not stop once the title has arrived.
+    for route in ("/challenge-reload", "/challenge-rewrite"):
+        page = browser.get(site.url + route)
+        assert page.css("title::text").get() == "Real page", route
+        assert len(page.css(".item")) == 400, route
+
+
 def test_non_html_bodies_and_encoding(site, browser) -> None:
     assert browser.get(site.url + "/json").json() == {"items": [1, 2, 3], "ok": True}
     assert browser.get(site.url + "/latin1").css("#t::text").get() == "Café crème"

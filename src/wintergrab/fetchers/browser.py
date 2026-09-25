@@ -728,22 +728,27 @@ class AsyncBrowserFetcher:
             self._release_context(context_key)
 
     async def _wait_out_challenge(self, page: Any) -> None:
-        async def challenged() -> bool:
+        async def challenged(seen: bool) -> bool:
+            """True while a challenge shows; once one was ``seen``, also while its replacement arrives."""
             try:
-                snippet = await page.evaluate(
-                    "() => document.title + ' ' + (document.documentElement ? document.documentElement.outerHTML.slice(0, 20000) : '')"
+                ready, snippet = await page.evaluate(
+                    "() => [document.readyState, document.title + ' ' +"
+                    " (document.documentElement ? document.documentElement.outerHTML.slice(0, 20000) : '')]"
                 )
             except Exception:
-                return False  # navigating; check again
-            return has_challenge_markers(snippet)
+                return seen  # navigating away from the check: look again
+            # A check that passes may reload the page or write the real one into
+            # the document (document.write keeps readyState at "loading" until
+            # it is closed); either way, wait until the new page is fully parsed.
+            return (seen and ready == "loading") or has_challenge_markers(snippet)
 
-        if not await challenged():
+        if not await challenged(seen=False):
             return
         log.info("challenge page detected on %s; waiting for it to clear", page.url)
         deadline = time.monotonic() + self.challenge_timeout
         while time.monotonic() < deadline:
             await page.wait_for_timeout(500)
-            if not await challenged():
+            if not await challenged(seen=True):
                 try:
                     await page.wait_for_load_state("load", timeout=10_000)
                 except Exception:
