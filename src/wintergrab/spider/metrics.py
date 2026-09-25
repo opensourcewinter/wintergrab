@@ -54,10 +54,15 @@ def _windows_rss() -> int | None:  # pragma: no cover - Windows only
                 ("PeakPagefileUsage", ctypes.c_size_t),
             ]
 
+        # Private library handles, so setting prototypes never affects other ctypes users.
+        kernel32 = ctypes.WinDLL("kernel32")  # type: ignore[attr-defined]
+        psapi = ctypes.WinDLL("psapi")  # type: ignore[attr-defined]
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
         counters = Counters()
         counters.cb = ctypes.sizeof(Counters)
-        process = ctypes.windll.kernel32.GetCurrentProcess()  # type: ignore[attr-defined]
-        if not ctypes.windll.psapi.GetProcessMemoryInfo(process, ctypes.byref(counters), counters.cb):  # type: ignore[attr-defined]
+        if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
             return None
         return int(counters.WorkingSetSize)
     except Exception:

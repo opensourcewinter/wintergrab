@@ -158,7 +158,8 @@ async def test_async_fetcher_get_many(site) -> None:
 
 
 async def test_async_iter_many_yields_as_completed(site) -> None:
-    urls = [f"{site.url}/item/{i}?delay=0.{3 - i}" for i in range(3)]
+    # 0.3 s between finishes: slow CI runners can start one connection ~0.1 s late.
+    urls = [f"{site.url}/item/{i}?delay={0.3 * (3 - i):.1f}" for i in range(3)]
     async with AsyncFetcher() as fetcher:
         order = [r.url async for r in fetcher.iter_many(urls, concurrency=3)]
     assert order == list(reversed(urls))

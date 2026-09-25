@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 
 import pytest
@@ -206,6 +207,8 @@ def test_prometheus_format(site) -> None:
 
 def test_current_rss_is_plausible() -> None:
     rss = current_rss()
+    if sys.platform.startswith("linux") or sys.platform in ("win32", "darwin"):
+        assert rss is not None
     assert rss is None or 1_000_000 < rss < 100_000_000_000
 
 
