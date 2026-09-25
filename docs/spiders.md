@@ -171,6 +171,103 @@ Non-2xx responses don't reach your callback unless their status is in
 `allowed_statuses` (e.g. `{404}`). Override `is_blocked(self, response)` for
 site-specific block detection.
 
+## Middleware and pipelines
+
+**Downloader middleware** wraps every download. A middleware is any object
+with one or more of these methods (plain or `async`):
+
+```python
+class Auth:
+    def process_request(self, request, spider):           # before the download
+        request.headers = {**(request.headers or {}), "Authorization": "Bearer ..."}
+        return None            # None: go on; a Response: skip the download; a Request: fetch that instead
+
+    def process_response(self, request, response, spider):  # after it
+        if response.status == 401:
+            return Request(LOGIN_URL, callback="relogin")     # fetch something else instead
+        return response        # possibly changed
+
+    def process_exception(self, request, error, spider):     # when the download failed
+        return None            # default handling (retries, errbacks); or recover with a Response/Request
+
+class MySpider(Spider):
+    middlewares = [Auth()]
+```
+
+Raise `IgnoreRequest` (from `wintergrab.spider.middleware`) to drop a request
+silently. Requests pass the middlewares in list order, responses and
+exceptions in reverse order. A middleware that raises fails that one request
+(`stats["middleware_errors"]`), not the crawl.
+
+**Item pipelines** process every item after `process_item()`:
+
+```python
+from wintergrab.spider.middleware import DropItem, ItemPipeline
+
+class Prices(ItemPipeline):
+    def open_spider(self, spider): ...          # optional, may be async
+    def process_item(self, item, spider):       # may be async
+        if not item.get("price"):
+            raise DropItem("no price")          # or return None
+        item["price"] = float(item["price"].strip("$"))
+        return item
+    def close_spider(self, spider): ...         # optional
+
+class MySpider(Spider):
+    pipelines = [Prices(), lambda item: {**item, "source": "shop"}]   # plain functions work too
+```
+
+Pipelines run before de-duplication (`unique_key`) and output. Dropped
+items are counted in `stats["items_dropped/<Pipeline>"]`; a pipeline that
+raises drops the item and counts `pipeline_errors`.
+
+## Budgets
+
+Stop a crawl before it uses too much. When a budget runs out the crawl
+finishes in-flight requests and stops with status `"limit"`;
+`result.limit_reason` names the budget. With a `crawl_dir` the queue is
+kept: raise the budget and run again to continue.
+
+| Setting | Measures |
+|---|---|
+| `max_pages`, `max_items` | pages started, items kept |
+| `max_requests` | requests sent, retries included |
+| `max_bytes` | response bytes downloaded |
+| `max_runtime` | seconds of crawling, across resumed runs |
+| `max_browser_pages` | pages rendered in a browser |
+| `max_errors` | URLs given up on |
+| `max_error_rate` | failed / started pages, after `error_rate_min_pages` (50) pages |
+| `max_memory`, `max_cpu_seconds` | resident memory (bytes), CPU seconds of this run |
+| `max_output_bytes` | bytes written to `output` in this run |
+
+To degrade gracefully instead, set `budget_soft_limit = 0.9`: once any budget
+is 90% used only requests with `priority >= budget_soft_priority` (default 1)
+are started, so what is left goes to the pages that matter most.
+
+## Crawl order and priorities
+
+Higher `priority` runs first. Among equal priorities the queue is
+breadth-first (`crawl_order = "bfs"`, oldest first) or depth-first
+(`crawl_order = "dfs"`, newest first). `priority_fn(request) -> int` sets the
+priority of every queued request:
+
+```python
+def product_pages_first(request):
+    return 10 if "/product/" in request.url else 0
+
+class Shop(Spider):
+    priority_fn = product_pages_first
+```
+
+## Dead letters, events and metrics
+
+Requests given up on are kept in `crawl_dir/dead_letters.jsonl` and can be
+retried alone (`retry_dead_letters = True`, `--retry-failed`). Every crawl
+emits structured events (`spider.events`), exposes live metrics
+(`spider.metrics()`, `result.metrics`) and explains its failures
+(`result.failures`, `result.failure_report()`). See
+[observability.md](observability.md).
+
 ## Pause and resume
 
 Set `crawl_dir` and the crawl becomes resumable:
@@ -282,6 +379,13 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `max_delay` | `60` | Upper bound for back-off delays. |
 | `throttle` | `None` | A custom `AutoThrottle` instance. |
 | `max_pages` / `max_items` / `max_depth` | `None` | Stop after this many pages / items; don't follow deeper than this. With `max_pages`, retries of pages already started still finish. |
+| `max_requests`, `max_bytes`, `max_runtime`, `max_browser_pages`, `max_errors`, `max_error_rate`, `max_memory`, `max_cpu_seconds`, `max_output_bytes` | `None` | [Budgets](#budgets). |
+| `budget_soft_limit` / `budget_soft_priority` | `None` / `1` | Past this fraction of a budget, only start requests with at least this priority. |
+| `crawl_order` | `"bfs"` | `"bfs"` or `"dfs"` among equal priorities. |
+| `priority_fn` | `None` | `request -> int` priority for every queued request. |
+| `middlewares` / `pipelines` | `()` | [Downloader middleware and item pipelines](#middleware-and-pipelines). |
+| `dead_letters` / `retry_dead_letters` | `True` / `False` | Record failed requests in `crawl_dir/dead_letters.jsonl`; queue them again. |
+| `event_log` | `None` | Write events as JSON lines (`True` = `crawl_dir/events.jsonl`). |
 | `impersonate` | `"chrome"` | Browser fingerprint for the default HTTP session. |
 | `default_headers` | `{}` | Headers for the default HTTP session. |
 | `timeout` | `30` | Seconds per request. |

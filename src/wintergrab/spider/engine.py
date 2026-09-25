@@ -17,21 +17,32 @@ from typing import TYPE_CHECKING, Any
 from ..errors import (
     BrowserNotAvailable,
     CheckpointError,
+    ConfigurationError,
     FetchError,
     FetchTimeout,
     HTTPStatusError,
     NetworkPolicyError,
+    PolicyError,
+    RobotsPolicyError,
+    category_of,
     describe,
 )
+from ..events import JsonlEventSink
 from ..fetchers.cache import HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
+from ..fetchers.response import Response
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
 from ..urls import URLNormalizer, URLRules
 from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
+from .budget import BudgetMonitor, BudgetStatus
 from .checkpoint import Checkpoint
+from .deadletters import DeadLetterQueue
 from .exporters import Exporter, open_exporter, to_dict
+from .failures import FailureTracker
 from .frontier import DiskScheduler
+from .metrics import CrawlMetrics
+from .middleware import DropItem, IgnoreRequest
 from .progress import ProgressDisplay
 from .robots import RobotsPolicy
 from .scheduler import Scheduler
@@ -40,12 +51,13 @@ from .spider import CrawlResult
 from .throttle import AutoThrottle
 
 if TYPE_CHECKING:
-    from ..fetchers.response import Response
     from .spider import Spider
 
 log = logging.getLogger("wintergrab.spider")
 
 PUSHBACK_STATUSES = frozenset({429, 503})
+_HANDLED: Any = object()  # a middleware dealt with the request itself (dropped or replaced it)
+CRAWL_ORDERS = {"bfs": False, "fifo": False, "dfs": True, "lifo": True}  # name -> lifo
 # Keyword arguments the engine passes to fetchers itself; Request.options may not override them.
 RESERVED_OPTIONS = frozenset({"method", "url", "headers", "cookies", "data", "json", "proxy", "retries", "request"})
 
@@ -64,6 +76,15 @@ class Stats(dict):  # type: ignore[type-arg]
         self[key] = self.get(key, 0) + n
 
 
+def _function_pipe(fn: Any) -> Any:
+    """A plain ``item -> item`` function used as a pipeline."""
+
+    def process_item(item: Any, spider: Spider) -> Any:
+        return fn(item)
+
+    return process_item
+
+
 class Engine:
     """Runs one crawl. Created by :meth:`Spider.run` / :meth:`Spider.arun`."""
 
@@ -79,7 +100,11 @@ class Engine:
         self.item_queue = item_queue
         self.stats = Stats()
         self.items: list[Any] = []
-        self.scheduler: Scheduler | DiskScheduler = Scheduler(dedupe=spider.dedupe)
+        order = str(spider.crawl_order).lower()
+        if order not in CRAWL_ORDERS:
+            raise ConfigurationError(f"must be 'bfs' or 'dfs', not {spider.crawl_order!r}", key="crawl_order")
+        self._lifo = CRAWL_ORDERS[order]
+        self.scheduler: Scheduler | DiskScheduler = Scheduler(dedupe=spider.dedupe, lifo=self._lifo)
         self._persistent = False  # True with the disk frontier
         self.throttle: AutoThrottle = spider.throttle or AutoThrottle(
             enabled=spider.autothrottle,
@@ -92,11 +117,31 @@ class Engine:
         self.url_rules = URLRules.coerce(spider.url_rules)
         self.network_policy = spider.get_network_policy()
         self._policy_warned: set[str] = set()
+        self.priority_fn = spider.priority_fn
         self.sessions = SessionManager()
         self.checkpoint = Checkpoint(spider.crawl_dir) if spider.crawl_dir else None
         self.exporter: Exporter | None = None
         self.robots: RobotsPolicy | None = None
         self._robots_fetcher: AsyncFetcher | None = None
+        # observability
+        self.events = spider.events
+        self.metrics = CrawlMetrics()
+        self.failures = FailureTracker()
+        self.budget = BudgetMonitor(spider)
+        self.dead_letters = self._dead_letter_queue()
+        self._own_sinks: list[JsonlEventSink] = []
+        self._unsubscribe_sinks: list[Any] = []
+        self._emit_response = False  # someone subscribed to high-volume events (re-checked periodically)
+        self._emit_item = False
+        self._min_priority: int | None = None  # set by budget_soft_limit
+        self._elapsed_final = False
+        self._last_sample = 0.0
+        # extension points (bound methods of the hooks that exist, so unused ones cost nothing)
+        self._mw_request: list[Any] = []
+        self._mw_response: list[Any] = []
+        self._mw_exception: list[Any] = []
+        self._pipes: list[tuple[str, Any]] = []
+        self._pipelines_open: list[Any] = []
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wakeup: asyncio.Event | None = None
@@ -209,6 +254,9 @@ class Engine:
             frontier_existed = self._open_frontier(resume)
             # A frontier that survived a crash means earlier output is part of this crawl.
             self._setup_output(append=state is not None or frontier_existed)
+            self.budget.start(append=state is not None or frontier_existed)
+            self._setup_events()
+            self._bind_extensions()
             spider.configure_sessions(self.sessions)
             if not len(self.sessions):
                 raise RuntimeError("configure_sessions() registered no sessions")
@@ -223,10 +271,16 @@ class Engine:
                 )
                 self.robots = RobotsPolicy(self._fetch_robots, spider.robots_user_agent)
             await maybe_await(spider.on_start())
+            await self._open_pipelines()
             if state is not None:
                 self._restore(state)
+            elif spider.retry_dead_letters:
+                self.stats["runs"] = 1  # only the dead letters: the rest of the crawl already succeeded
             else:
+                if self.dead_letters is not None and not frontier_existed:
+                    self.dead_letters.clear()  # a new crawl: the old failures are history
                 await self._seed()
+            self._requeue_dead_letters()
             # Only now may shutdown save/clear the checkpoint: a failure above
             # must leave an existing state file untouched.
             self._state_ready = True
@@ -243,6 +297,7 @@ class Engine:
                 spider.name,
                 len(self.scheduler),
             )
+            self.events.emit("crawl_started", spider=spider.name, resumed=state is not None, queued=len(self.scheduler))
             show = spider.progress if spider.progress is not None else (spider.log_level is not None)
             if show and ProgressDisplay.supported():
                 self._progress = ProgressDisplay(self)
@@ -298,6 +353,8 @@ class Engine:
         now = time.monotonic()
         wait: float | None = None
         while len(self._inflight) < spider.concurrency:
+            if self.budget.active and self._counter_budget_hit():
+                break
             if spider.max_pages is not None and self.stats.get("pages", 0) >= spider.max_pages:
                 # No new pages, but let retries of pages already started finish.
                 if not self._limit_reached:
@@ -306,6 +363,8 @@ class Engine:
                 if not self.scheduler.retry_count:
                     break
                 request, wait = self.scheduler.pop_ready(self.throttle, now, retries_only=True)
+            elif self._min_priority is not None:
+                request, wait = self.scheduler.pop_ready(self.throttle, now, min_priority=self._min_priority)
             else:
                 request, wait = self.scheduler.pop_ready(self.throttle, now)
             if request is None:
@@ -410,7 +469,12 @@ class Engine:
         # frontier's own commit clock: acks must never become durable before
         # the items produced for them.
         self.scheduler = DiskScheduler(
-            path, self.spider, dedupe=self.spider.dedupe, commit_every=1 << 62, commit_interval=float("inf")
+            path,
+            self.spider,
+            dedupe=self.spider.dedupe,
+            commit_every=1 << 62,
+            commit_interval=float("inf"),
+            lifo=self._lifo,
         )
         self._persistent = True
         return existed
@@ -425,8 +489,94 @@ class Engine:
         self.scheduler.restore_seen(state.get("seen") or ())
         self._item_keys.update(state.get("item_keys") or ())
         self.throttle.restore(state.get("throttle") or {})
-        for data in state.get("pending") or ():
+        pending = list(state.get("pending") or ())
+        if self._lifo:
+            pending.reverse()  # saved newest first: re-queue oldest first so the newest stays on top
+        for data in pending:
             self.scheduler.push(Request.from_dict(data, self.spider), force=True)
+
+    def _dead_letter_queue(self) -> DeadLetterQueue | None:
+        setting = self.spider.dead_letters
+        if setting is None or setting is False:
+            return None
+        if setting is True:
+            return DeadLetterQueue(self.checkpoint.dir / "dead_letters.jsonl") if self.checkpoint else None
+        return DeadLetterQueue(setting)
+
+    def _requeue_dead_letters(self) -> None:
+        """``retry_dead_letters``: queue the requests an earlier run gave up on, and start a fresh file."""
+        if not self.spider.retry_dead_letters:
+            return
+        if self.dead_letters is None:
+            raise ConfigurationError("needs dead letters (a crawl_dir, or dead_letters=PATH)", key="retry_dead_letters")
+        requests = self.dead_letters.requests(self.spider)
+        for request in requests:
+            self._check_serializable(request)
+            self.scheduler.push(request, force=True)
+        self.dead_letters.clear()
+        self.stats.inc("dead_letters_retried", len(requests))
+        log.info("queued %d request(s) from the dead-letter queue again", len(requests))
+
+    def _setup_events(self) -> None:
+        setting = self.spider.event_log
+        if setting is None or setting is False:
+            return
+        if setting is True:
+            if self.checkpoint is None:
+                raise ConfigurationError("event_log=True needs a crawl_dir (or pass a file path)", key="event_log")
+            path: Any = self.checkpoint.dir / "events.jsonl"
+        else:
+            path = setting
+        sink = JsonlEventSink(path)
+        self._own_sinks.append(sink)
+        self._unsubscribe_sinks = [self.events.subscribe(sink)]
+
+    def _bind_extensions(self) -> None:
+        """Collect middleware and pipeline hooks once (so crawling without them costs nothing)."""
+        spider = self.spider
+        middlewares = list(spider.middlewares or ())
+        for mw in middlewares:
+            if not any(hasattr(mw, h) for h in ("process_request", "process_response", "process_exception")):
+                raise ConfigurationError(
+                    f"{mw!r} has no process_request/process_response/process_exception method", key="middlewares"
+                )
+        self._mw_request = [mw.process_request for mw in middlewares if hasattr(mw, "process_request")]
+        # Responses and errors travel back through the middlewares in reverse order.
+        self._mw_response = [mw.process_response for mw in reversed(middlewares) if hasattr(mw, "process_response")]
+        self._mw_exception = [mw.process_exception for mw in reversed(middlewares) if hasattr(mw, "process_exception")]
+        pipes = []
+        for pipe in spider.pipelines or ():
+            hook = getattr(pipe, "process_item", None)
+            if hook is None:
+                if callable(pipe):  # a plain function item -> item
+                    pipes.append((getattr(pipe, "__name__", type(pipe).__name__), _function_pipe(pipe)))
+                    continue
+                raise ConfigurationError(f"{pipe!r} has no process_item method", key="pipelines")
+            pipes.append((type(pipe).__name__, hook))
+        self._pipes = pipes
+        self._refresh_subscriptions()
+
+    def _refresh_subscriptions(self) -> None:
+        self._emit_response = self.events.wants("response")
+        self._emit_item = self.events.wants("item_scraped")
+
+    async def _open_pipelines(self) -> None:
+        for pipe in self.spider.pipelines or ():
+            opener = getattr(pipe, "open_spider", None)
+            if opener is not None:
+                await maybe_await(opener(self.spider))
+            self._pipelines_open.append(pipe)
+
+    async def _close_pipelines(self) -> None:
+        for pipe in reversed(self._pipelines_open):
+            closer = getattr(pipe, "close_spider", None)
+            if closer is None:
+                continue
+            try:
+                await maybe_await(closer(self.spider))
+            except Exception as exc:
+                log.error("pipeline %s failed to close: %s", type(pipe).__name__, describe(exc))
+        self._pipelines_open.clear()
 
     async def _seed(self) -> None:
         self.stats["runs"] = 1
@@ -445,6 +595,8 @@ class Engine:
         if self.url_normalizer is not None:
             request.url = self.url_normalizer(request.url)
         request.meta.setdefault("depth", 0)
+        if self.priority_fn is not None:
+            request.priority = int(self.priority_fn(request))
         self._check_serializable(request)
         self.scheduler.push(request)
 
@@ -455,6 +607,7 @@ class Engine:
             self._progress = None
         elapsed = time.monotonic() - self._started
         self.stats["elapsed_seconds"] = round(self.stats.get("elapsed_seconds", 0) + elapsed, 3)
+        self._elapsed_final = True
         self.stats["duplicates_filtered"] = self.stats.get("duplicates_filtered", 0) + self.scheduler.duplicates
         self.scheduler.duplicates = 0
         status = self._status if self._fatal is None else "stopped"
@@ -495,6 +648,7 @@ class Engine:
                 path = Path(disk.path)
                 for suffix in ("", "-wal", "-shm"):
                     path.with_name(path.name + suffix).unlink(missing_ok=True)
+        await self._close_pipelines()
         if self.exporter is not None:
             self.exporter.close()
         await self.sessions.close_all()
@@ -507,13 +661,53 @@ class Engine:
                 cache.close()
                 spider._http_cache = None
         self.stats["status"] = status
-        result = CrawlResult(items=self.items, stats=dict(self.stats), status=status, crawl_dir=spider.crawl_dir)
+        if self.dead_letters is not None and self.dead_letters.added:
+            self.stats["dead_letters"] = self.dead_letters.added
+        result = CrawlResult(
+            items=self.items,
+            stats=dict(self.stats),
+            status=status,
+            crawl_dir=spider.crawl_dir,
+            failures=self.failures.diagnose(self.throttle),
+            metrics=self.snapshot(),
+        )
         self._log_progress(final=True)
         try:
             await maybe_await(spider.on_close(result))
         except Exception as exc:
             log.error("on_close failed: %s", describe(exc))
+        self.events.emit(
+            "crawl_finished",
+            spider=spider.name,
+            status=status,
+            limit_reason=self.stats.get("limit_reason"),
+            stats=dict(self.stats),
+        )
+        await self.events.drain()
+        for unsubscribe in self._unsubscribe_sinks:
+            unsubscribe()
+        for sink in self._own_sinks:
+            sink.close()
         return result
+
+    def snapshot(self) -> dict[str, Any]:
+        """Live metrics (see :mod:`wintergrab.spider.metrics`)."""
+        elapsed = self._elapsed_total()
+        return self.metrics.snapshot(
+            self.stats,
+            throttle=self.throttle,
+            queued=len(self.scheduler),
+            in_flight=len(self._inflight),
+            elapsed=time.monotonic() - self._started if self._started else 0.0,
+            budget={name: st.to_dict() for name, st in self.budget.usage(self.stats, elapsed).items()},
+        )
+
+    def _elapsed_total(self) -> float:
+        """Crawl time including earlier (resumed) runs."""
+        if self._elapsed_final:
+            return float(self.stats.get("elapsed_seconds", 0))
+        current = time.monotonic() - self._started if self._started else 0.0
+        return float(self.stats.get("elapsed_seconds", 0)) + current
 
     def _pending_requests(self) -> list[Request]:
         pending = self.scheduler.pending()
@@ -555,9 +749,41 @@ class Engine:
             state["seen"] = self.scheduler.seen
         self.checkpoint.save(state)
 
+    def _counter_budget_hit(self) -> bool:
+        """Checked before each request starts: stop once a counter budget is used up."""
+        exhausted = self.budget.check_counters(self.stats)
+        if exhausted is None:
+            return False
+        self._budget_exhausted(exhausted)
+        return True
+
+    def _budget_exhausted(self, status: BudgetStatus) -> None:
+        if self._stopping:
+            return
+        self.stats["limit_reason"] = status.name
+        log.info("budget %s exhausted (%s of %s); finishing", status.name, status.used, status.limit)
+        self.events.emit("budget_exhausted", budget=status.name, used=status.used, limit=status.limit)
+        self._begin_stop("limit")
+
     def _periodic(self) -> None:
         now = time.monotonic()
         spider = self.spider
+        if now - self._last_sample >= 1.0:
+            self._last_sample = now
+            self.metrics.sample(self.stats, self.throttle, now)
+            self._refresh_subscriptions()
+            if self.budget.active or self.budget.soft_limit is not None:
+                elapsed = self._elapsed_total()
+                exhausted = self.budget.check_resources(elapsed) or self.budget.check_counters(self.stats)
+                if exhausted is not None:
+                    self._budget_exhausted(exhausted)
+                previous, self._min_priority = self._min_priority, self.budget.min_priority(self.stats, elapsed)
+                if self._min_priority is not None and previous is None:
+                    log.info(
+                        "budget %.0f%% used: only starting requests with priority >= %d",
+                        (self.budget.soft_limit or 0) * 100,
+                        self._min_priority,
+                    )
         if isinstance(self.scheduler, DiskScheduler) and now - self._last_commit >= 1.0:
             # Output first, then the queue: a crash may redo work, never lose it.
             if self.exporter is not None:
@@ -616,74 +842,101 @@ class Engine:
                     pass  # e.g. DNS trouble: the fetch reports (and retries) it
             if self.robots is not None and not await self._robots_allow(request, domain):
                 return
-            session_name = request.session
-            try:
-                fetcher = self.sessions.get(session_name)
-            except LookupError as exc:
-                self._requeue(request)
-                self.fail(exc)
-                return
-            proxy = request.proxy or (self.proxies.next() if self.proxies is not None else None)
-            rotated = request.proxy is None and self.proxies is not None
-            options = self._fetch_options(request)
-            timeout = options.pop("timeout", spider.timeout)
-            started = time.monotonic()
-            try:
-                response: Response = await _deadline(
-                    fetcher.request(
-                        request.method,
-                        request.url,
-                        headers=request.headers,
-                        cookies=request.cookies,
-                        data=request.data,
-                        json=request.json,
-                        proxy=proxy,
-                        timeout=timeout,
-                        retries=0,
-                        request=request,
-                        **options,
-                    ),
-                    max(60.0, timeout * 4),
-                )
-            except asyncio.CancelledError:
-                raise
-            except BrowserNotAvailable as exc:
-                self._requeue(request)
-                self.fail(exc)
-                return
-            except NetworkPolicyError as exc:  # a redirect hop, or DNS rebinding
-                await self._refused(request, exc)
-                return
-            except (FetchError, asyncio.TimeoutError) as exc:
-                if isinstance(exc, asyncio.TimeoutError):
-                    exc = FetchTimeout(request.url, "Hard timeout")
-                if rotated and exc.retryable and self.proxies is not None:
-                    self.proxies.report_failure(proxy)
-                if exc.is_timeout:
-                    self.throttle.on_error(domain)
-                self.stats.inc("errors")
-                self.stats.inc(f"error/{type(exc.cause).__name__ if exc.cause else 'Timeout'}")
-                if exc.retryable and self._retry(request, describe(exc)):
+            response: Response | None = None
+            if self._mw_request:
+                outcome = await self._request_middleware(request)
+                if outcome is _HANDLED:
                     return
-                await self._give_up(request, exc)
-                return
-            except Exception as exc:
-                self.stats.inc("errors")
-                self.stats.inc(f"error/{type(exc).__name__}")
-                await self._give_up(request, exc)
-                return
+                response = outcome
+            fetcher: Any = None
+            proxy: str | None = None
+            rotated = False
+            fetched = response is None  # False: a middleware supplied the response
+            started = time.monotonic()
+            if response is None:
+                try:
+                    fetcher = self.sessions.get(request.session)
+                except LookupError as exc:
+                    self._requeue(request)
+                    self.fail(exc)
+                    return
+                proxy = request.proxy or (self.proxies.next() if self.proxies is not None else None)
+                rotated = request.proxy is None and self.proxies is not None
+                options = self._fetch_options(request)
+                timeout = options.pop("timeout", spider.timeout)
+                started = time.monotonic()
+                try:
+                    response = await _deadline(
+                        fetcher.request(
+                            request.method,
+                            request.url,
+                            headers=request.headers,
+                            cookies=request.cookies,
+                            data=request.data,
+                            json=request.json,
+                            proxy=proxy,
+                            timeout=timeout,
+                            retries=0,
+                            request=request,
+                            **options,
+                        ),
+                        max(60.0, timeout * 4),
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except BrowserNotAvailable as exc:
+                    self._requeue(request)
+                    self.fail(exc)
+                    return
+                except NetworkPolicyError as exc:  # a redirect hop, or DNS rebinding
+                    await self._refused(request, exc)
+                    return
+                except Exception as exc:
+                    error = FetchTimeout(request.url, "Hard timeout") if isinstance(exc, asyncio.TimeoutError) else exc
+                    if self._mw_exception:
+                        outcome = await self._exception_middleware(request, error)
+                        if outcome is _HANDLED:
+                            return
+                        response = outcome
+                    if response is None:
+                        await self._fetch_failed(request, error, domain, proxy, rotated)
+                        return
+                    fetched = False  # a middleware recovered with a response
 
             latency = time.monotonic() - started
-            if response.cache_status == "hit":
+            if self._mw_response:
+                outcome = await self._response_middleware(request, response)
+                if outcome is _HANDLED:
+                    return
+                response = outcome
+            if not fetched:
+                self.stats.inc("middleware_responses")
+                slot.next_start = min(slot.next_start, time.monotonic())  # nothing reached the site
+            elif response.cache_status == "hit":
                 # Served from disk: no request reached the site, so don't make
                 # the next one wait for this one's politeness delay.
                 self.stats.inc("cache_hits")
                 slot.next_start = min(slot.next_start, time.monotonic())
             elif response.cache_status == "revalidated":
                 self.stats.inc("cache_revalidated")
+            live = fetched and response.cache_status != "hit"
             self.stats.inc("responses")
             self.stats.inc(f"status/{response.status}")
             self.stats.inc("bytes", len(response.body))
+            if live:
+                self.metrics.observe_latency(latency)
+                if response.source == "browser":
+                    self.stats.inc("browser_pages")
+            if self._emit_response:
+                self.events.emit(
+                    "response",
+                    url=response.url,
+                    status=response.status,
+                    bytes=len(response.body),
+                    latency=round(latency, 4),
+                    source=response.source,
+                    cache=response.cache_status,
+                )
 
             if (
                 spider.allowed_domains
@@ -704,21 +957,32 @@ class Engine:
                 log.error("is_blocked() failed: %s", describe(exc))
             if blocked:
                 self.stats.inc("blocked")
+                self.events.emit("blocked", url=request.url, status=response.status, domain=domain)
             if (blocked or response.status in spider.retry_statuses) and response.cache_status is not None:
                 self._uncache(fetcher, request)  # never replay a block page or an error from the cache
             retry_after = parse_retry_after(response.headers.get("retry-after"), cap=600)
             if blocked or response.status in PUSHBACK_STATUSES:
                 self.throttle.on_pushback(domain, retry_after)
                 self.stats.inc("backoffs")
-            elif response.cache_status != "hit":
+                self.events.emit(
+                    "throttle_backoff",
+                    domain=domain,
+                    delay=round(slot.delay, 3),
+                    concurrency=slot.concurrency,
+                    retry_after=retry_after,
+                )
+            elif live:
                 self.throttle.on_success(domain, latency)
             if rotated:
                 bad = blocked or response.status in PROXY_FAILURE_STATUSES
                 (self.proxies.report_failure if bad else self.proxies.report_success)(proxy)  # type: ignore[union-attr]
 
-            if blocked or response.status in spider.retry_statuses:
+            retryable = blocked or response.status in spider.retry_statuses
+            if retryable:
                 reason = "blocked" if blocked else f"HTTP {response.status}"
-                if self._retry(request, reason, blocked=blocked, retry_after=retry_after):
+                retried = self._retry(request, reason, blocked=blocked, retry_after=retry_after)
+                self.failures.failure(domain, request.url, response=response, blocked=blocked, final=not retried)
+                if retried:
                     return
             if response.source == "browser" and response.cookie_jar and spider.share_browser_cookies:
                 self._share_cookies(response)
@@ -727,9 +991,12 @@ class Engine:
                 ok_status = False
             if not ok_status:
                 self.stats.inc("http_errors")
+                if not retryable:  # retryable ones were recorded above
+                    self.failures.failure(domain, request.url, response=response, final=True)
                 detail = "looks like a bot-check page" if blocked else None
                 await self._give_up(request, HTTPStatusError(response, detail), quiet=response.status == 404)
                 return
+            self.failures.success(domain)
             await self._run_callback(request, response)
         except asyncio.CancelledError:
             raise
@@ -741,6 +1008,113 @@ class Engine:
             if self._persistent and id(request) not in self._ack_deferred:
                 self._ack(request)  # children are queued by now: safe to forget the request
             self._wake()
+
+    async def _fetch_failed(
+        self, request: Request, error: BaseException, domain: str, proxy: str | None, rotated: bool
+    ) -> None:
+        self.stats.inc("errors")
+        if isinstance(error, FetchError):
+            if rotated and error.retryable and self.proxies is not None:
+                self.proxies.report_failure(proxy)
+            if error.is_timeout:
+                self.throttle.on_error(domain)
+            self.stats.inc(f"error/{type(error.cause).__name__ if error.cause else 'Timeout'}")
+            retried = error.retryable and self._retry(request, describe(error))
+            self.failures.failure(domain, request.url, error=error, final=not retried)
+            if not retried:
+                await self._give_up(request, error)
+            return
+        self.stats.inc(f"error/{type(error).__name__}")
+        self.failures.failure(domain, request.url, error=error, final=True)
+        await self._give_up(request, error)
+
+    # ------------------------------------------------------------------ #
+    # middleware
+    # ------------------------------------------------------------------ #
+    async def _request_middleware(self, request: Request) -> Any:
+        """``None`` (download it), a :class:`Response` (skip the download) or ``_HANDLED``."""
+        try:
+            for hook in self._mw_request:
+                result = await maybe_await(hook(request, self.spider))
+                if result is None:
+                    continue
+                if isinstance(result, Request):
+                    self._reroute(result, request)
+                    return _HANDLED
+                if isinstance(result, Response):
+                    return result
+                raise TypeError(
+                    f"process_request must return None, a Response or a Request, not {type(result).__name__}"
+                )
+        except IgnoreRequest as exc:
+            self._ignored(request, exc)
+            return _HANDLED
+        except Exception as exc:
+            await self._middleware_failed(request, exc)
+            return _HANDLED
+        return None
+
+    async def _response_middleware(self, request: Request, response: Response) -> Any:
+        """The (possibly changed) :class:`Response`, or ``_HANDLED``."""
+        try:
+            for hook in self._mw_response:
+                result = await maybe_await(hook(request, response, self.spider))
+                if isinstance(result, Request):
+                    self._reroute(result, request)
+                    return _HANDLED
+                if not isinstance(result, Response):
+                    raise TypeError(
+                        f"process_response must return a Response or a Request, not {type(result).__name__}"
+                    )
+                response = result
+        except IgnoreRequest as exc:
+            self._ignored(request, exc)
+            return _HANDLED
+        except Exception as exc:
+            await self._middleware_failed(request, exc)
+            return _HANDLED
+        return response
+
+    async def _exception_middleware(self, request: Request, error: BaseException) -> Any:
+        """``None`` (default handling), a recovered :class:`Response`, or ``_HANDLED``."""
+        try:
+            for hook in self._mw_exception:
+                result = await maybe_await(hook(request, error, self.spider))
+                if result is None:
+                    continue
+                if isinstance(result, Request):
+                    self._reroute(result, request)
+                    return _HANDLED
+                if isinstance(result, Response):
+                    return result
+                raise TypeError(
+                    f"process_exception must return None, a Response or a Request, not {type(result).__name__}"
+                )
+        except IgnoreRequest as exc:
+            self._ignored(request, exc)
+            return _HANDLED
+        except Exception as exc:
+            await self._middleware_failed(request, exc)
+            return _HANDLED
+        return None
+
+    def _reroute(self, new: Request, original: Request) -> None:
+        """A middleware replaced ``original`` with ``new``: queue it (bypassing the duplicate filter)."""
+        new.meta.setdefault("depth", original.depth)
+        self._check_serializable(new)
+        self.scheduler.push(new, force=True)
+        self.stats.inc("rerouted")
+        self._wake()
+
+    def _ignored(self, request: Request, exc: IgnoreRequest) -> None:
+        self.stats.inc("ignored")
+        log.debug("ignored %s: %s", request.url, exc)
+
+    async def _middleware_failed(self, request: Request, exc: Exception) -> None:
+        self.stats.inc("middleware_errors")
+        log.error("middleware failed on %s: %s", request.url, describe(exc))
+        self.failures.failure(request.host, request.url, error=exc, final=True)
+        await self._give_up(request, exc)
 
     @staticmethod
     def _uncache(fetcher: Any, request: Request) -> None:
@@ -764,6 +1138,7 @@ class Engine:
         if not await self.robots.allowed(request.url):
             self.stats.inc("robots_blocked")
             log.debug("robots.txt forbids %s", request.url)
+            self.failures.failure(domain, request.url, error=RobotsPolicyError(request.url), final=True)
             return False
         origin = RobotsPolicy.origin(request.url)
         if origin not in self._crawl_delays_checked:
@@ -792,6 +1167,7 @@ class Engine:
             delay = 0.0  # the throttle already paused the whole domain for Retry-After
         self.stats.inc("retries")
         log.debug("retry %d/%d for %s in %.1fs (%s)", attempt + 1, spider.retries, request.url, delay, reason)
+        self.events.emit("request_retried", url=request.url, reason=reason, attempt=attempt + 1, delay=round(delay, 3))
         self._schedule_later(new, delay, original=request)
         return True
 
@@ -826,11 +1202,26 @@ class Engine:
         if host not in self._policy_warned:
             self._policy_warned.add(host)
             log.warning("network policy refused %s: %s", host, error.reason)
+        self.failures.failure(host, request.url, error=error, final=True)
+        self.events.emit("policy_refused", url=request.url, reason=error.reason, policy=error.policy)
         await self._give_up(request, error, quiet=True)
 
     async def _give_up(self, request: Request, error: BaseException, quiet: bool = False) -> None:
         self.stats.inc("failed")
         spider = self.spider
+        if self.dead_letters is not None and not isinstance(error, PolicyError):
+            try:
+                self.dead_letters.add(request, error, spider)
+            except OSError as exc:
+                log.error("could not record a dead letter in %s: %s", self.dead_letters.path, describe(exc))
+        self.events.emit(
+            "request_failed",
+            url=request.url,
+            error=describe(error),
+            category=category_of(error),
+            kind=getattr(error, "kind", None),
+            status=getattr(error, "status", None),
+        )
         errback = request.errback
         if isinstance(errback, str):
             errback = getattr(spider, errback)
@@ -859,6 +1250,7 @@ class Engine:
             self.fail(exc)
         except Exception as exc:
             self.stats.inc("callback_errors")
+            self.failures.failure(request.host, request.url, error=exc, final=True, stage="callback")
             log.exception("error in %s for %s: %s", getattr(callback, "__name__", callback), response.url, exc)
 
     async def _consume(self, result: Any, parent: Request) -> None:
@@ -909,6 +1301,8 @@ class Engine:
                 self.stats.inc("rules_filtered")
                 self.stats.inc(f"rules_filtered/{reason}")
                 return
+        if self.priority_fn is not None:
+            request.priority = int(self.priority_fn(request))
         self._check_serializable(request)
         if self.scheduler.push(request):
             self.stats.inc("enqueued")
@@ -937,6 +1331,29 @@ class Engine:
                 log.warning("Request.options[%r] is ignored; use the Request's own %r field instead", key, key)
         return options
 
+    async def _run_pipelines(self, item: Any) -> Any:
+        """Pass an item through the pipelines; ``None`` if one dropped it."""
+        for name, hook in self._pipes:
+            try:
+                item = await maybe_await(hook(item, self.spider))
+            except DropItem as exc:
+                self._item_dropped(name, str(exc) or "dropped")
+                return None
+            except Exception as exc:
+                self.stats.inc("pipeline_errors")
+                log.error("pipeline %s failed: %s", name, describe(exc))
+                self._item_dropped(name, f"error: {describe(exc)}")
+                return None
+            if item is None:
+                self._item_dropped(name, "dropped")
+                return None
+        return item
+
+    def _item_dropped(self, pipeline: str, reason: str) -> None:
+        self.stats.inc("items_dropped")
+        self.stats.inc(f"items_dropped/{pipeline}")
+        self.events.emit("item_dropped", pipeline=pipeline, reason=reason)
+
     def _is_duplicate_item(self, item: Any) -> bool:
         data = to_dict(item)
         if not isinstance(data, dict) or data.get(self.spider.unique_key) is None:
@@ -956,6 +1373,10 @@ class Engine:
         if processed is None:
             self.stats.inc("items_dropped")
             return
+        if self._pipes:
+            processed = await self._run_pipelines(processed)
+            if processed is None:
+                return
         if spider.unique_key and self._is_duplicate_item(processed):
             self.stats.inc("items_duplicate")
             return
@@ -968,6 +1389,8 @@ class Engine:
                 log.error("could not write item to %s: %s", self.spider.output, describe(exc))
         if spider.keep_items:
             self.items.append(processed)
+        if self._emit_item:
+            self.events.emit("item_scraped", item=processed)
         if self.item_queue is not None:
             await self.item_queue.put(processed)
         if spider.max_items is not None and self.stats["items"] >= spider.max_items:

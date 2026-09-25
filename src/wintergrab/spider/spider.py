@@ -9,12 +9,14 @@ import logging
 import re
 import sys
 import threading
+import types
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..events import EventBus
 from ..fetchers.blocking import looks_blocked
 from ..fetchers.browser import AsyncBrowserFetcher
 from ..fetchers.cache import HTTPCache
@@ -29,6 +31,7 @@ if TYPE_CHECKING:
     from ..errors import WintergrabError
     from ..fetchers.response import Response
     from .engine import Engine
+    from .failures import FailureDiagnosis
 
 
 @dataclass
@@ -48,10 +51,28 @@ class CrawlResult:
     stats: dict[str, Any] = field(default_factory=dict)
     status: str = "finished"
     crawl_dir: str | None = None
+    #: What went wrong, grouped and explained (see :mod:`wintergrab.spider.failures`).
+    failures: list[FailureDiagnosis] = field(default_factory=list)
+    #: Final metrics snapshot: rates, latency percentiles, per-domain throttle state, budgets.
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     @property
     def paused(self) -> bool:
         return self.status == "paused"
+
+    @property
+    def limit_reason(self) -> str | None:
+        """Which limit or budget stopped the crawl (``"max_pages"``, ``"max_bytes"``...), if any."""
+        return self.stats.get("limit_reason")
+
+    def failure_report(self, limit: int = 10) -> str:
+        """The failure diagnoses as readable text."""
+        if not self.failures:
+            return "no failures"
+        parts = [d.describe() for d in self.failures[:limit]]
+        if len(self.failures) > limit:
+            parts.append(f"... and {len(self.failures) - limit} more kinds of failure")
+        return "\n\n".join(parts)
 
     @property
     def finished(self) -> bool:
@@ -137,10 +158,44 @@ class Spider:
     #: Pass an :class:`AutoThrottle` instance for full control (overrides the above).
     throttle: Any = None
 
-    # -- limits ----------------------------------------------------------- #
+    # -- limits and budgets ------------------------------------------------ #
     max_pages: int | None = None
     max_items: int | None = None
     max_depth: int | None = None
+    #: Budgets (see :mod:`wintergrab.spider.budget`): the crawl stops with status
+    #: ``"limit"`` (resumable with a ``crawl_dir``) when one runs out.
+    max_requests: int | None = None
+    max_bytes: int | None = None
+    #: Seconds of crawling, counted across resumed runs.
+    max_runtime: float | None = None
+    max_browser_pages: int | None = None
+    #: URLs given up on.
+    max_errors: int | None = None
+    #: Stop when more than this fraction of pages failed (after ``error_rate_min_pages`` pages).
+    max_error_rate: float | None = None
+    error_rate_min_pages: int = 50
+    #: Resident memory (bytes), CPU seconds, and bytes written to ``output`` in this run.
+    max_memory: int | None = None
+    max_cpu_seconds: float | None = None
+    max_output_bytes: int | None = None
+    #: Degrade gracefully: once any budget is this much used (e.g. ``0.9``), only
+    #: start requests with a priority of at least ``budget_soft_priority``.
+    budget_soft_limit: float | None = None
+    budget_soft_priority: int = 1
+
+    # -- queue order -------------------------------------------------------- #
+    #: ``"bfs"`` (breadth-first: oldest first among equal priorities) or ``"dfs"`` (depth-first).
+    crawl_order: str = "bfs"
+    #: ``priority_fn(request) -> int``: the priority of every queued request (e.g.
+    #: favour product pages). Higher runs first. Retries keep their priority.
+    priority_fn: Callable[[Request], int] | None = None
+
+    # -- extensions ---------------------------------------------------------- #
+    #: Downloader middlewares (see :mod:`wintergrab.spider.middleware`).
+    middlewares: Sequence[Any] = ()
+    #: Item pipelines run after :meth:`process_item`: objects with ``process_item(item, spider)``
+    #: or plain ``item -> item`` functions. Return ``None`` (or raise ``DropItem``) to drop.
+    pipelines: Sequence[Any] = ()
 
     # -- fetching --------------------------------------------------------- #
     #: Browser to impersonate for HTTP requests (``None`` = plain curl).
@@ -199,6 +254,13 @@ class Spider:
     crawl_dir: str | None = None
     #: Seconds between automatic checkpoints (crash safety).
     checkpoint_interval: float = 60.0
+    #: Record requests given up on in ``crawl_dir/dead_letters.jsonl`` (``True``), in a
+    #: file of your choice (a path) or not at all (``False``).
+    dead_letters: bool | str | None = True
+    #: Queue the dead letters of earlier runs again (and start a fresh file).
+    retry_dead_letters: bool = False
+    #: Write structured events as JSON lines: ``True`` = ``crawl_dir/events.jsonl``, or a path.
+    event_log: bool | str | None = None
     #: Keep items in memory for ``CrawlResult.items``. Turn off for huge crawls.
     keep_items: bool = True
     #: Log level for the ``wintergrab`` logger (``None`` leaves logging alone).
@@ -212,13 +274,18 @@ class Spider:
 
     def __init__(self, **overrides: Any) -> None:
         for key, value in overrides.items():
-            # Methods are not settings; callable *values* (a URL normalizer, a priority function) are fine.
-            if key.startswith("_") or not hasattr(type(self), key) or inspect.isroutine(getattr(type(self), key)):
+            if key.startswith("_") or not _is_setting(type(self), key):
                 raise TypeError(f"{type(self).__name__} has no setting {key!r}")
             setattr(self, key, value)
         if not self.name:
             self.name = type(self).__name__
+        for name, arity in (("priority_fn", 1), ("url_normalizer", 1)):
+            unbound = _unbound_function(self, name, arity)
+            if unbound is not None:
+                setattr(self, name, unbound)
         self.logger = logging.getLogger(f"wintergrab.spider.{self.name}")
+        #: Structured events of this spider's crawls (see :mod:`wintergrab.events`).
+        self.events = EventBus(origin=self.name)
         self._engine: Engine | None = None
         self._pending_command: str | None = None
         self._http_cache: HTTPCache | None = None
@@ -369,7 +436,11 @@ class Spider:
         """
         try:
             asyncio.get_running_loop()
+            in_loop = True
         except RuntimeError:
+            in_loop = False
+        if not in_loop:
+            # Outside the except block: callback tracebacks must not carry this RuntimeError as context.
             return self._run_coroutine(self.arun(resume=resume))
         # Already inside an event loop (e.g. Jupyter): run in a helper thread.
         # Signal handlers only work in the main thread, so turn Ctrl+C
@@ -469,9 +540,55 @@ class Spider:
         """Live stats of the running crawl (empty when not running)."""
         return dict(self._engine.stats) if self._engine is not None else {}
 
+    def metrics(self) -> dict[str, Any]:
+        """Live metrics of the running crawl: rates, latency, per-domain throttle state, budgets (empty when idle)."""
+        return self._engine.snapshot() if self._engine is not None else {}
+
     def fatal(self, error: WintergrabError | Exception) -> None:
         """Abort the crawl with an error (raised from :meth:`run`)."""
         if self._engine is not None:
             self._engine.fail(error)
         else:
             raise error
+
+
+def _unbound_function(spider: Spider, name: str, arity: int) -> Callable[..., Any] | None:
+    """A plain function stored as a class attribute setting (``priority_fn = by_depth``).
+
+    Python turns it into a bound method, so it would receive the spider as an extra
+    first argument. If its signature takes exactly the setting's natural arguments,
+    return the plain function so it is called as written.
+    """
+    if name in vars(spider):
+        return None
+    for klass in type(spider).__mro__:
+        raw = vars(klass).get(name)
+        if raw is None:
+            continue
+        if isinstance(raw, types.FunctionType):
+            try:
+                params = [
+                    p
+                    for p in inspect.signature(raw).parameters.values()
+                    if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
+                ]
+            except (TypeError, ValueError):
+                return None
+            return raw if len(params) == arity else None
+        return None
+    return None
+
+
+def _is_setting(cls: type, key: str) -> bool:
+    """Whether ``key`` is a setting (overridable per instance) rather than a method.
+
+    A name is a setting when some class of the hierarchy declares it as a plain
+    value. That keeps callable settings (``priority_fn = by_depth``) overridable
+    while methods such as ``parse`` are not.
+    """
+    for klass in cls.__mro__:
+        if key in vars(klass):
+            value = vars(klass)[key]
+            if not (inspect.isroutine(value) or isinstance(value, (property, classmethod, staticmethod))):
+                return True
+    return False

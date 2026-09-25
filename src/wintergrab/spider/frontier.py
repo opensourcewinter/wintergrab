@@ -359,6 +359,8 @@ class DiskScheduler:
         bloom_error_rate: Overall false-positive rate of the filter (a false positive drops a new URL).
         commit_every: Commit after this many push/pop/ack operations...
         commit_interval: ...or this many seconds, whichever comes first.
+        lifo: Newest first among equal priorities (depth-first crawls). A frontier file keeps
+            the order it was created with.
     """
 
     persistent = True
@@ -374,10 +376,14 @@ class DiskScheduler:
         bloom_error_rate: float = 1e-4,
         commit_every: int = 500,
         commit_interval: float = 1.0,
+        lifo: bool = False,
     ) -> None:
         if buffer_per_domain < 1:
             raise ValueError("buffer_per_domain must be at least 1")
         self.path = os.fspath(path)
+        self.lifo = lifo
+        # Row ids double as the FIFO sequence; counting down makes the queue LIFO.
+        self._id_step = -1 if lifo else 1
         self.spider = spider
         self.dedupe = dedupe
         self.buffer_per_domain = buffer_per_domain
@@ -438,6 +444,14 @@ class DiskScheduler:
             db.execute("INSERT INTO meta (key, value) VALUES ('schema', ?)", (_SCHEMA_VERSION,))
         elif int(meta["schema"]) != _SCHEMA_VERSION:
             raise CheckpointError(f"{self.path} was written by an incompatible version of wintergrab")
+        order = "lifo" if self.lifo else "fifo"
+        if "order" not in meta:
+            db.execute("INSERT INTO meta (key, value) VALUES ('order', ?)", (order,))
+        elif meta["order"] != order:
+            raise CheckpointError(
+                f"{self.path} was created with crawl_order {'dfs' if meta['order'] == 'lifo' else 'bfs'!r}; "
+                "resume it with the same crawl_order"
+            )
 
         if "bloom" in meta:
             filters = [BloomFilter.from_bytes(blob) for (blob,) in db.execute("SELECT data FROM bloom ORDER BY idx")]
@@ -460,7 +474,10 @@ class DiskScheduler:
         )
         self._size = sum(self._disk.values())
         self.retry_count = sum(self._disk_retries.values())
-        self._next_id = (db.execute("SELECT MAX(id) FROM requests").fetchone()[0] or 0) + 1
+        if self.lifo:
+            self._next_id = (db.execute("SELECT MIN(id) FROM requests").fetchone()[0] or 0) - 1
+        else:
+            self._next_id = (db.execute("SELECT MAX(id) FROM requests").fetchone()[0] or 0) + 1
         db.execute("COMMIT")
         for domain in list(self._disk):
             buf = self._buffers[domain] = []
@@ -504,7 +521,7 @@ class DiskScheduler:
             self._new_fps.append(fp)
         domain = request.host
         row_id = self._next_id
-        self._next_id += 1
+        self._next_id += self._id_step
         retries = request.retries
         entry: _Entry = (-request.priority, row_id, request)
         buf = self._buffers.get(domain)
@@ -534,12 +551,12 @@ class DiskScheduler:
         return True
 
     def pop_ready(
-        self, throttle: AutoThrottle, now: float, *, retries_only: bool = False
+        self, throttle: AutoThrottle, now: float, *, retries_only: bool = False, min_priority: int | None = None
     ) -> tuple[Request | None, float | None]:
         """Next request that may start now, or ``(None, seconds_until_one_might)``.
 
         The popped request is leased: it stays in the file until :meth:`ack`. With ``retries_only`` only
-        requests that are retries are considered.
+        requests that are retries are considered; with ``min_priority`` lower priorities stay queued.
         """
         self._check_open()
         if retries_only:
@@ -548,6 +565,8 @@ class DiskScheduler:
         best_domain = ""
         wait: float | None = None
         for domain, buf in self._buffers.items():
+            if min_priority is not None and -buf[0][0] < min_priority:
+                continue  # a buffer always holds its domain's best requests
             slot = throttle.slot(domain)
             if slot.active >= slot.concurrency:
                 continue

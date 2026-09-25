@@ -80,7 +80,9 @@ wintergrab crawl URL [options]                     # a quick crawl without code
 ```
 
 Items are streamed as JSON Lines to stdout unless you pass `-o FILE`
-(`.jsonl`, `.json` or `.csv`). A summary goes to stderr at the end.
+(`.jsonl`, `.json` or `.csv`). A summary goes to stderr at the end, with a
+short diagnosis of the most common failures (the full
+[failure report](observability.md#failure-reports) with `-v`).
 
 ```bash
 wintergrab crawl examples/05_quotes_spider.py -o quotes.jsonl
@@ -100,6 +102,10 @@ Options for any crawl:
 | `--concurrency N`, `--per-domain N`, `--delay SEC` | `concurrency`, `concurrency_per_domain`, `download_delay` |
 | `--no-autothrottle` | `autothrottle = False` |
 | `--max-pages N`, `--max-items N`, `--max-depth N` | limits |
+| `--max-requests N`, `--max-bytes N`, `--max-runtime SEC` | budgets (see [spiders.md](spiders.md#budgets)) |
+| `--order bfs\|dfs` | `crawl_order` |
+| `--events FILE` | `event_log` (structured events as JSON lines) |
+| `--retry-failed` | `retry_dead_letters = True`: fetch only what an earlier run gave up on |
 | `--no-robots` | `obey_robots_txt = False` |
 | `--proxy URL`, `--proxy-file FILE` | `proxies` |
 | `-b/--browser` | `use_browser = True` |

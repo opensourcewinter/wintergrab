@@ -387,6 +387,16 @@ class Handler(BaseHTTPRequestHandler):
                     links + "<a href='https://elsewhere.invalid/x'>offsite</a><a href='/private/secret'>private</a>",
                 ),
             )
+        if path.startswith("/tree"):
+            # A binary tree of pages two levels deep: /tree/ -> /tree/a, /tree/b -> /tree/a/a ...
+            node = path[len("/tree") :].strip("/")
+            depth = len([p for p in node.split("/") if p])
+            links = (
+                "".join(f"<a class='child' href='/tree/{node + '/' if node else ''}{c}'>{c}</a>" for c in "ab")
+                if depth < 2
+                else ""
+            )
+            return self.send(200, layout(f"tree {node or 'root'}", f"<p id='node'>{node or 'root'}</p>{links}"))
         if path == "/tracking-links":
             # The same pages behind tracking parameters, fragments and dot segments.
             links = "".join(

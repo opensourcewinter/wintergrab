@@ -31,6 +31,42 @@
 - Spider settings can now hold callable values (a URL normalizer, a
   priority function); only methods are rejected as overrides.
 
+### Extension points, budgets and observability
+
+- **Downloader middleware** (`Spider.middlewares`): `process_request`,
+  `process_response` and `process_exception` hooks (sync or async) can answer
+  requests, replace them, drop them (`IgnoreRequest`) or recover from errors.
+- **Item pipelines** (`Spider.pipelines`): objects with `process_item` (plus
+  optional `open_spider`/`close_spider`) or plain functions; drop with `None`
+  or `DropItem`. They run before de-duplication and output.
+- **Budgets**: `max_requests`, `max_bytes`, `max_runtime` (across resumes),
+  `max_browser_pages`, `max_errors`, `max_error_rate`, `max_memory`,
+  `max_cpu_seconds`, `max_output_bytes`. An exhausted budget stops the crawl
+  with status `"limit"` and `result.limit_reason` (resumable with a
+  `crawl_dir`). `budget_soft_limit` keeps the rest of a budget for
+  high-priority requests.
+- **Crawl order**: `crawl_order="dfs"` for depth-first crawls (memory and
+  disk frontiers, preserved across pause/resume); `priority_fn(request)`
+  sets every queued request's priority.
+- **Events**: `spider.events` publishes structured events (crawl
+  started/finished, responses, items, retries, failures, blocks, back-offs,
+  budget and policy refusals); `event_log=True` writes them as JSON lines.
+- **Metrics**: `spider.metrics()` / `result.metrics` with rolling rates,
+  latency percentiles, per-domain throttle state (mode, delay, target delay,
+  allowed and measured rate), budget usage, CPU and memory;
+  `to_prometheus()` for scraping.
+- **Failure reports**: `result.failures` / `result.failure_report()` group
+  failures by domain and kind, with evidence and confirmed vs likely causes.
+  `wintergrab crawl` prints a short diagnosis.
+- **Dead letters**: failed requests are kept in `crawl_dir/dead_letters.jsonl`;
+  `retry_dead_letters=True` (`--retry-failed`) fetches only those.
+- CLI: `--max-requests`, `--max-bytes`, `--max-runtime`, `--order`,
+  `--events`, `--retry-failed`.
+- Fix: exceptions raised by callbacks no longer show a misleading
+  "RuntimeError: no running event loop" as their context in logs.
+- Measured: crawl throughput is unchanged (1,038 pages/s median before and
+  after on the benchmark site, concurrency 64, 5 alternating runs each).
+
 ## 0.2.0
 
 First release on PyPI.

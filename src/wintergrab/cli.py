@@ -472,7 +472,14 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         "max_pages": args.max_pages,
         "max_items": args.max_items,
         "max_depth": args.max_depth,
+        "max_requests": args.max_requests,
+        "max_bytes": args.max_bytes,
+        "max_runtime": args.max_runtime,
+        "crawl_order": args.order,
+        "event_log": args.events,
     }
+    if args.retry_failed:
+        overrides["retry_dead_letters"] = True
     overrides.update({k: v for k, v in option_map.items() if v is not None})
     if args.no_autothrottle:
         overrides["autothrottle"] = False
@@ -515,15 +522,46 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     stats = result.stats
+    status = result.status + (f" ({result.limit_reason})" if result.limit_reason else "")
     print(
-        f"{result.status}: {stats.get('pages', 0)} pages, {stats.get('items', 0)} items, "
+        f"{status}: {stats.get('pages', 0)} pages, {stats.get('items', 0)} items, "
         f"{stats.get('errors', 0)} errors in {stats.get('elapsed_seconds', 0):.1f}s"
         + (f" -> {spider.output}" if spider.output and spider.output != "-" else ""),
         file=sys.stderr,
     )
+    _print_failures(result, verbose=args.verbose)
     if result.paused:
         print("paused - run the same command again to resume", file=sys.stderr)
+    if stats.get("dead_letters") and spider.crawl_dir:
+        print(
+            f"{stats['dead_letters']} failed request(s) recorded; retry just those with --retry-failed",
+            file=sys.stderr,
+        )
     return 0
+
+
+def _print_failures(result: Any, verbose: int) -> None:
+    """A short diagnosis of what went wrong (the full report with -v)."""
+    if not result.failures or verbose < 0:
+        return
+    if verbose > 0:
+        print("\n" + result.failure_report(), file=sys.stderr)
+        return
+    print("failures:", file=sys.stderr)
+    for diagnosis in result.failures[:3]:
+        cause = (
+            f"cause: {diagnosis.confirmed_cause}"
+            if diagnosis.confirmed_cause
+            else f"likely: {diagnosis.likely_cause}"
+            if diagnosis.likely_cause
+            else "cause unknown"
+        )
+        print(
+            f"  {diagnosis.signature} on {diagnosis.domain}: {diagnosis.affected_urls:,} URL(s); {cause}",
+            file=sys.stderr,
+        )
+    if len(result.failures) > 3:
+        print(f"  ... {len(result.failures) - 3} more (-v for the full report)", file=sys.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -731,6 +769,14 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--max-pages", type=int, metavar="N")
     c.add_argument("--max-items", type=int, metavar="N")
     c.add_argument("--max-depth", type=int, metavar="N")
+    c.add_argument("--max-requests", type=int, metavar="N", help="budget: requests sent, retries included")
+    c.add_argument("--max-bytes", type=int, metavar="N", help="budget: bytes downloaded")
+    c.add_argument("--max-runtime", type=float, metavar="SEC", help="budget: seconds of crawling (across resumes)")
+    c.add_argument("--order", choices=["bfs", "dfs"], help="breadth-first (default) or depth-first")
+    c.add_argument("--events", metavar="FILE", help="write structured events (JSON lines) to FILE")
+    c.add_argument(
+        "--retry-failed", action="store_true", help="queue the requests an earlier run gave up on (needs --crawl-dir)"
+    )
     c.add_argument("--no-robots", action="store_true", help="ignore robots.txt")
     c.add_argument("-s", "--set", action="append", metavar="NAME=VALUE", help="override a spider attribute")
     _add_network_options(c)

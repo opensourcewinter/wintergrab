@@ -22,9 +22,15 @@ class DomainSlot:
     backoffs: int = 0
     min_delay: float = 0.0
     latencies: list[float] = field(default_factory=list)
+    requests: int = 0  # requests started (for rate measurements)
+    last_pushback: float = 0.0  # monotonic time of the last push-back
 
     def ready_at(self) -> float:
         return max(self.next_start, self.paused_until)
+
+    @property
+    def avg_latency(self) -> float | None:
+        return sum(self.latencies) / len(self.latencies) if self.latencies else None
 
 
 class AutoThrottle:
@@ -93,6 +99,7 @@ class AutoThrottle:
 
     def on_start(self, slot: DomainSlot, now: float) -> None:
         slot.active += 1
+        slot.requests += 1
         delay = slot.delay
         if self.randomize and delay > 0:
             delay *= random.uniform(0.5, 1.5)
@@ -124,6 +131,7 @@ class AutoThrottle:
         slot = self.slot(domain)
         slot.backoffs += 1
         slot.successes = 0
+        slot.last_pushback = time.monotonic()
         if retry_after:
             slot.paused_until = max(slot.paused_until, time.monotonic() + retry_after)
         if not self.enabled:
@@ -148,6 +156,66 @@ class AutoThrottle:
         slot = self.slot(domain)
         slot.min_delay = max(slot.min_delay, delay)
         slot.delay = max(slot.delay, delay)
+
+    # -- introspection ---------------------------------------------------- #
+    def target_delay(self, slot: DomainSlot) -> float:
+        """The delay healthy responses pull towards: ``latency / target_concurrency`` (at least the floor)."""
+        floor = max(self.base_delay, slot.min_delay)
+        latency = slot.avg_latency
+        if latency is None or not self.enabled:
+            return max(floor, slot.delay if not self.enabled else floor)
+        return min(self.max_delay, max(floor, latency / self.target_concurrency))
+
+    def mode(self, slot: DomainSlot, now: float | None = None) -> str:
+        """``"paused"`` (honouring Retry-After), ``"backing off"`` (push-back in the last 30 s),
+        ``"recovering"`` (slower than the target after a push-back) or ``"normal"``."""
+        now = time.monotonic() if now is None else now
+        if slot.paused_until > now:
+            return "paused"
+        if slot.last_pushback and now - slot.last_pushback < 30:
+            return "backing off"
+        if slot.last_pushback and (
+            slot.concurrency < self.max_concurrency or slot.delay > self.target_delay(slot) * 1.5 + 1e-9
+        ):
+            return "recovering"
+        return "normal"
+
+    def state(self, domain: str, now: float | None = None) -> dict[str, Any]:
+        """Live throttle state of a domain: delays, concurrency, latency, target rate and back-off mode."""
+        slot = self.slot(domain)
+        now = time.monotonic() if now is None else now
+        latency = slot.avg_latency
+        target_delay = self.target_delay(slot)
+        # Requests per second the current settings allow: spacing (1/delay) and parallelism
+        # (concurrency/latency), whichever binds first.
+        limits = []
+        if slot.delay > 0:
+            limits.append(1.0 / slot.delay)
+        if latency:
+            limits.append(slot.concurrency / latency)
+        return {
+            "domain": domain,
+            "mode": self.mode(slot, now),
+            "active": slot.active,
+            "concurrency": slot.concurrency,
+            "max_concurrency": self.max_concurrency,
+            "delay": round(slot.delay, 4),
+            "target_delay": round(target_delay, 4),
+            "min_delay": slot.min_delay,
+            "avg_latency": round(latency, 4) if latency is not None else None,
+            "allowed_rate": round(min(limits), 3) if limits else None,
+            "paused_for": round(max(0.0, slot.paused_until - now), 2),
+            "backoffs": slot.backoffs,
+            "requests": slot.requests,
+        }
+
+    def describe(self, domain: str) -> str:
+        """One line for reports, e.g. ``"backing off (delay 8.0s, concurrency 1/4)"``."""
+        st = self.state(domain)
+        detail = f"delay {st['delay']:.1f}s, concurrency {st['concurrency']}/{st['max_concurrency']}"
+        if st["paused_for"]:
+            detail = f"paused {st['paused_for']:.0f}s more, " + detail
+        return f"{st['mode']} ({detail})"
 
     # -- persistence ------------------------------------------------------ #
     def snapshot(self) -> dict[str, dict[str, Any]]:

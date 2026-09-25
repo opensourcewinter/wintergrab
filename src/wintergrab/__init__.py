@@ -65,7 +65,7 @@ from .parser.autoextract import LearnedSchema, RecordGroup
 from .proxy import ProxyRotator
 from .request import Request
 from .sitemaps import SitemapEntry, sitemap
-from .spider import AutoThrottle, CrawlResult, SessionManager, Spider
+from .spider import AutoThrottle, CrawlResult, DropItem, IgnoreRequest, ItemPipeline, SessionManager, Spider
 from .urls import URLNormalizer, URLRules, normalize_url, url_template
 from .utils import configure_logging
 
@@ -83,6 +83,7 @@ __all__ = [
     "CheckpointError",
     "ConfigurationError",
     "CrawlResult",
+    "DropItem",
     "ExportError",
     "ExtractionError",
     "FetchError",
@@ -92,6 +93,8 @@ __all__ = [
     "HTTPCache",
     "HTTPError",
     "HTTPStatusError",
+    "IgnoreRequest",
+    "ItemPipeline",
     "LearnedSchema",
     "MemoryStorage",
     "NetworkError",
