@@ -276,3 +276,22 @@ def test_a_crawl_gives_up_on_a_page_too_large(big_server) -> None:
     assert result.stats["pages"] == 2 and result.stats.get("retries", 0) == 0
     [failure] = result.failures
     assert failure.signature == "FetchError:too_large" and "larger than max_response_bytes" in failure.confirmed_cause
+
+
+def test_the_other_methods_and_regular_expressions_on_the_body(site) -> None:
+    with Fetcher(impersonate=None, retries=0) as fetcher:
+        assert fetcher.head(site.url + "/books/").status == 200
+        assert [getattr(fetcher, m)(site.url + "/headers").status for m in ("put", "patch", "delete")] == [501] * 3
+        page = fetcher.get(site.url + "/books/")
+    assert page.content == page.body and page.re(r"<title>(.*?)</title>") == ["All products | Books to Scrape"]
+    assert page.re_first(r"<h9>(.*)</h9>", default="none") == "none" and len(page.find_by_regex(r"[Nn]ext")) == 1
+
+    async def other_methods() -> list[int]:
+        async with AsyncFetcher(impersonate=None, retries=0) as fetcher:
+            return [
+                (await getattr(fetcher, m)(site.url + "/headers")).status for m in ("head", "put", "patch", "delete")
+            ]
+
+    import asyncio
+
+    assert asyncio.run(other_methods()) == [200, 501, 501, 501]

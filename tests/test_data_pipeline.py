@@ -672,3 +672,19 @@ def test_cli_crawl_with_a_pipeline(site, tmp_path) -> None:
     assert code == 0
     [item] = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert item["name"] == "Product 1" and item["price"] == 6.25 and item["currency"] == "USD"
+
+
+def test_model_stages_round_trip_through_their_config() -> None:
+    from wintergrab.data.pipeline import Analyze, Classify
+
+    pipeline = Pipeline([Analyze("body"), Classify("body", model="ollama:llama3", categories=["a", "b"])])
+    config = pipeline.to_config()
+    assert Pipeline.from_config(config).to_config() == config  # (what a pipeline file holds, read back as it was)
+    assert config["stages"][1]["classify"]["categories"] == ["a", "b"]
+
+
+def test_a_schema_inferred_from_records() -> None:
+    from wintergrab.data.schema import Schema
+
+    schema = Schema.infer([{"price": 10.5, "name": "A"}, {"price": 12, "name": "B"}], name="products")
+    assert schema.name == "products" and {f.name for f in schema.fields} >= {"price", "name"}

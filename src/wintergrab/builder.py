@@ -474,6 +474,9 @@ class _Handler(BaseHTTPRequestHandler):
     server: _Server
     server_version = "wintergrab-builder"
 
+    def version_string(self) -> str:
+        return self.server_version  # (the Server header names no Python version)
+
     def log_message(self, format: str, *args: Any) -> None:
         log.debug("%s " + format, self.address_string(), *args)
 

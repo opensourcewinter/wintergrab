@@ -1081,8 +1081,18 @@ an error that says so, not a setting silently ignored
 - New examples: a record from a template with its evidence, a goal, a
   recorded crawl replayed after a change, a project file, and a plugin
   package. Each is tested offline, and live before releases.
+- Tests for public functions that no test ran, found by measuring coverage
+  over the whole suite: the `wintergrab dashboard` command itself, the other
+  HTTP methods, regular expressions over a response's body, model stages'
+  pipeline configuration read back, schema inference, sitemap entries
+  changed since a date, `load_spider`. Each worked but one:
+  `add_cookies({name: value})` (see Fixes).
 
 ### Fixes
+
+- The dashboard's and the builder's `Server` header named the Python
+  version (`wintergrab-dashboard Python/3.11.15`): each names the product
+  alone now, as the job trigger listener's does.
 
 - `Fetcher.add_cookies({name: value}, url=...)` (and `AsyncFetcher`'s), as
   documented, raised `KeyError: 'secure'` whatever it was given: only the

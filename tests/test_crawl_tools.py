@@ -132,3 +132,15 @@ def test_progress_line_renders(site) -> None:
     line = stream.getvalue()
     assert "5 pages" in line and "3 items" in line and "2 cached" in line and "1 retries" in line
     assert not ProgressDisplay.supported(io.StringIO())
+
+
+def test_sitemap_entries_changed_since() -> None:
+    from datetime import datetime, timezone
+
+    from wintergrab.sitemaps import SitemapEntry, filter_entries
+
+    entries = [SitemapEntry("https://s.example/new", lastmod="2026-03-02"),
+               SitemapEntry("https://s.example/old", lastmod="2025-12-31"), SitemapEntry("https://s.example/unknown")]  # fmt: skip
+    since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert [e.loc for e in filter_entries(entries, since)] == ["https://s.example/new"]  # (no lastmod: not known new)
+    assert len(filter_entries(entries, None)) == 3

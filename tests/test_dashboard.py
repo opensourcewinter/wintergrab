@@ -207,3 +207,27 @@ def test_a_run_s_records_a_page_at_a_time(tmp_path, dashboard_server) -> None:
     assert "kept no output" in fetch(server, "/api/runs/run-3/items")[2]
     assert "is not here any more" in fetch(server, "/api/runs/run-4/items")[2]
     assert fetch(server, "/api/runs/run-9/items")[0] == 404
+
+
+def test_the_dashboard_command(tmp_path) -> None:
+    import subprocess
+    import sys
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "wintergrab", "dashboard", "--port", "0", "--workspace", str(tmp_path / "ws")],
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert process.stderr is not None
+        line = process.stderr.readline()  # "wintergrab dashboard: http://127.0.0.1:PORT/  (...; Ctrl+C to stop)"
+        url = line.split()[2].rstrip("/")
+        with urllib.request.urlopen(url + "/api/runs", timeout=10) as answer:
+            assert json.loads(answer.read()) == [] and answer.headers["Server"] == "wintergrab-dashboard"
+        with urllib.request.urlopen(urllib.request.Request(url + "/", method="HEAD"), timeout=10) as answer:
+            assert answer.status == 200
+    finally:
+        process.terminate()
+        process.wait(10)
+        if process.stderr is not None:
+            process.stderr.close()

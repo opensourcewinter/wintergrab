@@ -94,8 +94,10 @@ class TriggerServer(ThreadingHTTPServer):
 class _Handler(BaseHTTPRequestHandler):
     server: TriggerServer
     server_version = "wintergrab"
-    sys_version = ""
     timeout = 30  # (seconds: a client that sends nothing does not hold a thread for ever)
+
+    def version_string(self) -> str:
+        return self.server_version  # (the Server header names no Python version)
 
     def log_message(self, format: str, *args: Any) -> None:
         log.debug("%s: %s", self.client_address[0], format % args)

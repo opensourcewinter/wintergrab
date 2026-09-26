@@ -226,3 +226,13 @@ def test_pages_a_browser_gave_replay_too(fresh_site, tmp_path) -> None:
     before = sum(fresh_site.site.hits.values())
     assert replay(result.run_id, Spa, registry=tmp_path / "ws").same
     assert sum(fresh_site.site.hits.values()) == before
+
+
+def test_load_spider_by_module_or_file(tmp_path) -> None:
+    from wintergrab.runs import load_spider
+
+    assert load_spider("wintergrab.spider:Spider") is Spider
+    (tmp_path / "shop.py").write_text("from wintergrab import Spider\n\nclass Shop(Spider):\n    name = 'shop'\n")
+    assert load_spider(f"{tmp_path / 'shop.py'}:Shop").name == "shop"
+    with pytest.raises(ConfigurationError, match=r"'module:Class' or 'file\.py:Class'"):
+        load_spider("no-class-here")
