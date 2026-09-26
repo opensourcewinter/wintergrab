@@ -1,4 +1,4 @@
-"""Speed of page analysis: extraction, page classification and technology detection (no network).
+"""Speed of page analysis: extraction, classification, technology detection, snapshots (no network).
 
     .venv/bin/python benchmarks/bench_pages.py [--repeat 5] [--rounds 200]
 
@@ -21,6 +21,7 @@ from wintergrab import __version__
 from wintergrab.data import Schema
 from wintergrab.extraction import Extractor
 from wintergrab.fetchers.response import Headers, Response
+from wintergrab.history import snapshot_page
 from wintergrab.intel import classify_page, classify_url, detect_technologies
 
 SCHEMA = Schema.from_dict(
@@ -131,6 +132,7 @@ def main() -> None:
         ("Extractor.extract (13 fields)", extractor.extract),
         ("classify_page", classify_page),
         ("detect_technologies", detect_technologies),
+        ("snapshot_page", snapshot_page),
     ]
     print(f"wintergrab {__version__}, Python {platform.python_version()}, {platform.machine()}, "
           f"median of {args.repeat} runs of {args.rounds} pages\n")  # fmt: skip

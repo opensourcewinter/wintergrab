@@ -55,6 +55,8 @@ class CrawlResult:
     failures: list[FailureDiagnosis] = field(default_factory=list)
     #: Final metrics snapshot: rates, latency percentiles, per-domain throttle state, budgets.
     metrics: dict[str, Any] = field(default_factory=dict)
+    #: With ``history``: what changed since the previous run (a :class:`~wintergrab.history.ChangeReport`).
+    changes: Any = None
 
     @property
     def paused(self) -> bool:
@@ -263,6 +265,15 @@ class Spider:
     event_log: bool | str | None = None
     #: Keep items in memory for ``CrawlResult.items``. Turn off for huge crawls.
     keep_items: bool = True
+    #: Record every page's fingerprints and items in this history file (a path, or a
+    #: :class:`~wintergrab.history.PageHistory`): the crawl ends with what changed since the
+    #: last run (``CrawlResult.changes``), and each URL's change rate is tracked.
+    history: Any = None
+    #: Also keep every page's HTML in the history (compressed).
+    history_html: bool = False
+    #: With ``history``: don't fetch pages that have probably not changed since they were last
+    #: seen, judging by how often they changed before. Start URLs are always fetched.
+    skip_fresh: bool = False
     #: Log level for the ``wintergrab`` logger (``None`` leaves logging alone).
     log_level: str | None = "INFO"
     #: Seconds between progress log lines.

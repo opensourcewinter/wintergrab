@@ -167,6 +167,9 @@ class Engine:
         self._warned_options: set[str] = set()
         self._item_keys: set[bytes] = set()
         self._progress: ProgressDisplay | None = None
+        self.history: Any = None  # a PageHistory while recording
+        self._history_run: int | None = None
+        self._own_history = False
 
     # ------------------------------------------------------------------ #
     # control (thread-safe entry points)
@@ -275,6 +278,7 @@ class Engine:
                 self.robots = RobotsPolicy(self._fetch_robots, spider.robots_user_agent)
             await maybe_await(spider.on_start())
             await self._open_pipelines()
+            self._open_history(state)
             if state is not None:
                 self._restore(state)
             elif spider.retry_dead_letters:
@@ -486,6 +490,54 @@ class Engine:
         if self.spider.output:
             self.exporter = open_exporter(self.spider.output, append=append, unique_key=self.spider.unique_key)
 
+    def _open_history(self, state: dict[str, Any] | None) -> None:
+        """Start recording into the history (or continue the run a resumed crawl began)."""
+        setting = self.spider.history
+        if not setting:
+            if self.spider.skip_fresh:
+                raise ConfigurationError("needs a history to know which pages are fresh", key="skip_fresh")
+            return
+        from ..history import PageHistory
+
+        if isinstance(setting, PageHistory):
+            self.history = setting
+        else:
+            self.history = PageHistory(setting, keep_html=self.spider.history_html)
+            self._own_history = True
+        run = (state or {}).get("history_run")
+        if run is not None and any(r.id == run for r in self.history.runs(self.spider.name)):
+            self._history_run = int(run)  # a resumed crawl continues its run
+        else:
+            self._history_run = self.history.start_run(self.spider.name)
+
+    # The history must never break a crawl: its errors are counted and logged.
+    def _history_failed(self, what: str, exc: Exception) -> None:
+        self.stats.inc("history_errors")
+        log.error("history: could not %s: %s", what, describe(exc))
+
+    def _record_page(self, response: Response, items: list[Any] | None) -> None:
+        try:
+            self.history.observe(self._history_run, response, items=items)
+        except Exception as exc:
+            self._history_failed(f"record {response.url}", exc)
+
+    def _record_status(self, url: str, status: int) -> None:
+        try:
+            self.history.observe_status(self._history_run, url, status)
+        except Exception as exc:
+            self._history_failed(f"record {url}", exc)
+
+    def _still_fresh(self, request: Request) -> bool:
+        """With ``skip_fresh``: the page has probably not changed since it was last fetched."""
+        try:
+            if self.history.due(request.url):
+                return False
+            self.history.mark_skipped(self._history_run, request.url)
+            return True
+        except Exception as exc:
+            self._history_failed(f"check {request.url}", exc)
+            return False  # when in doubt, fetch
+
     def _restore(self, state: dict[str, Any]) -> None:
         self.stats.update(state.get("stats") or {})
         self.stats.inc("runs")
@@ -666,6 +718,7 @@ class Engine:
         self.stats["status"] = status
         if self.dead_letters is not None and self.dead_letters.added:
             self.stats["dead_letters"] = self.dead_letters.added
+        changes = self._close_history(status)
         result = CrawlResult(
             items=self.items,
             stats=dict(self.stats),
@@ -673,6 +726,7 @@ class Engine:
             crawl_dir=spider.crawl_dir,
             failures=self.failures.diagnose(self.throttle),
             metrics=self.snapshot(),
+            changes=changes,
         )
         self._log_progress(final=True)
         try:
@@ -692,6 +746,28 @@ class Engine:
         for sink in self._own_sinks:
             sink.close()
         return result
+
+    def _close_history(self, status: str) -> Any:
+        """Finish the history run and report what changed since the previous one."""
+        if self.history is None or self._history_run is None:
+            return None
+        report = None
+        try:
+            self.history.finish_run(self._history_run, status, dict(self.stats))
+            if status != "paused":  # a paused run continues when the crawl resumes
+                report = self.history.compare(new=self._history_run)
+                self.stats["changes"] = report.counts()
+                if report.old is None:
+                    log.info("history: first run of %s recorded (%d pages)", self.spider.name, len(report.added))
+                else:
+                    log.info("changes since run %d:\n%s", report.old.id, report.summary())
+                self.events.emit("changes_detected", run=self._history_run, kinds=report.kinds(), **report.counts())
+        except Exception as exc:
+            log.error("could not finish the history run: %s", describe(exc))
+        finally:
+            if self._own_history:
+                self.history.close()
+        return report
 
     def snapshot(self) -> dict[str, Any]:
         """Live metrics (see :mod:`wintergrab.spider.metrics`)."""
@@ -742,6 +818,8 @@ class Engine:
             "throttle": self.throttle.snapshot(),
             "item_keys": self._item_keys,
         }
+        if self._history_run is not None:
+            state["history_run"] = self._history_run
         if isinstance(self.scheduler, DiskScheduler):
             # The queue and seen-filter live in the frontier database already.
             self.scheduler.commit()
@@ -844,6 +922,9 @@ class Engine:
                 except FetchError:
                     pass  # e.g. DNS trouble: the fetch reports (and retries) it
             if self.robots is not None and not await self._robots_allow(request, domain):
+                return
+            if spider.skip_fresh and request.depth > 0 and self._still_fresh(request):
+                self.stats.inc("history_skipped")
                 return
             response: Response | None = None
             if self._mw_request:
@@ -994,6 +1075,8 @@ class Engine:
                 ok_status = False
             if not ok_status:
                 self.stats.inc("http_errors")
+                if self.history is not None:
+                    self._record_status(response.url, response.status)
                 if not retryable:  # retryable ones were recorded above
                     self.failures.failure(domain, request.url, response=response, final=True)
                 detail = "looks like a bot-check page" if blocked else None
@@ -1246,8 +1329,11 @@ class Engine:
         callback = request.callback or self.spider.parse
         if isinstance(callback, str):
             callback = getattr(self.spider, callback)
+        items: list[Any] | None = [] if self.history is not None else None
         try:
-            await self._consume(callback(response, **request.cb_kwargs), request)
+            await self._consume(callback(response, **request.cb_kwargs), request, items)
+            if self.history is not None:
+                self._record_page(response, items)
         except (CheckpointError, BrowserNotAvailable) as exc:
             self._requeue(request)  # so the page is processed again after a resume
             self.fail(exc)
@@ -1256,23 +1342,24 @@ class Engine:
             self.failures.failure(request.host, request.url, error=exc, final=True, stage="callback")
             log.exception("error in %s for %s: %s", getattr(callback, "__name__", callback), response.url, exc)
 
-    async def _consume(self, result: Any, parent: Request) -> None:
+    async def _consume(self, result: Any, parent: Request, items: list[Any] | None = None) -> None:
+        """Handle what a callback returned; ``items`` collects the items it produced."""
         if result is None:
             return
         if inspect.isasyncgen(result):
             async for output in result:
-                await self._output(output, parent)
+                await self._output(output, parent, items)
         elif inspect.isawaitable(result):
-            await self._consume(await result, parent)
+            await self._consume(await result, parent, items)
         elif isinstance(result, (Request, dict, str, bytes)):
-            await self._output(result, parent)
+            await self._output(result, parent, items)
         elif inspect.isgenerator(result) or isinstance(result, (list, tuple)):
             for output in result:
-                await self._output(output, parent)
+                await self._output(output, parent, items)
         else:
-            await self._output(result, parent)
+            await self._output(result, parent, items)
 
-    async def _output(self, output: Any, parent: Request) -> None:
+    async def _output(self, output: Any, parent: Request, items: list[Any] | None = None) -> None:
         if output is None:
             return
         if isinstance(output, Request):
@@ -1284,7 +1371,9 @@ class Engine:
                 output[:40],
             )
         else:
-            await self._item(output)
+            kept = await self._item(output)
+            if kept is not None and items is not None:
+                items.append(kept)
 
     def _enqueue_child(self, request: Request, parent: Request) -> None:
         spider = self.spider
@@ -1367,22 +1456,23 @@ class Engine:
         self._item_keys.add(digest)
         return False
 
-    async def _item(self, item: Any) -> None:
+    async def _item(self, item: Any) -> Any:
+        """Process, export and keep an item; returns it as exported (``None`` if it was dropped)."""
         spider = self.spider
         if spider.max_items is not None and self.stats.get("items", 0) >= spider.max_items:
             self.stats.inc("items_over_limit")
-            return
+            return None
         processed = await maybe_await(spider.process_item(item))
         if processed is None:
             self.stats.inc("items_dropped")
-            return
+            return None
         if self._pipes:
             processed = await self._run_pipelines(processed)
             if processed is None:
-                return
+                return None
         if spider.unique_key and self._is_duplicate_item(processed):
             self.stats.inc("items_duplicate")
-            return
+            return None
         self.stats.inc("items")
         if self.exporter is not None:
             try:
@@ -1402,6 +1492,7 @@ class Engine:
             await self.item_queue.put(processed)
         if spider.max_items is not None and self.stats["items"] >= spider.max_items:
             self._begin_stop("limit")
+        return processed
 
 
 __all__ = ["Engine", "Stats", "proxy_label"]

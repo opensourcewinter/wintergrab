@@ -172,8 +172,8 @@ median of 5 runs of 200 pages, parsing included):
 
 | Page | Parse only | `classify_page` | `detect_technologies` |
 |---|---:|---:|---:|
-| product page with JSON-LD (11 KB) | 0.26 ms | 3.1 ms | 0.9 ms |
-| category page, 60 cards (10 KB) | 0.29 ms | 2.6 ms | 0.6 ms |
-| product page, 480 KB of text | 1.5 ms | 19 ms | 12 ms |
+| product page with JSON-LD (11 KB) | 0.26 ms | 3.0 ms | 0.9 ms |
+| category page, 60 cards (10 KB) | 0.29 ms | 2.6 ms | 0.7 ms |
+| product page, 480 KB of text | 1.5 ms | 20 ms | 12 ms |
 
 `classify_url` takes about 11 µs.

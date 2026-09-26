@@ -136,8 +136,8 @@
 - CLI: `get --extract SCHEMA [--explain] [--provenance] [--all]`,
   `crawl URL --extract SCHEMA`.
 - Measured with `benchmarks/bench_pages.py` (one core, parsing included):
-  6.9 ms for a 13-field record from an 11 KB product page with JSON-LD,
-  6.5 ms without structured data, 61 ms from a page with 480 KB of text.
+  6.7 ms for a 13-field record from an 11 KB product page with JSON-LD,
+  6.8 ms without structured data, 62 ms from a page with 480 KB of text.
 
 ### Entity resolution (`wintergrab.data.entities`)
 
@@ -159,6 +159,26 @@
   ...] [-o] [--review-output] [--annotate]`.
 - Measured: about 3,800 mentions per second on 20,000 generated company
   names (`benchmarks/bench_data.py`).
+
+### Crawl history and change detection (`wintergrab.history`)
+
+- `Spider.history = "shop.history"` (`crawl --history FILE`) records a
+  snapshot of every page (fingerprints of its text, title, description,
+  meta tags, structured data and schema.org types, price and availability,
+  layout, images, navigation and items; the HTML with `history_html`) in one
+  SQLite file, about 1.3 KB per page, and ends the crawl with what changed
+  since the previous run: `result.changes` (`+ added`, `- removed`, `~
+  modified` by kind, `= unchanged`, and pages not reached by an early stop),
+  `stats["changes"]` and a `changes_detected` event. Tokens, nonces and
+  cache-busting queries do not count as changes; resumed crawls continue
+  their run.
+- Freshness per URL: first and last seen, last changed, and a change rate
+  (Cho and Garcia-Molina's estimator) that sets when to fetch again;
+  `skip_fresh = True` (`--skip-fresh`) does not fetch pages that are not due.
+- `wintergrab history FILE` lists runs and changes, `--compare OLD NEW`,
+  `--url URL` (a page over time), `--due`, `--json`.
+- Measured: 2.4 ms of fingerprints per 11 KB page (`snapshot_page` in
+  `benchmarks/bench_pages.py`), about 2.9 ms per page with the database write.
 
 ### Dataset versions and differences (`wintergrab.data.versions`)
 
@@ -188,8 +208,8 @@
   over headers, cookie names, meta tags, asset URLs, HTML markers and the
   URL, with versions, implied technologies and evidence-based confidence.
   Add fingerprints with `TechDetector(extra=[TechRule(...)])`.
-- Measured: 3.1 ms to classify and 0.9 ms to profile an 11 KB product page;
-  19 ms and 12 ms for a page with 480 KB of text; `classify_url` 11 µs.
+- Measured: 3.0 ms to classify and 0.9 ms to profile an 11 KB product page;
+  20 ms and 12 ms for a page with 480 KB of text; `classify_url` 11 µs.
 
 ## 0.2.0
 

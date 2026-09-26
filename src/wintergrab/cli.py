@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,15 @@ EPILOG_CRAWL = """examples:
 
 Press Ctrl+C once to pause (state is saved when --crawl-dir is set); run the
 same command again to resume. Press Ctrl+C twice to force quit.
+"""
+
+EPILOG_HISTORY = """examples:
+  wintergrab crawl https://shop.example --history shop.history -o items.jsonl   # record a run
+  wintergrab history shop.history                     # the runs, and what changed in the last one
+  wintergrab history shop.history --compare 3 7       # between two runs
+  wintergrab history shop.history --url https://shop.example/p/1   # one page over time
+  wintergrab history shop.history --due               # pages that have probably changed by now
+  wintergrab crawl https://shop.example --history shop.history --skip-fresh   # fetch only those
 """
 
 EPILOG_DATA = """examples:
@@ -536,10 +546,15 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         "max_runtime": args.max_runtime,
         "crawl_order": args.order,
         "event_log": args.events,
+        "history": args.history,
     }
     if args.retry_failed:
         overrides["retry_dead_letters"] = True
     overrides.update({k: v for k, v in option_map.items() if v is not None})
+    if args.skip_fresh:
+        overrides["skip_fresh"] = True
+    if args.history_html:
+        overrides["history_html"] = True
     if args.no_autothrottle:
         overrides["autothrottle"] = False
     if args.no_robots:
@@ -594,6 +609,9 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     _print_failures(result, verbose=args.verbose)
+    if result.changes is not None and result.changes.old is not None and args.verbose >= 0:
+        print(f"changes since run {result.changes.old.id} ({args.history or spider.history}):", file=sys.stderr)
+        print(result.changes.summary(), file=sys.stderr)
     incomplete = getattr(spider, "incomplete", 0)
     if incomplete:
         print(f"{incomplete} page(s) had no complete record (a required field was missing)", file=sys.stderr)
@@ -952,6 +970,85 @@ def cmd_data_log(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_history(args: argparse.Namespace) -> int:
+    from .history import PageHistory
+
+    if not Path(args.file).is_file():
+        print(f"error: no history file at {args.file}", file=sys.stderr)
+        return 2
+    try:
+        history = PageHistory(args.file)
+    except ConfigurationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    try:
+        if args.url:
+            return _history_url(history, args)
+        if args.due:
+            now = time.time()
+            due = [url for url in history.urls() if history.due(url, now)]
+            if args.json:
+                print(json.dumps({"due": len(due), "urls": due[: args.show]}, indent=2))
+            else:
+                print(f"{len(due):,} page(s) due for another look")
+                for url in due[: args.show]:
+                    print(f"  {url}")
+            return 0
+        runs = history.runs(args.name)
+        if not runs:
+            print("no runs recorded" + (f" for {args.name}" if args.name else ""))
+            return 0
+        report = history.compare(*args.compare) if args.compare else history.compare(name=args.name)
+        if args.json:
+            print(json.dumps({"runs": [vars(run) for run in runs], "changes": report.to_dict()}, indent=2, default=str))
+            return 0
+        if not args.compare:
+            for run in runs[-args.show :]:
+                print(run.describe())
+            print()
+        print(report.describe(args.show))
+        return 0
+    except ConfigurationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        history.close()
+
+
+def _history_url(history: Any, args: argparse.Namespace) -> int:
+    from .history import compare_snapshots
+
+    snapshots = history.snapshots(args.url)
+    if not snapshots:
+        print(f"error: {args.url} is not in the history", file=sys.stderr)
+        return 2
+    info = history.freshness(args.url)
+    if args.json:
+        data = {"freshness": info.to_dict(), "snapshots": [{"run": run, **snap.to_dict()} for run, snap in snapshots]}
+        print(json.dumps(data, indent=2, default=str))
+        return 0
+    previous = None
+    for run, snap in snapshots:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(snap.fetched_at))
+        facts = [f"status {snap.status}"]
+        if snap.price is not None:
+            facts.append(f"price {snap.price:g}{' ' + snap.currency if snap.currency else ''}")
+        if snap.availability:
+            facts.append(snap.availability)
+        change = compare_snapshots(previous, snap) if previous is not None else None
+        facts.append(
+            "changed: " + ", ".join(change.kinds) if change else ("first seen" if previous is None else "unchanged")
+        )
+        print(f"run {run:<4} {when}  " + "; ".join(facts))
+        previous = snap
+    rate = f"{info.rate:.2f} change(s) per day" if info.rate is not None else "change rate unknown (seen once)"
+    print(
+        f"{info.observations} fetch(es), {info.changes} with changes; {rate}; "
+        f"look again after {info.recrawl_after / 3600:.1f} h; still unchanged now with probability {info.fresh:.0%}"
+    )
+    return 0
+
+
 def cmd_data_quality(args: argparse.Namespace) -> int:
     from .data import QualityMonitor, QualityReport, load_schema
     from .data.io import read_records
@@ -1125,6 +1222,13 @@ def build_parser() -> argparse.ArgumentParser:
         "-o", "--output", metavar="FILE", help="save items to .jsonl/.json/.csv (default: JSON lines on stdout)"
     )
     c.add_argument("--crawl-dir", metavar="DIR", help="directory for pause/resume state")
+    c.add_argument(
+        "--history", metavar="FILE", help="record page fingerprints here and report what changed since the last run"
+    )
+    c.add_argument("--history-html", action="store_true", help="keep every page's HTML in the history too")
+    c.add_argument(
+        "--skip-fresh", action="store_true", help="with --history: skip pages that have probably not changed"
+    )
     c.add_argument("--fresh", action="store_true", help="ignore saved state and start over")
     c.add_argument("--concurrency", type=int, metavar="N", help="max requests in flight")
     c.add_argument("--per-domain", type=int, metavar="N", help="max requests in flight per domain")
@@ -1273,6 +1377,22 @@ def build_parser() -> argparse.ArgumentParser:
     log = actions.add_parser("log", help="list the versions saved in a versions directory")
     log.add_argument("directory", metavar="DIR")
     log.set_defaults(func=cmd_data_log)
+
+    h = sub.add_parser(
+        "history",
+        help="what changed between crawls, and how often pages change",
+        description="Read a history file written by `crawl --history` (or a spider's `history` setting).",
+        epilog=EPILOG_HISTORY,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    h.add_argument("file", metavar="FILE", help="the history file")
+    h.add_argument("--name", help="only the runs of this spider")
+    h.add_argument("--compare", nargs=2, type=int, metavar=("OLD", "NEW"), help="compare two runs (by id)")
+    h.add_argument("--url", help="the history of one page, and how often it changes")
+    h.add_argument("--due", action="store_true", help="the pages due for another look")
+    h.add_argument("--show", type=int, default=10, metavar="N", help="pages to list (10)")
+    h.add_argument("--json", action="store_true", help="print JSON")
+    h.set_defaults(func=cmd_history)
 
     s = sub.add_parser("shell", help="interactive Python shell with a page loaded")
     s.add_argument("url", nargs="?")

@@ -176,6 +176,19 @@ fields that changed, writes the details with `-o`, and with `--exit-code`
 exits with status 1 when they differ. See [data.md](data.md) and
 [entities.md](entities.md).
 
+## `wintergrab history`: what changed between crawls
+
+```bash
+wintergrab crawl URL --history FILE [--history-html] [--skip-fresh]   # record, and report changes
+wintergrab history FILE [--name SPIDER]          # the runs, and what the last one changed
+wintergrab history FILE --compare OLD NEW        # two runs, by id
+wintergrab history FILE --url URL                # one page over time, and how often it changes
+wintergrab history FILE --due                    # pages that have probably changed by now
+```
+
+`--json` prints JSON; `--show N` sets how many pages are listed. See
+[history.md](history.md).
+
 ## `wintergrab shell`: explore interactively
 
 ```bash

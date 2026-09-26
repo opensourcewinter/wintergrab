@@ -267,10 +267,10 @@ URL normalization is the largest single cost inside `Schema.normalize`
 
 ## Page analysis
 
-`bench_pages.py` measures extraction, page classification and technology
-detection on synthetic pages (no network). Every measurement builds a fresh
-`Response`, so HTML parsing is included, as in a crawl; "parse only" is that
-baseline.
+`bench_pages.py` measures extraction, page classification, technology
+detection and history snapshots on synthetic pages (no network). Every
+measurement builds a fresh `Response`, so HTML parsing is included, as in a
+crawl; "parse only" is that baseline.
 
 ```bash
 .venv/bin/python benchmarks/bench_pages.py --repeat 5 --rounds 200
@@ -279,14 +279,14 @@ baseline.
 One core of a 4-vCPU cloud VM, Python 3.11.15, median of 5 runs of 200
 pages (10 for the large page):
 
-| Page | parse only | Extractor.extract (13 fields) | classify_page | detect_technologies |
-|---|---:|---:|---:|---:|
-| product page, JSON-LD (11 KB) | 0.26 ms | 6.90 ms | 3.10 ms | 0.88 ms |
-| product page, no structured data (10 KB) | 0.26 ms | 6.49 ms | 3.03 ms | 0.87 ms |
-| category page, 60 cards (10 KB) | 0.29 ms | 5.97 ms | 2.57 ms | 0.64 ms |
-| large product page (482 KB) | 1.47 ms | 61.08 ms | 19.14 ms | 11.82 ms |
+| Page | parse only | Extractor.extract (13 fields) | classify_page | detect_technologies | snapshot_page |
+|---|---:|---:|---:|---:|---:|
+| product page, JSON-LD (11 KB) | 0.26 ms | 6.72 ms | 3.03 ms | 0.86 ms | 2.44 ms |
+| product page, no structured data (10 KB) | 0.26 ms | 6.83 ms | 3.07 ms | 0.86 ms | 2.36 ms |
+| category page, 60 cards (10 KB) | 0.29 ms | 6.04 ms | 2.61 ms | 0.74 ms | 3.37 ms |
+| large product page (482 KB) | 1.48 ms | 61.79 ms | 19.68 ms | 11.69 ms | 16.29 ms |
 
-`classify_url`: 11.1 µs per URL.
+`classify_url`: 11.5 µs per URL.
 
 The large page is mostly text. Scanning long texts is where regular
 expressions without a literal start cost the most: the money pattern was

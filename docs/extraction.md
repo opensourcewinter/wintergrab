@@ -181,9 +181,9 @@ record in:
 
 | Page | Parse only | `extract` |
 |---|---:|---:|
-| product page with JSON-LD (11 KB) | 0.26 ms | 6.9 ms |
-| product page without structured data (10 KB) | 0.26 ms | 6.5 ms |
-| product page, 480 KB of text | 1.5 ms | 61 ms |
+| product page with JSON-LD (11 KB) | 0.26 ms | 6.7 ms |
+| product page without structured data (10 KB) | 0.26 ms | 6.8 ms |
+| product page, 480 KB of text | 1.5 ms | 62 ms |
 
 Most of the time goes to the heuristics that read the whole page (the text
 patterns and the DOM conventions), so it grows with the page's size.

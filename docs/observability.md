@@ -43,6 +43,7 @@ Or let the spider write them: `event_log = True` writes
 | `budget_exhausted` | `budget`, `used`, `limit` |
 | `pipeline_report` | `pipeline`, `stages` (per-stage counts, when a [data pipeline](data.md#pipelines) closes) |
 | `quality_degraded` | `dataset`, `field`, `code`, `message`, `severity` ([quality monitoring](data.md#quality)) |
+| `changes_detected` | `run`, `added`, `removed`, `modified`, `unchanged`, `missing`, `skipped`, `kinds` (at the end of a crawl with a [history](history.md)) |
 
 `response` and `item_scraped` fire for every page and item, so they are
 only built when someone subscribed to them: an unobserved crawl pays

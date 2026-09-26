@@ -304,6 +304,14 @@ and tells you if one isn't.
 
 `spider.stop()` ends the crawl gracefully without keeping the queue.
 
+## Change detection
+
+`history = "shop.history"` records every page's fingerprints and items, and
+the crawl ends with what changed since the previous run (`result.changes`:
+pages added, removed and modified, with price and availability changes).
+`skip_fresh = True` then skips the pages that have probably not changed,
+judging by how often they changed before. See [history.md](history.md).
+
 ## Proxies
 
 ```python
@@ -412,6 +420,9 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `crawl_dir` | `None` | Enables pause/resume. |
 | `checkpoint_interval` | `60` | Seconds between automatic checkpoints. |
 | `keep_items` | `True` | Keep items in `result.items`. |
+| `history` | `None` | A history file (or `PageHistory`): record page fingerprints and items, report changes since the last run in `result.changes`. |
+| `history_html` | `False` | Keep each page's HTML in the history too. |
+| `skip_fresh` | `False` | With `history`: don't fetch pages that have probably not changed (start URLs always are). |
 | `log_level` | `"INFO"` | Level for the `wintergrab` logger (`None` = leave logging alone). |
 | `log_interval` | `30` | Seconds between progress lines. |
 
