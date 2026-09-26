@@ -13,7 +13,15 @@ from lxml import etree
 
 from .text import normalize_space, tag_name, text_content
 
-__all__ = ["embedded_json", "find_values", "next_page_url", "structured_data", "table_to_records", "tables"]
+__all__ = [
+    "canonical_url",
+    "embedded_json",
+    "find_values",
+    "next_page_url",
+    "structured_data",
+    "table_to_records",
+    "tables",
+]
 
 _FAIL: Any = object()  # "could not parse" marker (``None`` is a valid JSON value)
 _NO_KEY: Any = object()  # key of list items in :func:`find_values`
@@ -194,6 +202,16 @@ def structured_data(root: etree._Element, base_url: str | None = None) -> dict[s
         "twitter": twitter,
         "meta": meta,
     }
+
+
+def canonical_url(root: etree._Element, base_url: str | None = None) -> str | None:
+    """The page's canonical URL (``<link rel="canonical" href>``), absolute against ``base_url``; ``None`` without
+    one."""
+    for link in root.iter("link"):
+        href = link.get("href")
+        if href and "canonical" in (link.get("rel") or "").lower().split():
+            return _absolute(href.strip(), base_url) if href.strip() else None
+    return None
 
 
 def _json_ld(root: etree._Element) -> list[dict[str, Any]]:

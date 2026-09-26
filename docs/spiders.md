@@ -506,6 +506,22 @@ class Shop(Spider):
 `wintergrab.url_template(url)` turns a URL into its route pattern
 (`/product/123` -> `/product/{int}`), handy for grouping pages by template.
 
+Two more settings catch the same page under different URLs once it is
+fetched, when the URL alone cannot tell:
+
+- `skip_duplicate_pages = True` skips a page whose bytes were processed
+  already; `"near"` also skips one whose visible text is nearly the same
+  (a SimHash within 3 bits of an earlier page's, as
+  [near-duplicate records](data.md#duplicates) are found). The page is
+  fetched (it counts in `pages`) but no callback runs for it, and
+  `stats["duplicate_pages"]` counts it. The digests live in memory, about
+  100 bytes a page; `"near"` reads each page's text, about a millisecond.
+- `canonical_dedupe = True` makes a page that names a canonical URL
+  (`<link rel="canonical">`) count as that page: when the canonical URL was
+  seen already (fetched, or queued), the page is skipped and
+  `stats["canonical_skipped"]` counts it; otherwise the page stands for it,
+  and the canonical URL is not fetched.
+
 ## robots.txt
 
 `obey_robots_txt = True` (the default) fetches each site's robots.txt once
@@ -564,6 +580,8 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `obey_robots_txt` | `True` | Respect robots.txt. |
 | `robots_user_agent` | `"*"` | User agent used to match robots.txt rules. |
 | `dedupe` | `True` | Filter already-seen URLs. |
+| `skip_duplicate_pages` | `False` | Skip pages whose content was processed already: `True` the same bytes, `"near"` nearly the same text ([which URLs get crawled](#which-urls-get-crawled)). |
+| `canonical_dedupe` | `False` | A page that names a canonical URL counts as that page: skipped when it was seen, else it stands for it. |
 | `url_normalizer` | `None` | Rewrite queued URLs to one canonical spelling (`True`, a dict of options, or a function). |
 | `url_rules` | `None` | Filter discovered links: patterns, domains, extensions, crawler traps (`True`, a dict, or `URLRules`). |
 | `network_policy` | `None` | Where requests may go: `"public"`, `"private"`, a dict, or a `NetworkPolicy`. `None` = anywhere. |

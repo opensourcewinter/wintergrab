@@ -395,7 +395,10 @@ always safe.
 2. **Same content**: without a key, records whose fields are equal after
    normalizing case, spacing and punctuation.
 3. **Near duplicates** (`near=True`): records whose text shares at least
-   `similarity` (default 0.8) of its word 3-grams with an earlier record.
+   `similarity` (default 0.8) of its word 3-grams with an earlier record;
+   or, with `near="simhash"`, whose SimHash fingerprint is within
+   `distance` (3) bits of an earlier record's: cheaper on long texts, and
+   exact within that distance.
 
 Similarity is the Jaccard index of 3-word shingles. A single changed word
 removes three shingles, so 0.8 catches texts with up to about one word in 30

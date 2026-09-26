@@ -450,6 +450,24 @@ class Handler(BaseHTTPRequestHandler):
                 " = 'leaked'}).catch(e => {document.getElementById('out').textContent = 'refused'});</script>",
             )
             return self.send(200, html)
+        if path.startswith("/same/"):  # the same page under three URLs
+            links = " ".join(f"<a href='/same/{n}'>{n}</a>" for n in (1, 2, 3))
+            return self.send(200, layout("Same", f"<h1>The same page</h1><p>Nothing here differs.</p>{links}"))
+        if path.startswith("/near/"):  # nearly the same page under three URLs: one number differs
+            n = path.rsplit("/", 1)[1]
+            words = " ".join(f"word{i}" for i in range(200))
+            links = " ".join(f"<a href='/near/{k}'>{k}</a>" for k in (1, 2, 3))
+            return self.send(200, layout("Near", f"<h1>Almost the same page</h1><p>{words} Visit {n}.</p>{links}"))
+        if path.startswith("/canonical/"):  # product N under another URL, naming the product page as canonical
+            p = product(int(path.rsplit("/", 1)[1].split("?")[0]))
+            body = (
+                f"<h1>{p['name']}</h1><p class='price'>${p['price']:.2f}</p>"
+                f"<a href='/product/{p['id']}'>the product</a> <a href='/canonical/{p['id']}?ref=again'>again</a>"
+            )
+            html = layout(p["name"], body).replace(
+                "<head>", f"<head><link rel='canonical' href='/product/{p['id']}'>", 1
+            )
+            return self.send(200, html)
         if path.startswith("/item/"):
             i = path.rsplit("/", 1)[1]
             delay = float(q("delay", "0"))

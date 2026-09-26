@@ -55,6 +55,14 @@ an error that says so, not a setting silently ignored
   `Response.blocked_resources` reports what was blocked.
 - Spider settings can now hold callable values (a URL normalizer, a
   priority function); only methods are rejected as overrides.
+- **The same page under other URLs, once.** `skip_duplicate_pages = True`
+  skips a fetched page whose bytes were processed already, `"near"` one
+  whose visible text nearly was (a SimHash within 3 bits);
+  `stats["duplicate_pages"]`. `canonical_dedupe = True` makes a page that
+  names a canonical URL count as that page: skipped when the canonical URL
+  was seen, else standing for it, so the canonical URL is not fetched;
+  `stats["canonical_skipped"]`. `wintergrab.parser.structured.canonical_url`
+  reads the link.
 
 ### Extension points, budgets and observability
 
@@ -141,6 +149,8 @@ an error that says so, not a setting silently ignored
   pipeline about 4,200 records/s, near-duplicate checks 158 µs per record,
   expressions 1 µs.
 
+- `Deduplicator(near="simhash", distance=3)` (the `dedupe` stage too) finds
+  near-duplicate records by SimHash as well as by MinHash.
 - **Provenance you can trace.** A crawl stamps every record that carries
   `_provenance` with `run` (its id in the run registry) and `output`; a
   pipeline records under each field's `transforms` what every stage did to
@@ -151,6 +161,7 @@ an error that says so, not a setting silently ignored
   `wintergrab.data`) tells where a value came from: the page or API call,
   when, the extractor, the run, the output, how it was read, what else was
   found, and how it was changed.
+
 ### Extraction engine (`wintergrab.extraction`)
 
 - **RDFa.** `structured_data()["rdfa"]` reads RDFa (Lite, and the value

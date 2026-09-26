@@ -15,6 +15,7 @@ from collections.abc import AsyncIterable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..data.similarity import SimHashIndex, simhash
 from ..errors import (
     BrowserNotAvailable,
     CheckpointError,
@@ -33,6 +34,7 @@ from ..fetchers.cache import CacheMiss, HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..fetchers.response import Response
 from ..fetchers.strategy import FetchStrategy
+from ..parser.structured import canonical_url
 from ..proxy import ProxyRotator, proxy_label
 from ..redact import redact_url
 from ..request import Request
@@ -61,6 +63,7 @@ if TYPE_CHECKING:
     from .spider import Spider
 
 log = logging.getLogger("wintergrab.spider")
+_DUPLICATE_TEXT = 50_000  # characters of visible text a near-duplicate fingerprint reads
 
 PUSHBACK_STATUSES = frozenset({429, 503})
 _HANDLED: Any = object()  # a middleware dealt with the request itself (dropped or replaced it)
@@ -117,6 +120,14 @@ class Engine:
             raise ConfigurationError(f"must be 'bfs' or 'dfs', not {spider.crawl_order!r}", key="crawl_order")
         self._lifo = CRAWL_ORDERS[order]
         self.scheduler: Scheduler | DiskScheduler | SharedScheduler = Scheduler(dedupe=spider.dedupe, lifo=self._lifo)
+        if spider.skip_duplicate_pages not in (False, True, "exact", "near"):
+            raise ConfigurationError(
+                f"skip_duplicate_pages: True, 'exact' or 'near', not {spider.skip_duplicate_pages!r}",
+                key="skip_duplicate_pages",
+            )
+        #: Digests of the pages processed (``skip_duplicate_pages``), and their text fingerprints (``"near"``).
+        self._page_digests: set[bytes] = set()
+        self._page_index = SimHashIndex(3) if spider.skip_duplicate_pages == "near" else None
         self._persistent = False  # True with the disk frontier, or a shared one
         self.throttle: AutoThrottle = spider.throttle or AutoThrottle(
             enabled=spider.autothrottle,
@@ -1252,6 +1263,8 @@ class Engine:
                 await self._give_up(request, HTTPStatusError(response, detail), quiet=response.status == 404)
                 return
             self.failures.success(domain)
+            if (spider.skip_duplicate_pages or spider.canonical_dedupe) and self._duplicate_page(request, response):
+                return
             await self._run_callback(request, response)
         except asyncio.CancelledError:
             raise
@@ -1526,6 +1539,40 @@ class Engine:
     # ------------------------------------------------------------------ #
     # callbacks and outputs
     # ------------------------------------------------------------------ #
+    def _duplicate_page(self, request: Request, response: Response) -> bool:
+        """Whether ``response`` is a page processed already under another URL: one whose canonical URL was seen
+        (``canonical_dedupe``; a page that names one not seen stands for it, and marks it seen), the same body
+        (``skip_duplicate_pages``), or nearly the same text (``"near"``)."""
+        spider = self.spider
+        if spider.canonical_dedupe and response.is_html:
+            canonical = canonical_url(response.selector.root, response.url)
+            if canonical:
+                if self.url_normalizer is not None:
+                    canonical = self.url_normalizer(canonical)
+                if canonical not in (response.url, request.url):
+                    fingerprint = Request(canonical).fingerprint()
+                    if fingerprint in self.scheduler.seen:
+                        self.stats.inc("canonical_skipped")
+                        log.debug("skipped %s: its canonical page %s was seen already", request.url, canonical)
+                        return True
+                    self.scheduler.restore_seen([fingerprint])  # this page stands for it
+        if spider.skip_duplicate_pages and response.body:
+            digest = hashlib.blake2b(response.body, digest_size=16).digest()
+            if digest in self._page_digests:
+                self.stats.inc("duplicate_pages")
+                log.debug("skipped %s: the same content was processed already", request.url)
+                return True
+            self._page_digests.add(digest)
+            if self._page_index is not None and response.is_html:
+                text = " ".join(response.get_text().split())
+                if text:
+                    same = self._page_index.find_or_add(response.url, simhash(text[:_DUPLICATE_TEXT]))
+                    if same is not None:
+                        self.stats.inc("duplicate_pages")
+                        log.debug("skipped %s: nearly the same content as %s", request.url, same)
+                        return True
+        return False
+
     async def _run_callback(self, request: Request, response: Response) -> None:
         callback = request.callback or self.spider.parse
         if isinstance(callback, str):

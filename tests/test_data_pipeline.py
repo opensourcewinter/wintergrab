@@ -759,3 +759,22 @@ def test_data_trace_says_where_a_value_came_from(site, tmp_path, capsys) -> None
     assert capsys.readouterr().out.startswith("no provenance")
     assert main(["data", "trace", str(out), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["_provenance"]["run"] == "run-1"
+
+
+def test_near_duplicates_by_simhash() -> None:
+    from wintergrab.data.dedupe import Deduplicator
+
+    words = " ".join(f"w{i}" for i in range(120))
+    records = [{"text": words + " one"}, {"text": words + " two"}, {"text": "something else entirely, and short"}]
+    by_simhash = Deduplicator(near="simhash")
+    assert [by_simhash.check(r) for r in records] == [None, ("near", 0), None]
+    strict = Deduplicator(near="simhash", distance=0)
+    assert [strict.check(r) for r in records] == [None, None, None]  # (a word differs: not within 0 bits)
+    by_minhash = Deduplicator(near=True)
+    assert [by_minhash.check(r) for r in records] == [None, ("near", 0), None]
+    with pytest.raises(ValueError, match="near"):
+        Deduplicator(near="fuzzy")
+    stage = Deduplicate(near="simhash", distance=2)
+    assert stage.to_config() == {"dedupe": {"near": "simhash", "distance": 2}} or stage._options["distance"] == 2
+    with pytest.raises(ConfigurationError, match="near"):
+        Deduplicate(near="fuzzy")

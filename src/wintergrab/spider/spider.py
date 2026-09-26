@@ -285,6 +285,14 @@ class Spider:
     resource_filter: Any = None
     #: Drop requests for URLs already seen.
     dedupe: bool = True
+    #: Skip pages whose content was processed already under another URL: ``True`` (or ``"exact"``) the same
+    #: bytes, ``"near"`` nearly the same visible text (a SimHash within 3 bits). Counted in
+    #: ``stats["duplicate_pages"]``; the digests are kept in memory, about 100 bytes a page.
+    skip_duplicate_pages: bool | str = False
+    #: A page that names a canonical URL (``<link rel="canonical">``) counts as that page: it is skipped when
+    #: the canonical URL was seen already (``stats["canonical_skipped"]``), else it stands for it and the
+    #: canonical URL is not fetched.
+    canonical_dedupe: bool = False
     #: ``"memory"`` (fastest) or ``"disk"``: an SQLite queue + Bloom filter that keeps
     #: memory flat for crawls of millions of URLs and survives crashes (needs ``crawl_dir``);
     #: or a ``postgresql://`` URL: a queue several processes share (see :mod:`wintergrab.spider.shared`).

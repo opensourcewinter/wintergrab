@@ -523,12 +523,12 @@ checks that it is up to date.
   - `diff(self, a: int | str = 'previous', b: int | str = 'latest', **options: Any) -> DatasetDiff`: The differences between two versions (by default the last two).
   - `get(self, ref: int | str) -> Version`: A version by number (``3``), name (``"v3"``), ``"latest"`` or ``"previous"``.
   - `load(self, ref: int | str = 'latest') -> list[dict[str, Any]]`: The records of a version.
-- **`Deduplicate(key: str | Sequence[str] | None = None, *, fields: Sequence[str] | None = None, near: bool = False, text_fields: Sequence[str] | None = None, similarity: float = 0.8, mark: bool = False, name: str | None = None)`** (class). Drop (or mark) duplicate records; see :class:`~wintergrab.data.dedupe.Deduplicator`.
+- **`Deduplicate(key: str | Sequence[str] | None = None, *, fields: Sequence[str] | None = None, near: bool | str = False, text_fields: Sequence[str] | None = None, similarity: float = 0.8, distance: int = 3, mark: bool = False, name: str | None = None)`** (class). Drop (or mark) duplicate records; see :class:`~wintergrab.data.dedupe.Deduplicator`.
   - `apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None`: Return the record (changed in place, or a new dict), or ``None`` to drop it (set ``ctx.reason``).
   - `details(self) -> str`: A short note for :meth:`Pipeline.describe`.
   - `classmethod from_config(cls, options: Any, loader: ConfigLoader) -> Deduplicate`
   - `to_config(self) -> dict[str, Any]`: The stage's configuration-file form: ``{kind: options}``.
-- **`Deduplicator(key: str | Sequence[str] | None = None, *, fields: Sequence[str] | None = None, near: bool = False, text_fields: Sequence[str] | None = None, similarity: float = 0.8, mark: bool = False)`** (class). Drop (or mark) duplicate records.
+- **`Deduplicator(key: str | Sequence[str] | None = None, *, fields: Sequence[str] | None = None, near: bool | str = False, text_fields: Sequence[str] | None = None, similarity: float = 0.8, distance: int = 3, mark: bool = False)`** (class). Drop (or mark) duplicate records.
   - `check(self, record: Mapping[str, Any]) -> tuple[str, int] | None`: ``(kind, index of the first record it duplicates)`` or ``None``; remembers new records.
   - `process_item(self, item: Any, spider: Any = None) -> Any`
   - `run(self, records: Iterable[Mapping[str, Any]]) -> list[Any]`: De-duplicate a list (the first occurrence is kept).
