@@ -210,6 +210,7 @@ class Dashboard:
                 "kind": job.kind,
                 "target": redact(job.target),
                 "schedule": str(job.schedule) if job.schedule is not None else None,
+                "trigger": job.trigger(),
                 "enabled": job.enabled,
                 "next": None if when is None else ("now" if when <= now else when.isoformat(timespec="minutes")),
                 "last_run": state.get("last_run"),
@@ -400,13 +401,13 @@ def render_index(dashboard: Dashboard, limit: int = 200) -> str:
             last = _badge(str(job["last_status"]))
         next_time = esc(job["next"] or ("off" if not job["enabled"] else _NONE)).replace("T", " ")
         job_rows.append([esc(job["job"]), f'{esc(job["kind"])} <code>{esc(job["target"])}</code>',
-                         esc(job["schedule"] or "(when asked)"), next_time, last])  # fmt: skip
+                         esc(job["trigger"]), next_time, last])  # fmt: skip
     body = (
         f'<div class="top"><div><h1>WINTERGRAB</h1><div class="muted">{esc(dashboard.workspace.resolve())}</div></div>'
         f'<div class="muted">{len(runs)} run(s) · <a href="/api/runs">JSON</a></div></div>'
     )
     if jobs:
-        body += "<h2>Jobs</h2>" + _table(["Job", "What", "Schedule", "Next", "Last run"], job_rows)
+        body += "<h2>Jobs</h2>" + _table(["Job", "What", "When", "Next", "Last run"], job_rows)
     body += "<h2>Runs</h2>" + _table(
         ["Run", "Started", "Name", "Status", "Pages", "Items", "Failed", "Success", "Took"],
         rows,

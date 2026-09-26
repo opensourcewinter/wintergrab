@@ -681,21 +681,27 @@ def cmd_run(args: argparse.Namespace) -> int:
     jobs = project.select(args.jobs)
     if args.list:
         for job in project.jobs.values():
-            when = f"  ({job.schedule})" if job.schedule is not None else ""
-            print(f"{job.name:<16} wintergrab {' '.join(redact_argv(job.command()))}{when}")
+            print(f"{job.name:<16} wintergrab {' '.join(redact_argv(job.command()))}  ({job.trigger()})")
         return 0
+    if not args.jobs:  # every job: the ones that come after another run after it
+        jobs = [job for job in jobs if not job.after]
     scheduler = Scheduler(project)
-    failed = 0
+
+    def started(job: Any, trigger: str, reason: str | None) -> None:
+        why = f" ({reason})" if reason else ""
+        print(f"== {job.name}{why}: wintergrab {' '.join(redact_argv(job.command()))}", file=sys.stderr)
+
+    scheduler.on_start = started
     try:
         for job in jobs:
-            print(f"== {job.name}: wintergrab {' '.join(redact_argv(job.command()))}", file=sys.stderr)
-            result = scheduler.run(job, logged=False)
-            print(result.describe(), file=sys.stderr)
-            failed += not result.ok
+            done = len(scheduler.results)
+            scheduler.run(job, logged=False)
+            for result in scheduler.results[done:]:
+                print(result.describe(), file=sys.stderr)
     finally:
         for hook in scheduler.webhooks:
             hook.close()
-    return 1 if failed else 0
+    return 1 if any(not r.ok for r in scheduler.results) else 0
 
 
 def cmd_schedule(args: argparse.Namespace) -> int:
@@ -708,12 +714,14 @@ def cmd_schedule(args: argparse.Namespace) -> int:
         now = scheduler.now()
         for job, when in plan:
             next_time = "never" if when is None else "now (due)" if when <= now else f"{when:%Y-%m-%d %H:%M}"
-            print(f"{job.name:<16} {job.schedule!s:<28} next: {next_time}")
+            print(f"{job.name:<16} {job.trigger():<28} next{' check' if job.watch and not job.schedule else ''}: "
+                  f"{next_time}")  # fmt: skip
         for job in project.jobs.values():
-            if job.schedule is None:
-                print(f"{job.name:<16} {'(no schedule: wintergrab run ' + job.name + ')':<28}")
+            if job.schedule is None and not job.watch:
+                shown = job.trigger() if job.after else f"(when asked: wintergrab run {job.name})"
+                print(f"{job.name:<16} {shown}")
         if not plan:
-            print("no job has a schedule", file=sys.stderr)
+            print("no job has a schedule or a watched URL", file=sys.stderr)
         return 0
     configure_logging(logging.DEBUG if args.verbose > 0 else logging.INFO)
     if args.once:
@@ -725,7 +733,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     print(f"{project.path}: {len(plan)} scheduled job(s), logs in {project.workspace / 'logs'}; Ctrl+C to stop",
           file=sys.stderr)  # fmt: skip
     for job, when in plan:
-        print(f"  {job.name}: {job.schedule}, next {when:%Y-%m-%d %H:%M}" if when else f"  {job.name}: never",
+        print(f"  {job.name}: {job.trigger()}, next {when:%Y-%m-%d %H:%M}" if when else f"  {job.name}: never",
               file=sys.stderr)  # fmt: skip
     scheduler.loop()
     return 0

@@ -77,7 +77,9 @@ log = logging.getLogger("wintergrab.project")
 #: The files a project is looked for in, in this order.
 PROJECT_FILES = ("wintergrab.yaml", "wintergrab.yml", "wintergrab.toml", "wintergrab.json")
 _KINDS = ("crawl", "goal", "spider")
-_JOB_KEYS = frozenset({*_KINDS, "schedule", "timezone", "description", "enabled", "set", "start_within"})
+_JOB_KEYS = frozenset(
+    {*_KINDS, "schedule", "timezone", "description", "enabled", "set", "start_within", "watch", "check", "after"}
+)
 _VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
@@ -113,6 +115,9 @@ class Job:
         enabled: ``False`` keeps it from its schedule (``wintergrab run JOB`` still runs it).
         start_within: Skip a time the job would start later than this after it (default: a missed
             time is made up for, once, as soon as the scheduler runs).
+        watch: A sitemap, feed or page: the job runs when it changes (see :mod:`wintergrab.watch`).
+        check: How often ``watch`` is checked.
+        after: Jobs after each successful run of which this one runs.
     """
 
     name: str
@@ -124,6 +129,18 @@ class Job:
     enabled: bool = True
     start_within: timedelta | None = None
     description: str = ""
+    watch: str | None = None
+    check: timedelta = timedelta(minutes=15)
+    after: tuple[str, ...] = ()
+
+    def trigger(self) -> str:
+        """What runs the job, in words: ``"every 2 hours"``, ``"when https://.../sitemap.xml changes"``..."""
+        parts = [str(self.schedule)] if self.schedule is not None else []
+        if self.watch:
+            parts.append(f"when {self.watch} changes (checked every {_duration(self.check)})")
+        if self.after:
+            parts.append(f"after {', '.join(self.after)}")
+        return " + ".join(parts) or "when asked"
 
     def command(self, *, workspace: str | None = None, project: str | None = None) -> list[str]:
         """The ``wintergrab`` command line that runs the job."""
@@ -208,6 +225,7 @@ class Project:
         self.jobs: dict[str, Job] = {}
         for name, spec in jobs.items():
             self.jobs[str(name)] = self._job(str(name), spec, defaults)
+        self._check_after()
 
     def _job(self, name: str, spec: Any, defaults: Mapping[str, Any]) -> Job:
         where = f"{self.path.name}, job {name!r}"
@@ -232,6 +250,9 @@ class Project:
                 "others on the machine can read (keep secrets in files the job reads, like --proxy-file)"
             )
         schedule = start_within = None
+        watch = spec.get("watch")
+        check = timedelta(minutes=15)
+        after = spec.get("after") or ()
         try:
             if spec.get("schedule") is not None:
                 schedule = parse_schedule(spec["schedule"], timezone=spec.get("timezone") or self.timezone)
@@ -239,11 +260,44 @@ class Project:
                 if not isinstance(schedule, Cron):
                     raise ConfigurationError("start_within is for schedules at set times (cron, 'daily at 06:00')")
                 start_within = parse_duration(spec["start_within"])
+            if watch is not None and not (isinstance(watch, str) and watch.startswith(("http://", "https://"))):
+                raise ConfigurationError(f"watch is the http(s) URL of a sitemap, a feed or a page, not {watch!r}")
+            if spec.get("check") is not None:
+                if watch is None:
+                    raise ConfigurationError("check says how often watch: is checked")
+                check = parse_duration(spec["check"])
+                if check < timedelta(minutes=1):
+                    raise ConfigurationError("check a watched URL once a minute at most")
+            after = (after,) if isinstance(after, str) else tuple(str(a) for a in after)
         except ConfigurationError as exc:
             raise ConfigurationError(f"{where}: {exc}") from exc
         return Job(name=name, kind=kind, target=str(spec[kind]), options=options, settings=settings, schedule=schedule,
                    enabled=bool(spec.get("enabled", True)), start_within=start_within,
-                   description=str(spec.get("description") or ""))  # fmt: skip
+                   description=str(spec.get("description") or ""), watch=watch, check=check, after=after)  # fmt: skip
+
+    def _check_after(self) -> None:
+        """``after:`` names jobs of the project, and never comes back round to a job."""
+        for job in self.jobs.values():
+            unknown = [name for name in job.after if name not in self.jobs]
+            if unknown:
+                raise ConfigurationError(
+                    f"{self.path.name}, job {job.name!r}: after {', '.join(unknown)}: no such job (jobs: "
+                    f"{', '.join(self.jobs)})"
+                )
+
+        def visit(name: str, path: tuple[str, ...]) -> None:
+            if name in path:
+                cycle = " -> ".join((*path[path.index(name) :], name))
+                raise ConfigurationError(f"{self.path.name}: the jobs run after each other in a circle: {cycle}")
+            for upstream in self.jobs[name].after:
+                visit(upstream, (*path, name))
+
+        for name in self.jobs:
+            visit(name, ())
+
+    def dependents(self, name: str) -> list[Job]:
+        """The jobs that run after ``name``."""
+        return [job for job in self.jobs.values() if name in job.after]
 
     def webhooks(self) -> list[Webhook]:
         """The project's webhooks (``${NAME}`` read from the environment now)."""
@@ -281,6 +335,15 @@ class Project:
 
     def __repr__(self) -> str:
         return f"Project({str(self.path)!r}, jobs={list(self.jobs)})"
+
+
+def _duration(value: timedelta) -> str:
+    seconds = int(value.total_seconds())
+    for unit, size in (("day", 86400), ("hour", 3600), ("minute", 60)):
+        if seconds % size == 0 and seconds >= size:
+            count = seconds // size
+            return f"{count} {unit}{'s' if count != 1 else ''}"
+    return f"{seconds} seconds"
 
 
 def _run_command(command: Sequence[str], *, cwd: Path, log_file: Path | None) -> int:
@@ -349,6 +412,8 @@ class Scheduler:
         sleep: Waits (``time.sleep`` by default).
         runner: Runs a job's command line (``runner(command, cwd=..., log_file=...) -> exit code``);
             by default a process of its own.
+        checker: Checks a watched URL (``checker(url, previous, obey_robots=...) -> WatchCheck``);
+            :func:`wintergrab.watch.check` by default.
     """
 
     def __init__(
@@ -359,11 +424,16 @@ class Scheduler:
         sleep: Callable[[float], None] = time.sleep,
         runner: Callable[..., int] | None = None,
         webhooks: Sequence[Webhook] | None = None,
+        checker: Callable[..., Any] | None = None,
     ) -> None:
         self.project = project
         self.now = now
         self.sleep = sleep
         self.runner = runner
+        self.checker = checker
+        #: Called as each job starts: ``on_start(job, trigger, reason)``.
+        self.on_start: Callable[[Job, str, str | None], None] | None = None
+        self.watch_dir = project.workspace / "watch"
         self.webhooks = list(webhooks) if webhooks is not None else project.webhooks()
         self.state_path = project.workspace / "schedule.json"
         self.state: dict[str, dict[str, Any]] = self._load()
@@ -393,11 +463,26 @@ class Scheduler:
         return datetime.fromisoformat(text) if text else None
 
     def due(self, job: Job, now: datetime) -> datetime | None:
-        """When ``job`` runs next (``None``: never). An interval job runs right away the first time,
-        and at once when overdue. A cron job (a time of day...) runs at its times from when it last
-        ran (or was first scheduled). A time that went by while nothing ran (the machine was off, a
-        long job ran) is made up for once, as soon as the scheduler runs, unless the job would
-        start more than its ``start_within`` late: then it waits for its next time."""
+        """When ``job`` runs, or its watched URL is checked, next (``None``: never; see
+        :meth:`scheduled` and :meth:`check_due`)."""
+        times = [t for t in (self.scheduled(job, now), self.check_due(job, now)) if t is not None]
+        return min(times) if times else None
+
+    def check_due(self, job: Job, now: datetime) -> datetime | None:
+        """When ``job``'s watched URL is checked next (right away the first time)."""
+        if not job.watch or not job.enabled:
+            return None
+        checked = self.watch_state(job).get("checked_at")
+        if not checked:
+            return now
+        return datetime.fromisoformat(checked) + job.check
+
+    def scheduled(self, job: Job, now: datetime) -> datetime | None:
+        """When ``job``'s schedule runs it next (``None``: never). An interval job runs right away the
+        first time, and at once when overdue. A cron job (a time of day...) runs at its times from
+        when it last ran (or was first scheduled). A time that went by while nothing ran (the machine
+        was off, a long job ran) is made up for once, as soon as the scheduler runs, unless the job
+        would start more than its ``start_within`` late: then it waits for its next time."""
         if job.schedule is None or not job.enabled:
             return None
         last = self.last_run(job)
@@ -415,27 +500,82 @@ class Scheduler:
         return now
 
     def plan(self) -> list[tuple[Job, datetime | None]]:
-        """Every scheduled job and when it runs next, soonest first."""
+        """Every job with a schedule or a watched URL, and when it runs (or is checked) next, soonest first."""
         now = self.now()
-        rows = [(job, self.due(job, now)) for job in self.project.jobs.values() if job.schedule is not None]
+        jobs = [job for job in self.project.jobs.values() if job.schedule is not None or job.watch]
+        rows = [(job, self.due(job, now)) for job in jobs]
         return sorted(rows, key=lambda r: (r[1] is None, r[1] or now))
 
     def run_due(self) -> list[JobResult]:
-        """Run the jobs that are due now, one after the other."""
-        ran = []
+        """Run the jobs that are due now, one after the other (a watched URL is checked first: its
+        job runs when it changed), and the jobs that run after them."""
+        first = len(self.results)
         for job, when in self.plan():
-            if when is None or when > self.now():
+            now = self.now()
+            if when is None or when > now:
                 continue
-            ran.append(self.run(job))
+            scheduled = self.scheduled(job, now)
+            if scheduled is not None and scheduled <= now:
+                self.run(job, trigger="schedule")
+                continue
+            found = self.check(job)
+            if found.changed:
+                self.run(job, trigger="watch", reason=found.summary)
+            elif found.first and found.error is None and self.last_run(job) is None:
+                self.run(job, trigger="watch", reason=found.summary)  # nothing collected yet
         self._save()
-        return ran
+        return self.results[first:]
 
-    def run(self, job: Job, *, logged: bool = True) -> JobResult:
+    # -- watched URLs ------------------------------------------------------------------------- #
+    def _watch_path(self, job: Job) -> Path:
+        return self.watch_dir / (re.sub(r"[^A-Za-z0-9._-]", "_", job.name) + ".json")
+
+    def watch_state(self, job: Job) -> dict[str, Any]:
+        """What the last check of ``job``'s watched URL found (``{}`` before the first)."""
+        try:
+            state = json.loads(self._watch_path(job).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return state if isinstance(state, dict) and state.get("url") == job.watch else {}  # another URL: start over
+
+    def check(self, job: Job) -> Any:
+        """Check ``job``'s watched URL now, and keep what was found (a :class:`~wintergrab.watch.WatchCheck`)."""
+        from .watch import check
+
+        previous = self.watch_state(job)
+        checker = self.checker or check
+        found = checker(str(job.watch), previous, obey_robots=not job.options.get("no_robots"))
+        state = dict(found.state if found.error is None else previous)
+        state.update(url=job.watch, checked_at=self.now().isoformat(), last_error=found.error)
+        path = self._watch_path(job)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        replace_file(tmp, path)
+        if found.error is not None:
+            log.warning("%s: could not check %s: %s", job.name, job.watch, found.error)
+        else:
+            log.info("%s: %s: %s", job.name, job.watch, found.summary)
+        return found
+
+    # -- running -------------------------------------------------------------------------------- #
+    def run(
+        self,
+        job: Job,
+        *,
+        logged: bool = True,
+        trigger: str = "manual",
+        reason: str | None = None,
+        _chain: frozenset[str] = frozenset(),
+    ) -> JobResult:
         """Run ``job`` now (its output in the workspace's ``logs/``, or through with ``logged=False``),
-        tell the webhooks, and remember when."""
+        tell the webhooks, remember when, and, when it succeeded, run the jobs that come after it.
+        ``trigger`` (``"schedule"``, ``"watch"``, ``"after"``, ``"manual"``) and ``reason`` say why."""
         stamp = self.now()
         log_file = self.project.workspace / "logs" / f"{job.name}-{stamp:%Y%m%d-%H%M%S}.log" if logged else None
-        self._tell("job_started", job=job.name, command=redact_argv(job.command()))
+        if self.on_start is not None:
+            self.on_start(job, trigger, reason)
+        self._tell("job_started", job=job.name, command=redact_argv(job.command()), trigger=trigger, reason=reason)
         result = self.project.run_job(job, log_file=log_file, runner=self.runner)
         entry = self.state.setdefault(job.name, {})
         entry.update(last_run=stamp.isoformat(), last_status=result.status, exit_code=result.exit_code,
@@ -443,12 +583,17 @@ class Scheduler:
         self._save()
         facts = {"job": job.name, "status": result.status, "exit_code": result.exit_code,
                  "seconds": round(result.finished - result.started, 3), "run": result.run.id if result.run else None,
-                 "log": str(log_file) if log_file else None}  # fmt: skip
+                 "log": str(log_file) if log_file else None, "trigger": trigger, "reason": reason}  # fmt: skip
         if result.run is not None:
             facts["stats"] = {k: result.run.stats.get(k) for k in ("pages", "items", "errors") if k in result.run.stats}
         self._tell("job_finished" if result.ok else "job_failed", **facts)
         log.info("%s", result.describe())
         self.results.append(result)
+        if result.ok:
+            chain = _chain | {job.name}
+            for after in self.project.dependents(job.name):
+                if after.enabled and after.name not in chain:
+                    self.run(after, logged=logged, trigger="after", reason=f"after {job.name}", _chain=chain)
         return result
 
     def _tell(self, kind: str, **data: Any) -> None:

@@ -36,9 +36,9 @@ Event kinds emitted by wintergrab (see :data:`EVENT_KINDS`)::
     pipeline_report    pipeline, stages                                 (a data pipeline, when it closes)
     quality_degraded   dataset, field, code, message, severity          (a quality monitor, against the last run)
     schema_changed     dataset, added, removed, retyped                 (a quality monitor: fields came or went)
-    job_started        job, command                                     (a project's jobs)
-    job_finished       job, status, exit_code, seconds, run, log, stats
-    job_failed         job, status, exit_code, seconds, run, log, stats
+    job_started        job, command, trigger, reason                    (a project's jobs)
+    job_finished       job, status, exit_code, seconds, run, log, stats, trigger, reason
+    job_failed         job, status, exit_code, seconds, run, log, stats, trigger, reason
 """
 
 from __future__ import annotations

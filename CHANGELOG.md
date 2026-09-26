@@ -427,6 +427,21 @@
   `quality_degraded` (price completeness 98% → 41%) and `schema_changed`
   without writing a data pipeline.
 
+### Jobs that run when something changes (`wintergrab.watch`)
+
+- A project job's `watch: URL` runs it when a sitemap (its URLs and their
+  `lastmod`), a feed (its items) or a page (its visible text) changes,
+  checked every `check:` (15 minutes by default). Checks are conditional
+  requests (`ETag`, `Last-Modified`) and obey robots.txt. A check that
+  fails changes nothing, and it says so.
+- `after: JOB` runs a job after each successful run of another. The jobs
+  after it follow, a failed run stops the chain, and circles are refused.
+  `wintergrab run` starts the jobs that come after none.
+- `job_started`/`job_finished` carry `trigger` (`schedule`, `watch`,
+  `after`, `manual`) and `reason` (`"3 new URLs, 1 gone"`).
+- `wintergrab.watch.check(url, previous)` does a check on its own: what
+  changed, in words and as counts.
+
 ### The dashboard (`wintergrab.dashboard`)
 
 - `wintergrab dashboard` serves a page on this machine with the workspace's

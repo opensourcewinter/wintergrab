@@ -51,8 +51,8 @@ Or let the spider write them: `event_log = True` writes
 | `site_changed` | `run`, `previous`, and the counts of `changes_detected` (with a history, from its second run, when something changed) |
 | `record_created`, `record_deleted` | `url` (with a history, from its second run: one per page) |
 | `record_updated` | `url`, `kinds`, `details` (`{"price": [10.0, 8.0]}`; as `record_created`) |
-| `job_started` | `job`, `command` (a [project](projects.md)'s jobs, from `wintergrab run` or `schedule`) |
-| `job_finished`, `job_failed` | `job`, `status`, `exit_code`, `seconds`, `run`, `log`, `stats` |
+| `job_started` | `job`, `command`, `trigger` (`schedule`, `watch`, `after`, `manual`), `reason` (a [project](projects.md)'s jobs, from `wintergrab run` or `schedule`) |
+| `job_finished`, `job_failed` | `job`, `status`, `exit_code`, `seconds`, `run`, `log`, `stats`, `trigger`, `reason` |
 
 `response` and `item_scraped` fire for every page and item, so they are
 only built when someone subscribed to them: an unobserved crawl pays

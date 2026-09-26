@@ -177,4 +177,4 @@ def test_a_project_s_jobs(tmp_path, dashboard_server) -> None:
     assert [(j["job"], j["schedule"]) for j in jobs] == [("books", "daily at 06:00"), ("later", None)]
     assert jobs[0]["next"] is not None and jobs[1]["next"] is None
     page = fetch(dashboard_server(project.workspace, project), "/")[2]
-    assert "<h2>Jobs</h2>" in page and "daily at 06:00" in page and "(when asked)" in page
+    assert "<h2>Jobs</h2>" in page and "daily at 06:00" in page and "when asked" in page

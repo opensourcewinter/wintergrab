@@ -68,7 +68,9 @@ A job is a command line written as a mapping:
   - `paginate: true` gives `--paginate`;
   - an unknown option is an error that suggests the closest one.
 - **`set:`** holds spider settings (`--set NAME=VALUE`).
-- **`schedule:`** says when it runs (below). Other keys:
+- **`schedule:`** says when it runs (below), **`watch:`** runs it when a
+  sitemap, feed or page changes, and **`after:`** runs it after another job
+  ([triggers](#triggers-when-something-changes-after-another-job)). Other keys:
   - `timezone:` for the schedule;
   - `enabled: false` keeps it off the schedule;
   - `start_within:` (see below);
@@ -122,6 +124,55 @@ and when each job last ran is kept in `.wintergrab/schedule.json`.
 Run it from cron or CI instead of keeping a scheduler running: each call
 runs what fell due since the one before.
 
+## Triggers: when something changes, after another job
+
+```yaml
+jobs:
+  listing:
+    crawl: https://shop.example/
+    watch: https://shop.example/sitemap.xml    # runs when it changes
+    check: 10 minutes                           # how often it is checked (15 minutes by default)
+  details:
+    crawl: https://shop.example/products/
+    after: listing                              # runs after each successful run of listing
+  report:
+    goal: laptops under $1000 on shop.example
+    after: [details]
+```
+
+A **watched URL** can be a sitemap, an RSS or Atom feed, or any page:
+
+- a sitemap is compared by its URLs and their `lastmod`;
+- a feed by its items;
+- a page by its visible text (scripts and styles aside), a JSON document by
+  its data.
+
+`wintergrab schedule` checks the URL every `check`, with a conditional
+request when the site gave an `ETag` or `Last-Modified` (a `304` costs
+nothing). It obeys robots.txt unless the job says `no_robots: true`. The job
+runs when the URL changed, and the first time, when it has never run.
+Checks that fail (the network, a 5xx, robots.txt) are logged and change
+nothing. What the last check found is kept in `.wintergrab/watch/JOB.json`.
+
+**`after:`** names one job or several. The job runs after each run of those
+that succeeded, however it started, and the jobs after it follow. A failed
+run stops the chain. A circle of jobs is an error. `wintergrab run` without
+names starts the jobs that come after no other, and the chains run the
+rest.
+
+A job can have several triggers: `schedule: daily at 06:00` and `watch:`
+together run it every morning and whenever its sitemap changes.
+`job_started` and `job_finished` say which one ran it: `trigger` is
+`schedule`, `watch`, `after` or `manual`, and `reason` says why
+(`"3 new URLs, 1 gone"`, `"after listing"`).
+
+```
+$ wintergrab schedule --list
+listing          when https://shop.example/sitemap.xml changes (checked every 10 minutes) next check: now (due)
+details          after listing
+report           after details
+```
+
 ## Webhooks
 
 ```yaml
@@ -160,7 +211,7 @@ What there is to tell ([all event kinds](observability.md#events)):
 
 | From | Events |
 |---|---|
-| Whatever runs the jobs (`run`, `schedule`) | `job_started`, `job_finished`, `job_failed` (with the run, its stats, its log) |
+| Whatever runs the jobs (`run`, `schedule`) | `job_started`, `job_finished`, `job_failed` (with the run, its stats, its log, and its `trigger` and `reason`) |
 | Each job's crawl | `crawl_started`, `crawl_finished`, `request_failed`, `blocked`, `budget_exhausted`... |
 | A job with a `history`, from its second run | `site_changed` (the counts), and one `record_created`, `record_updated` (with what changed: `{"price": [10.0, 8.0]}`) or `record_deleted` per page |
 | A job with `extract`, or a goal | `extraction_failed` per page with no complete record (asked for by name) |
