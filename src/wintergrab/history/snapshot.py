@@ -20,7 +20,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from ..data.normalize import normalize_availability, parse_money
 from ..data.similarity import hamming, simhash, simhash_similarity
-from ..extraction.page import PageContext, schema_types
+from ..extraction.page import STRUCTURED_KEYS, STRUCTURED_KINDS, PageContext, schema_types
 from ..extraction.schemaorg import read_path
 from ..parser.text import tag_name
 
@@ -151,7 +151,7 @@ def _items_digest(items: Iterable[Any]) -> tuple[str | None, int]:
 def _offer(ctx: PageContext) -> tuple[float | None, str | None, str | None]:
     """The price, currency and availability in the page's product data."""
     price = currency = availability = None
-    nodes = [node for kind in ("json-ld", "microdata") for _, node in ctx.nodes(kind)]
+    nodes = [node for kind in STRUCTURED_KINDS for _, node in ctx.nodes(kind)]
     products = [n for n in nodes if {"Product", "ProductGroup", "IndividualProduct", "Offer"} & set(schema_types(n))]
     for node in products:
         for path in _PRICE_PATHS:
@@ -217,12 +217,10 @@ def snapshot_page(
     if response is not None:
         snap.etag = response.headers.get("etag")
         snap.last_modified = response.headers.get("last-modified")
-    structured = [ctx.structured.get("json_ld") or [], ctx.structured.get("microdata") or []]
+    structured = [ctx.structured.get(key) or [] for key in STRUCTURED_KEYS.values()]
     if any(structured):
-        snap.structured = _digest(structured)
-        snap.types = sorted(
-            {t for kind in ("json-ld", "microdata") for _, n in ctx.nodes(kind) for t in schema_types(n)}
-        )
+        snap.structured = _digest(structured[:2] if not structured[2] else structured)  # (as before, without RDFa)
+        snap.types = sorted({t for kind in STRUCTURED_KINDS for _, n in ctx.nodes(kind) for t in schema_types(n)})
     snap.price, snap.currency, snap.availability = _offer(ctx)
     if items is not None:
         snap.items, snap.item_count = _items_digest(items)

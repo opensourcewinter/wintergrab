@@ -91,7 +91,7 @@ reliable ones come first:
 
 | Method | Looks at |
 |---|---|
-| `json-ld`, `microdata` | schema.org data (`Product.offers.price`, `aggregateRating.ratingValue`...), picked by the schema's name (`product` -> `Product`) |
+| `json-ld`, `microdata`, `rdfa` | schema.org data (`Product.offers.price`, `aggregateRating.ratingValue`...), picked by the schema's name (`product` -> `Product`) |
 | `opengraph`, `twitter`, `meta` | `og:title`, `product:price:amount`, `<meta name=description>`, the `<title>` without the site name |
 | `selector` | the field's own `selectors` (CSS or XPath, `::text`, `::attr()`) |
 | `embedded-json` | state embedded by JavaScript apps (`__NEXT_DATA__`, `window.__STATE__`), by key name |

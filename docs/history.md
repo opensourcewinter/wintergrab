@@ -36,7 +36,7 @@ A `PageSnapshot` keeps hashes rather than the page, about 1.3 KB per page:
 | `text` | The visible text changed (spacing aside). `text_similarity` tells by how much. |
 | `title`, `description` | The title or the meta description changed (before and after are kept). |
 | `meta` | Other `<meta>` tags changed. Tokens, nonces and timestamps are left out. |
-| `structured`, `types` | The JSON-LD or microdata changed, or its schema.org types did (`schema`). |
+| `structured`, `types` | The JSON-LD, microdata or RDFa changed, or its schema.org types did (`schema`). |
 | `price`, `currency`, `availability` | The product's price or availability changed, read from schema.org or OpenGraph data, with no extraction schema needed. |
 | `layout` | The tag structure changed: a SimHash of the page's tag paths moved by 8 bits or more (`layout_similarity`). |
 | `images` | The image URLs changed. Cache-busting queries (`?v=2`) are ignored. |

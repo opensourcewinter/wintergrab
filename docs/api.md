@@ -173,7 +173,7 @@ checks that it is up to date.
   - `re_first(self, pattern: str | Pattern[str], default: str | None = None, flags: int = 0) -> str | None`
   - `save(self, path: str | Path) -> Path`: Write the raw body to a file and return its path.
   - `select(self, query: str, **kwargs: Any) -> SelectorList`: CSS or XPath, guessed from the query.
-  - `structured_data(self) -> dict[str, Any]`: JSON-LD, microdata, OpenGraph, Twitter cards and meta tags of the page.
+  - `structured_data(self) -> dict[str, Any]`: JSON-LD, microdata, RDFa, OpenGraph, Twitter cards and meta tags of the page.
   - `tables(self) -> list[dict[str, Any]]`: Every HTML table as records.
   - `urljoin(self, url: str) -> str`: Resolve a relative URL against this page.
   - `xpath(self, query: str, **kwargs: Any) -> SelectorList`: XPath query on the page.
@@ -209,7 +209,7 @@ checks that it is up to date.
   - `re_first(self, pattern: str | Pattern[str], default: str | None = None, flags: int = 0) -> str | None`
   - `remove_namespaces(self)`: Strip XML namespaces so ``//loc`` works on sitemaps and feeds.
   - `select(self, query: str, **kwargs: Any) -> SelectorList`: CSS or XPath, guessed from the query (XPath starts with ``/``, ``./`` or ``(``).
-  - `structured_data(self) -> dict[str, Any]`: Machine-readable data the page publishes: JSON-LD, microdata, OpenGraph, Twitter cards, meta tags.
+  - `structured_data(self) -> dict[str, Any]`: Machine-readable data the page publishes: JSON-LD, microdata, RDFa, OpenGraph, Twitter cards, meta tags.
   - `tables(self) -> list[dict[str, Any]]`: Every ``<table>`` as ``{"headers", "rows": [{header: value}], "caption"}`` (colspan/rowspan handled).
   - `urljoin(self, url: str) -> str`: Resolve a (possibly relative) URL against the page URL / ``<base>``.
   - `xpath(self, query: str, *, namespaces: Mapping[str, str] | None = None, adaptive: bool = False, auto_save: bool = False, identifier: str | None = None, min_score: float = 0.55, **variables: Any) -> SelectorList`: Select with XPath 1.0.
@@ -414,7 +414,7 @@ checks that it is up to date.
 - **`ModelRequest(fields: list[ModelField], text: str, url: str | None = None, schema_name: str = 'record', known: dict[str, Any] = ..., images: list[Image] = ...)`** (class). What an extraction model gets: the fields wanted and the page's content (Markdown), and a screenshot of the page when the extractor was asked to send one (``Extractor(vision=True)``).
   - `prompt(self) -> str`: A ready-made instruction for chat models (use it or build your own from the attributes).
 - **`PageContext(source: Any, *, url: str | None = None, fetched_at: float | None = None, scope: Selector | None = None, parent: PageContext | None = None)`** (class). A page (a :class:`~wintergrab.Response`, a :class:`~wintergrab.Selector` or HTML) ready for extraction.
-  - `iter_nodes(self, kind: str) -> Iterator[tuple[str, dict[str, Any]]]`: ``(path, node)`` for every typed object in the page's JSON-LD (``kind="json-ld"``) or microdata.
+  - `iter_nodes(self, kind: str) -> Iterator[tuple[str, dict[str, Any]]]`: ``(path, node)`` for every typed object in the page's JSON-LD (``kind="json-ld"``), microdata or RDFa.
   - `nodes(self, kind: str) -> list[tuple[str, dict[str, Any]]]`: :meth:`iter_nodes` as a list, computed once per page.
   - `scoped(self, element: Selector) -> PageContext`: The same page, looking only at ``element`` (one record of a listing).
 - **`Patterns()`** (class). Regular expressions over the visible text, for values with a recognisable shape.
@@ -435,7 +435,7 @@ checks that it is up to date.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`Strategy()`** (class). Base class: ``candidates(page, field, schema)`` returns what this strategy finds for one field.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
-- **`StructuredData(node: tuple[str, dict[str, Any]] | None = None, kind: str | None = None)`** (class). JSON-LD and microdata (schema.org): what the site publishes for machines.
+- **`StructuredData(node: tuple[str, dict[str, Any]] | None = None, kind: str | None = None)`** (class). JSON-LD, microdata and RDFa (schema.org): what the site publishes for machines.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`VisualLayout()`** (class). Values beside, under or over a label named like the field, where the page draws them (a page fetched in a browser with ``layout=True``; see the module docs).
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
@@ -448,7 +448,7 @@ checks that it is up to date.
 - **`layout_pairs(layout: Layout) -> list[LabelledPair]`**. The labelled values drawn on the page (see the module docs).
 - **`layout_tables(layout: Layout, *, min_rows: int = 3, min_columns: int = 2) -> list[VisualTable]`**. The tables drawn on the page (see the module docs), in the order they are drawn.
 - **`register_strategy(strategy: type[Strategy], *, before: str | None = None)`**. Add a strategy extractors use by default: last, or before the one whose ``method`` is ``before``.
-- **`schema_types(node: Any) -> list[str]`**. The schema.org type names of a JSON-LD/microdata node (``"https://schema.org/Product"`` -> ``"Product"``).
+- **`schema_types(node: Any) -> list[str]`**. The schema.org type names of a JSON-LD, microdata or RDFa node (``"https://schema.org/Product"`` -> ``"Product"``).
 - **`value_key(value: Any) -> Any`**. What two values must share to count as the same (``$299.99`` = ``299.99``; case and spacing ignored).
 
 ## `wintergrab.extraction.templates`: Ready-made schemas
@@ -839,7 +839,7 @@ checks that it is up to date.
   - `describe(self, fields: int = 6) -> str`
   - `schema(self, name: str = 'records') -> Schema`: A data schema for these records (:func:`~wintergrab.data.inference.infer_schema`): a start to review.
   - `to_dict(self) -> dict[str, Any]`
-- **`DataSources(url: str, html: list[HtmlRecords] = ..., tables: list[dict[str, Any]] = ..., json_ld: dict[str, int] = ..., microdata: dict[str, int] = ..., meta: list[str] = ..., embedded: dict[str, list[Collection]] = ..., api: list[ApiCall] = ..., recorded: bool = False, endpoints: list[tuple[str | None, str]] = ..., document: list[Collection] | None = None, pagination: Pagination | None = None, _json_ld_collections: list[tuple[str, Collection]] = ...)`** (class). Where a page's data is (see the module docs).
+- **`DataSources(url: str, html: list[HtmlRecords] = ..., tables: list[dict[str, Any]] = ..., json_ld: dict[str, int] = ..., microdata: dict[str, int] = ..., rdfa: dict[str, int] = ..., meta: list[str] = ..., embedded: dict[str, list[Collection]] = ..., api: list[ApiCall] = ..., recorded: bool = False, endpoints: list[tuple[str | None, str]] = ..., document: list[Collection] | None = None, pagination: Pagination | None = None, _json_ld_collections: list[tuple[str, Collection]] = ...)`** (class). Where a page's data is (see the module docs).
   - `describe(self) -> str`
   - `richest(self) -> Source | None`: The place holding the most values (records x fields): often the one to read.
   - `sources(self) -> list[Source]`: Every place holding at least two records, those holding the most values (records x fields) first.

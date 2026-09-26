@@ -31,7 +31,7 @@ It adds up evidence. Each rule that applies gives its type a weight:
 
 | Evidence | Examples | Weight |
 |---|---|---:|
-| schema.org types in JSON-LD or microdata | `Product`, `NewsArticle`, `JobPosting`, `SearchResultsPage` (`Organization`: 1) | 1-6 |
+| schema.org types in JSON-LD, microdata or RDFa | `Product`, `NewsArticle`, `JobPosting`, `SearchResultsPage` (`Organization`: 1) | 1-6 |
 | `og:type` | `product`, `article`, `profile` | 3 |
 | a 404 status, "Page not found" in the title | | 8, 5 |
 | a password field in a small form | | 6 |

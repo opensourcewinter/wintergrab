@@ -30,7 +30,7 @@ from functools import cached_property
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from ..extraction.page import PageContext, schema_types
+from ..extraction.page import STRUCTURED_KINDS, PageContext, schema_types
 from ..parser.text import tag_name
 
 __all__ = ["PAGE_TYPES", "PageClassifier", "PageFeatures", "PageType", "classify_page", "classify_url"]
@@ -198,7 +198,7 @@ class PageFeatures:
     @cached_property
     def schema_types(self) -> list[str]:
         types = []
-        for kind in ("json-ld", "microdata"):
+        for kind in STRUCTURED_KINDS:
             for _path, node in self.page.nodes(kind):
                 types.extend(schema_types(node))
         return types

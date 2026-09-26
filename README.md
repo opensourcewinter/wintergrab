@@ -30,7 +30,7 @@ pages), the same API scales up.
   sessions (HTTP + browser, several accounts…), proxy rotation with health
   checks, **AutoThrottle** that backs off when a site pushes back,
   robots.txt support, and **pause/resume** (Ctrl+C, then run again).
-- **Scrape without selectors.** Pull JSON-LD/microdata/OpenGraph, the JSON
+- **Scrape without selectors.** Pull JSON-LD/microdata/RDFa/OpenGraph, the JSON
   state that React/Next/Vue apps embed in their HTML, and every table.
   `auto_extract()` finds a page's product grid or result list and names the
   fields. `learn({"title": "…", "price": "…"})` writes the selectors for you

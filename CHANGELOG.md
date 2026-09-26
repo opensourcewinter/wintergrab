@@ -153,6 +153,16 @@ an error that says so, not a setting silently ignored
   found, and how it was changed.
 ### Extraction engine (`wintergrab.extraction`)
 
+- **RDFa.** `structured_data()["rdfa"]` reads RDFa (Lite, and the value
+  attributes of RDFa 1.1: `vocab`, `prefix`, `typeof`, `property`, `about`,
+  `resource`, `content`) into nested dicts of microdata's shape, terms
+  expanded with the vocabulary in effect and the prefixes declared (the
+  common ones are known); a property of another vocabulary keeps its CURIE
+  (`dc:creator`). The extractor reads it like JSON-LD and microdata
+  (method `rdfa`, `sources=["rdfa:Product.offers.price"]`), page
+  classification and the history's `types` count its types, and
+  `wintergrab get --sources` lists it.
+
 - `Extractor(schema).extract(page)` finds every field of a data schema
   without selectors: schema.org JSON-LD and microdata, OpenGraph/Twitter/meta
   tags, your selectors, embedded app state, labelled values ("Weight: 1.2 kg",

@@ -109,6 +109,17 @@ def test_provenance_and_to_dict(extractor: Extractor) -> None:
     assert record["price"] == 299.99 and record.get("nope", 1) == 1
 
 
+def test_rdfa() -> None:
+    page = """<div vocab="https://schema.org/" typeof="Product"><h1 property="name">Phone R</h1>
+    <div property="offers" typeof="Offer"><span property="price" content="149">$149</span>
+    <meta property="priceCurrency" content="USD"></div></div>"""
+    record = Extractor(PRODUCT).extract(page)
+    assert (record.data["name"], record.data["price"]) == ("Phone R", 149)
+    assert record.fields["price"].method == "rdfa" and record.fields["price"].source == "rdfa:Product.offers.price"
+    explicit = {"name": "product", "fields": {"amount": {"type": "number", "sources": ["rdfa:Product.offers.price"]}}}
+    assert Extractor(explicit).extract(page).data["amount"] == 149
+
+
 def test_microdata_and_opengraph() -> None:
     microdata = """<div itemscope itemtype="https://schema.org/Product"><h1 itemprop="name">Phone Y</h1>
     <div itemprop="offers" itemscope itemtype="https://schema.org/Offer"><span itemprop="price" content="199.00">$199</span>

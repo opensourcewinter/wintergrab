@@ -359,7 +359,7 @@ class Response:
     # zero-selector extraction (see Selector)
     # ------------------------------------------------------------------ #
     def structured_data(self) -> dict[str, Any]:
-        """JSON-LD, microdata, OpenGraph, Twitter cards and meta tags of the page."""
+        """JSON-LD, microdata, RDFa, OpenGraph, Twitter cards and meta tags of the page."""
         return self.selector.structured_data()
 
     def embedded_json(self) -> dict[str, Any]:

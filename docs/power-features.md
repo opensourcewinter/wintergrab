@@ -31,6 +31,7 @@ page = wg.get("https://shop.example/product/42")
 data = page.structured_data()
 data["json_ld"]        # [{"@type": "Product", "name": ..., "offers": {"price": ...}}]
 data["microdata"]      # itemscope/itemprop trees as dicts
+data["rdfa"]           # vocab/typeof/property trees, the same shape
 data["opengraph"]      # {"title": ..., "image": [...], "product:price:amount": ...}
 data["twitter"], data["meta"]   # twitter cards; title, description, canonical, language, feeds...
 ```

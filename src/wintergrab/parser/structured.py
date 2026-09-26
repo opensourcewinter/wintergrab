@@ -1,4 +1,4 @@
-"""Machine-readable page data: JSON-LD, microdata, meta tags, SPA state, tables and pagination."""
+"""Machine-readable page data: JSON-LD, microdata, RDFa, meta tags, SPA state, tables and pagination."""
 
 from __future__ import annotations
 
@@ -181,13 +181,15 @@ def _load_json(raw: str) -> Any:
 def structured_data(root: etree._Element, base_url: str | None = None) -> dict[str, Any]:
     """Everything a page declares about itself in machine-readable form.
 
-    Returns ``{"json_ld": [...], "microdata": [...], "opengraph": {...}, "twitter": {...}, "meta": {...}}``.
-    ``base_url`` makes link-like values absolute (pass the page URL, or the ``<base href>`` one).
+    Returns ``{"json_ld": [...], "microdata": [...], "rdfa": [...], "opengraph": {...}, "twitter": {...},
+    "meta": {...}}``. Microdata and RDFa items are nested dicts of the same shape (``@type``, ``@id``, the
+    properties). ``base_url`` makes link-like values absolute (pass the page URL, or the ``<base href>`` one).
     """
     opengraph, twitter, meta = _meta_tags(root, base_url)
     return {
         "json_ld": _json_ld(root),
         "microdata": _microdata(root, base_url),
+        "rdfa": _rdfa(root, base_url),
         "opengraph": opengraph,
         "twitter": twitter,
         "meta": meta,
@@ -280,6 +282,149 @@ def _microdata_value(el: etree._Element, base_url: str | None) -> str:
             return value.strip()
     elif el.get("content") is not None:  # common (if non-standard) on <span itemprop="price" content="9.99">
         return (el.get("content") or "").strip()
+    return text_content(el)
+
+
+# RDFa (Lite, and the value attributes of RDFa 1.1): ``vocab``, ``prefix``, ``typeof``, ``property``, ``about``,
+# ``resource``, ``content``, ``datatype``. Items are read like microdata's: an element with ``typeof`` is an item,
+# its ``property`` descendants are its properties, and a ``property`` element with ``typeof`` of its own is a nested
+# item. Terms are expanded with the vocabulary in effect and the prefixes declared (the common ones are known);
+# a property of the vocabulary keeps its short name (``name``), one of another vocabulary its CURIE
+# (``dc:creator``), as microdata keeps its ``itemprop``.
+_RDFA_PREFIXES = {
+    "schema": "https://schema.org/",
+    "og": "http://ogp.me/ns#",
+    "article": "http://ogp.me/ns/article#",
+    "book": "http://ogp.me/ns/book#",
+    "profile": "http://ogp.me/ns/profile#",
+    "product": "http://ogp.me/ns/product#",
+    "fb": "http://ogp.me/ns/fb#",
+    "dc": "http://purl.org/dc/terms/",
+    "dcterms": "http://purl.org/dc/terms/",
+    "dc11": "http://purl.org/dc/elements/1.1/",
+    "foaf": "http://xmlns.com/foaf/0.1/",
+    "gr": "http://purl.org/goodrelations/v1#",
+    "v": "http://rdf.data-vocabulary.org/#",
+    "vcard": "http://www.w3.org/2006/vcard/ns#",
+    "sioc": "http://rdfs.org/sioc/ns#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "cc": "http://creativecommons.org/ns#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "owl": "http://www.w3.org/2002/07/owl#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "prov": "http://www.w3.org/ns/prov#",
+    "dcat": "http://www.w3.org/ns/dcat#",
+}
+_RDFA_URL_ATTRS = {**_MICRODATA_URL_ATTRS}  # (the same elements carry a resource in an attribute)
+_SCHEMA_ORG = ("https://schema.org/", "http://schema.org/")
+
+
+class _RdfaEnv:
+    """The vocabulary and prefixes in effect on an element (``vocab`` and ``prefix`` are inherited)."""
+
+    __slots__ = ("prefixes", "vocab")
+
+    def __init__(self, vocab: str | None, prefixes: dict[str, str]) -> None:
+        self.vocab = vocab
+        self.prefixes = prefixes
+
+    def under(self, el: etree._Element) -> _RdfaEnv:
+        """The environment inside ``el``: its own ``vocab`` and ``prefix`` declarations over the inherited ones."""
+        vocab, prefixes = self.vocab, self.prefixes
+        declared = el.get("vocab")
+        if declared is not None:
+            vocab = declared.strip() or None  # (vocab="" ends the inherited vocabulary)
+        mapping = el.get("prefix")
+        if mapping:
+            tokens = mapping.split()
+            found = {
+                tokens[i].rstrip(":"): tokens[i + 1]
+                for i in range(0, len(tokens) - 1, 2)
+                if tokens[i].endswith(":") and tokens[i + 1]
+            }
+            if found:
+                prefixes = {**prefixes, **found}
+        return self if vocab == self.vocab and prefixes is self.prefixes else _RdfaEnv(vocab, prefixes)
+
+    def expand(self, term: str) -> str:
+        """A term or CURIE as a full IRI (``Product`` -> ``https://schema.org/Product`` under that vocabulary;
+        ``schema:name`` -> ``https://schema.org/name``); an IRI, or a term without a vocabulary, as it is."""
+        if "://" in term or term.startswith(("#", "/", "_:")):
+            return term
+        prefix, colon, local = term.partition(":")
+        if colon and prefix in self.prefixes:
+            return self.prefixes[prefix] + local
+        if colon and prefix in ("http", "https", "urn", "mailto", "tel"):
+            return term
+        return f"{self.vocab}{term}" if self.vocab and not colon else term
+
+    def property_name(self, term: str) -> str:
+        """The name a property is kept under: its short name under the vocabulary in effect or schema.org,
+        else the CURIE or IRI as written."""
+        iri = self.expand(term)
+        for namespace in ((self.vocab,) if self.vocab else ()) + _SCHEMA_ORG:
+            if namespace and iri.startswith(namespace) and len(iri) > len(namespace):
+                return iri[len(namespace) :]
+        return term
+
+
+def _rdfa_env_of(el: etree._Element) -> _RdfaEnv:
+    """The environment on ``el``, from the declarations of its ancestors and its own."""
+    env = _RdfaEnv(None, _RDFA_PREFIXES)
+    for ancestor in reversed(list(el.iterancestors())):
+        env = env.under(ancestor)
+    return env.under(el)
+
+
+def _rdfa(root: etree._Element, base_url: str | None) -> list[dict[str, Any]]:
+    """Top-level RDFa items (``typeof`` without ``property``) as nested dicts, like microdata's."""
+    scopes = root.xpath("descendant-or-self::*[@typeof and not(@property)]")
+    return [_rdfa_item(scope, _rdfa_env_of(scope), base_url, 0) for scope in scopes]
+
+
+def _rdfa_item(scope: etree._Element, env: _RdfaEnv, base_url: str | None, depth: int) -> dict[str, Any]:
+    item: dict[str, Any] = {}
+    types = [env.expand(t) for t in (scope.get("typeof") or "").split()]
+    if types:
+        item["@type"] = types[0] if len(types) == 1 else types
+    subject = scope.get("about") if scope.get("about") is not None else scope.get("resource")
+    if subject is not None and subject.strip():
+        item["@id"] = _absolute(subject.strip(), base_url)
+    stack = [(c, env) for c in reversed(scope) if isinstance(c.tag, str)]
+    while stack:
+        el, inherited = stack.pop()
+        inside = inherited.under(el)
+        is_scope = el.get("typeof") is not None
+        names = (el.get("property") or "").split()
+        if names:
+            if is_scope and depth < _MAX_ITEM_DEPTH:
+                value: Any = _rdfa_item(el, inside, base_url, depth + 1)
+            else:
+                value = _rdfa_value(el, base_url)
+            for name in names:
+                _add(item, inside.property_name(name), value)
+        if not is_scope:  # a nested item's properties belong to it, not to us
+            stack.extend((c, inside) for c in reversed(el) if isinstance(c.tag, str))
+    return item
+
+
+def _rdfa_value(el: etree._Element, base_url: str | None) -> str:
+    content = el.get("content")
+    if content is not None:
+        return content.strip()
+    resource = el.get("resource")
+    if resource is not None and resource.strip():
+        return _absolute(resource.strip(), base_url)
+    name = tag_name(el)
+    if name in _RDFA_URL_ATTRS:
+        url = el.get(_RDFA_URL_ATTRS[name])
+        if url is not None:
+            return _absolute(url, base_url)
+    elif name in _MICRODATA_ATTRS:
+        value = el.get(_MICRODATA_ATTRS[name])
+        if value is not None:
+            return value.strip()
     return text_content(el)
 
 

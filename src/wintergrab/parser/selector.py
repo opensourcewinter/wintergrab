@@ -674,7 +674,7 @@ class Selector:
     # zero-selector extraction
     # ------------------------------------------------------------------ #
     def structured_data(self) -> dict[str, Any]:
-        """Machine-readable data the page publishes: JSON-LD, microdata, OpenGraph, Twitter cards, meta tags.
+        """Machine-readable data the page publishes: JSON-LD, microdata, RDFa, OpenGraph, Twitter cards, meta tags.
 
         Product pages, articles, recipes and events very often carry clean
         structured data - no selectors needed.

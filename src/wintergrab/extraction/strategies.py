@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 from ..data.normalize import coordinates_in_url, iter_numbers, normalize_availability, normalize_phone, parse_rating
 from ..parser import Selector
 from ..parser.text import tag_name, text_content
-from .page import PageContext, schema_types
+from .page import STRUCTURED_KINDS, PageContext, schema_types
 from .schemaorg import FIELD_PATHS, META_KEYS, camel, candidate_names, field_key, read_path, target_types
 
 if TYPE_CHECKING:
@@ -220,17 +220,18 @@ def _paths_for(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
 
 
 class StructuredData(Strategy):
-    """JSON-LD and microdata (schema.org): what the site publishes for machines.
+    """JSON-LD, microdata and RDFa (schema.org): what the site publishes for machines.
 
     Records come from the objects whose ``@type`` fits the schema's name
     (``product`` -> ``Product``...). A field is read from the paths schema.org
     uses for it (``price`` -> ``offers.price``...), from its own name in
-    camelCase, or from explicit ``sources`` such as ``"jsonld:Product.offers.price"``.
+    camelCase, or from explicit ``sources`` such as ``"jsonld:Product.offers.price"``
+    (``microdata:``, ``rdfa:`` likewise).
     """
 
     method = "json-ld"
     page_level = True
-    kinds = ("json-ld", "microdata")
+    kinds = STRUCTURED_KINDS
 
     def __init__(self, node: tuple[str, dict[str, Any]] | None = None, kind: str | None = None) -> None:
         #: Restrict to one object (a record of a listing made of several JSON-LD objects).
@@ -240,7 +241,7 @@ class StructuredData(Strategy):
     @staticmethod
     def _explicit(f: SchemaField, kind: str) -> list[tuple[str | None, str]]:
         """``(type or None, path)`` from ``sources`` like ``jsonld:Product.offers.price`` / ``microdata:offers.price``."""
-        prefixes = ("jsonld:", "json-ld:") if kind == "json-ld" else ("microdata:",)
+        prefixes = ("jsonld:", "json-ld:") if kind == "json-ld" else (f"{kind}:",)
         out: list[tuple[str | None, str]] = []
         for source in f.sources:
             for prefix in prefixes:
