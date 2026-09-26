@@ -829,6 +829,10 @@ an error that says so, not a setting silently ignored
 
 ### Documentation and contributing
 
+- CI audits the packages wintergrab installs, with every extra and their
+  own dependencies, for known vulnerabilities on every push (`pip-audit`,
+  the `dependency audit` job); SECURITY.md says how to run the same check,
+  and how wintergrab treats a site's refusals.
 - New guides: the architecture (layers, a request's way through a crawl,
   where things are, extension points, state on disk), configuration (where
   each setting lives, environment variables, secrets), and upgrading from

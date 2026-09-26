@@ -58,6 +58,28 @@ These inputs are trusted, so only use ones you control:
 - **Plugins** are installed packages, and run as wintergrab does.
   `WINTERGRAB_PLUGINS=0` loads none.
 
+## Dependencies
+
+wintergrab depends on few packages: curl_cffi, lxml and cssselect, and
+one or two for each extra (Playwright, pyarrow, openpyxl...). On every
+push, CI installs wintergrab with every extra in a fresh environment and
+audits the packages installed with it, dependencies of dependencies
+included, for known vulnerabilities (`pip-audit`, the `dependency audit`
+job). To run the same check:
+
+```bash
+python -m venv /tmp/wg && /tmp/wg/bin/pip install ".[all]"
+/tmp/wg/bin/pip freeze --exclude-editable | grep -v "^wintergrab" > deps.txt
+pip install pip-audit && pip-audit --disable-pip --no-deps -r deps.txt
+```
+
+## A site's refusals
+
+wintergrab does not try to get past a block, a bot check, a rate limit or
+a login it was not given: a refused page is reported and its site slowed
+down, and the browser does not hide that it is automated. See
+[docs/responsible-access.md](docs/responsible-access.md).
+
 ## Credentials
 
 - **Keep them in the environment.** Use `${NAME}` in a project's webhooks,
