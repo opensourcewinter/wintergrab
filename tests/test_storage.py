@@ -222,7 +222,8 @@ def test_duckdb_held_by_another_program(tmp_path, monkeypatch) -> None:
     holder = hold(60)  # (held until the crawl ends, and after)
     try:
         with pytest.raises(
-            ConfigurationError, match=r"cannot write items to .*: IO Error: (Could not set lock|File is already open)"
+            ConfigurationError,
+            match=r"(?s)cannot write items to .*: IO Error: .*(Could not set lock|File is already open)",
         ):
             open_exporter(path, append=True)  # (a crawl starting now is told at once)
         with pytest.raises(ExportError, match=r"could not write .*items are kept in .*\.items\.duckdb\.spool\.jsonl"):
