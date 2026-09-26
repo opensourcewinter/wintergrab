@@ -34,6 +34,7 @@ dependencies = [
     "cssselect>=1.2",
     "curl_cffi>=0.10",
     "tomli>=1.1; python_version < '3.11'",
+    "tzdata; sys_platform == 'win32'",  # time zones for schedules (Windows has no database of its own)
 ]
 
 [project.optional-dependencies]

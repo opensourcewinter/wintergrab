@@ -1,7 +1,8 @@
 # Observability: events, metrics and failure reports
 
 A big crawl should be understandable while it runs and explainable after it
-ends. wintergrab gives you three views:
+ends. wintergrab gives you three views, and [a dashboard](dashboard.md) that
+shows them for each run, live while a crawl runs:
 
 - **Events**: a stream of small structured records (a request failed, a
   domain backed off, a budget ran out...).
@@ -43,7 +44,9 @@ Or let the spider write them: `event_log = True` writes
 | `policy_refused` | `url`, `reason`, `policy` |
 | `budget_exhausted` | `budget`, `used`, `limit` |
 | `pipeline_report` | `pipeline`, `stages` (per-stage counts, when a [data pipeline](data.md#pipelines) closes) |
-| `quality_degraded` | `dataset`, `field`, `code`, `message`, `severity` ([quality monitoring](data.md#quality)) |
+| `extraction_failed` | `url`, `schema`, `missing` (a page where `--extract` or a goal found no complete record: required fields missing) |
+| `quality_degraded` | `dataset`, `field`, `code`, `message`, `severity` ([quality monitoring](data.md#quality), against the last run) |
+| `schema_changed` | `dataset`, `added`, `removed`, `retyped` (the records' fields came, went or changed type since the last run) |
 | `changes_detected` | `run`, `added`, `removed`, `modified`, `unchanged`, `missing`, `skipped`, `kinds` (at the end of a crawl with a [history](history.md)) |
 | `site_changed` | `run`, `previous`, and the counts of `changes_detected` (with a history, from its second run, when something changed) |
 | `record_created`, `record_deleted` | `url` (with a history, from its second run: one per page) |

@@ -90,6 +90,8 @@ job's name.
   shown.
 - `wintergrab run books rated` runs only those jobs.
 - The exit status is 1 when a job failed.
+- `wintergrab dashboard` shows the jobs, when each runs next, and each run:
+  see [the dashboard](dashboard.md).
 
 ## Schedules
 
@@ -125,7 +127,7 @@ runs what fell due since the one before.
 ```yaml
 webhooks:
   - url: https://hooks.example/wintergrab
-    events: [job_failed, record_updated, quality_degraded]   # default: all but per-page ones
+    events: [job_failed, record_updated, quality_degraded]   # default: all but the per-page ones
     secret: ${WINTERGRAB_WEBHOOK_SECRET}
     headers: {Authorization: "Bearer ${HOOK_TOKEN}"}
 ```
@@ -161,7 +163,8 @@ What there is to tell ([all event kinds](observability.md#events)):
 | Whatever runs the jobs (`run`, `schedule`) | `job_started`, `job_finished`, `job_failed` (with the run, its stats, its log) |
 | Each job's crawl | `crawl_started`, `crawl_finished`, `request_failed`, `blocked`, `budget_exhausted`... |
 | A job with a `history`, from its second run | `site_changed` (the counts), and one `record_created`, `record_updated` (with what changed: `{"price": [10.0, 8.0]}`) or `record_deleted` per page |
-| A data pipeline's quality monitor | `quality_degraded` |
+| A job with `extract`, or a goal | `extraction_failed` per page with no complete record (asked for by name) |
+| A job with `quality: FILE` (compared with the last run) | `quality_degraded` (price completeness 98% → 41%), `schema_changed` (fields came or went) |
 
 Outside projects, any spider can post its events:
 

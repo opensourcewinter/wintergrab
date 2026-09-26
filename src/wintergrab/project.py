@@ -64,8 +64,10 @@ from typing import Any
 
 from .errors import ConfigurationError
 from .files import read_structured
+from .redact import redact_argv
 from .runs import DEFAULT_WORKSPACE, Run, RunRegistry
 from .schedules import Cron, Schedule, parse_duration, parse_schedule
+from .utils import replace_file
 from .webhooks import Webhook
 
 __all__ = ["PROJECT_FILES", "Job", "JobResult", "Project", "Scheduler", "find_project", "starter_project"]
@@ -288,7 +290,7 @@ def _run_command(command: Sequence[str], *, cwd: Path, log_file: Path | None) ->
         return subprocess.run(argv, cwd=cwd, env=env, check=False).returncode
     log_file.parent.mkdir(parents=True, exist_ok=True)
     with log_file.open("ab") as out:
-        out.write(f"$ wintergrab {' '.join(command)}\n".encode())
+        out.write(f"$ wintergrab {' '.join(redact_argv(command))}\n".encode())
         out.flush()
         return subprocess.run(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, check=False).returncode
 
@@ -384,7 +386,7 @@ class Scheduler:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_name(f".{self.state_path.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps({"jobs": self.state}, indent=1), encoding="utf-8")
-        os.replace(tmp, self.state_path)
+        replace_file(tmp, self.state_path)  # (the dashboard may be reading it)
 
     def last_run(self, job: Job) -> datetime | None:
         text = (self.state.get(job.name) or {}).get("last_run")
@@ -433,7 +435,7 @@ class Scheduler:
         tell the webhooks, and remember when."""
         stamp = self.now()
         log_file = self.project.workspace / "logs" / f"{job.name}-{stamp:%Y%m%d-%H%M%S}.log" if logged else None
-        self._tell("job_started", job=job.name, command=job.command())
+        self._tell("job_started", job=job.name, command=redact_argv(job.command()))
         result = self.project.run_job(job, log_file=log_file, runner=self.runner)
         entry = self.state.setdefault(job.name, {})
         entry.update(last_run=stamp.isoformat(), last_status=result.status, exit_code=result.exit_code,

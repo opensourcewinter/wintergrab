@@ -411,7 +411,15 @@ class Shop(Spider):
 ```
 
 Each problem is logged and emitted as a `quality_degraded` event (`field`,
-`code`, `message`, `severity`), so alerts can hang off it.
+`code`, `message`, `severity`), so alerts can hang off it. When fields came,
+went or changed type, a `schema_changed` event says which: `{"added":
+["title"], "removed": ["price"], "retyped": {"rating": ["number", "text"]}}`.
+
+On the command line, `--quality FILE` does the same for `wintergrab crawl`
+and `wintergrab goal`: each run is compared with the report in FILE, which
+then holds this run's. Pages where `--extract` found no complete record (a
+required field missing) are each an `extraction_failed` event (`url`,
+`schema`, `missing`).
 
 ```python
 from wintergrab.data import QualityMonitor

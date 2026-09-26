@@ -8,7 +8,7 @@ stdout, so you can pipe the output anywhere.
 wintergrab [-v | -q] [--version] COMMAND ...
 
 COMMAND: get, crawl, data, inspect, goal, review, fixture, test, run, schedule, init,
-         runs, replay, heal, history, shell, doctor
+         runs, replay, dashboard, heal, history, shell, doctor
 ```
 
 `-v` shows debug logs; `-q` keeps only warnings.
@@ -128,6 +128,7 @@ Options for any crawl:
 | `--block-trackers` | `resource_filter = True` |
 | `--extract SCHEMA` | (URL mode) extract typed records with [the extractor](extraction.md) (`--all`, `--container`, `--provenance`) |
 | `--heal DIR`, `--review FILE` | (with `--extract`) a [self-healing extractor](healing.md): versions in DIR, selectors repaired when the site changes, questions in FILE |
+| `--quality FILE` | measure the items' [quality](data.md#quality) and compare it with the last run's report, kept in FILE (events `quality_degraded`, `schema_changed`) |
 | `--pipeline FILE` | appends a [data pipeline](data.md#pipelines-as-configuration) to `pipelines` (`--allow-imports` if it names Python functions) |
 | `-s/--set NAME=VALUE` | any attribute; values are parsed as JSON when possible (`-s retries=5`, `-s 'allowed_statuses=[404]'`) |
 
@@ -206,7 +207,8 @@ See [intelligence.md](intelligence.md#site-profiles).
 
 ```bash
 wintergrab goal "REQUEST" [--site URL] [--sample N] [--plan-only] [--save-plan FILE] [--explain] [--json]
-                          [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-optimize] [--record] [-o FILE]
+                          [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-optimize] [--record]
+                          [--quality FILE] [-o FILE]
 wintergrab goal --plan FILE [-y] [-o FILE]
 ```
 
@@ -293,6 +295,20 @@ when a job failed. `schedule --list` shows when each job runs next, and
 `--once` runs what is due and stops, for cron or CI. Jobs run as `crawl` and
 `goal` with `--project FILE --job NAME`, which post the crawl's events to the
 project's webhooks and label its run. See [projects.md](projects.md).
+
+## `wintergrab dashboard`: the runs in a browser
+
+```bash
+wintergrab dashboard [--workspace DIR] [--project FILE] [--port 8710] [--host 127.0.0.1] [--open]
+```
+
+Serves a page on this machine with the workspace's runs and the project's
+jobs. Each run shows its numbers (pages, success, failures, blocked,
+pages/sec, latency, records, browser pages, data quality), then its
+failures, domains, extraction, changes, events and settings. A running
+crawl's page follows it live. The same data is available as JSON at
+`/api/runs`, `/api/runs/RUN` and `/api/jobs`. See
+[dashboard.md](dashboard.md).
 
 ## `wintergrab history`: what changed between crawls
 

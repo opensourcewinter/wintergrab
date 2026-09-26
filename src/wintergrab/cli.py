@@ -477,8 +477,13 @@ class QuickSpider(Spider):
         else:
             found = [extractor.extract(response)]
         for record in found:
-            if any(fv.validation == "missing" for fv in record.fields.values()):
+            missing = [name for name, fv in record.fields.items() if fv.validation == "missing"]
+            if missing:
                 self.incomplete += 1
+                if self.events.wants("extraction_failed"):
+                    self.events.emit(
+                        "extraction_failed", url=response.url, schema=extractor.schema.name, missing=missing
+                    )
                 continue
             row = record.to_dict()
             yield row if "url" in row else {"url": response.url, **row}
@@ -619,6 +624,7 @@ def cmd_goal(args: argparse.Namespace) -> int:
         optimize=not args.no_optimize,
         **_workspace_settings(args, None),  # a goal run's recipe is its plan
         **_project_settings(args),
+        **({"pipelines": [_quality_monitor(args.quality, plan.goal.kind.name)]} if args.quality else {}),
     )
     if args.verbose >= 0:
         print(result.summary(), file=sys.stderr)
@@ -668,19 +674,20 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 def cmd_run(args: argparse.Namespace) -> int:
     from .project import Scheduler, find_project
+    from .redact import redact_argv
 
     project = find_project(args.project)
     jobs = project.select(args.jobs)
     if args.list:
         for job in project.jobs.values():
             when = f"  ({job.schedule})" if job.schedule is not None else ""
-            print(f"{job.name:<16} wintergrab {' '.join(job.command())}{when}")
+            print(f"{job.name:<16} wintergrab {' '.join(redact_argv(job.command()))}{when}")
         return 0
     scheduler = Scheduler(project)
     failed = 0
     try:
         for job in jobs:
-            print(f"== {job.name}: wintergrab {' '.join(job.command())}", file=sys.stderr)
+            print(f"== {job.name}: wintergrab {' '.join(redact_argv(job.command()))}", file=sys.stderr)
             result = scheduler.run(job, logged=False)
             print(result.describe(), file=sys.stderr)
             failed += not result.ok
@@ -737,6 +744,36 @@ def cmd_init(args: argparse.Namespace) -> int:
     (directory / DEFAULT_WORKSPACE).mkdir(exist_ok=True)
     print(f"wrote {target} and {directory / DEFAULT_WORKSPACE} (where every run is kept)")
     print("next: edit the jobs, then: wintergrab run   (or: wintergrab schedule)", file=sys.stderr)
+    return 0
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    import webbrowser
+
+    from .dashboard import serve
+    from .project import find_project
+    from .runs import DEFAULT_WORKSPACE
+
+    project = None
+    if args.project:
+        project = find_project(args.project)
+    elif not args.workspace:
+        try:
+            project = find_project()
+        except ConfigurationError as exc:
+            if "no project in" not in str(exc):
+                print(f"warning: the project here was not read: {exc}", file=sys.stderr)
+    workspace = args.workspace or (str(project.workspace) if project is not None else DEFAULT_WORKSPACE)
+    server = serve(workspace, project=project, host=args.host, port=args.port)
+    print(f"wintergrab dashboard: {server.url}  ({workspace}; Ctrl+C to stop)", file=sys.stderr)
+    if args.open:
+        webbrowser.open(server.url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
     return 0
 
 
@@ -1049,6 +1086,12 @@ def _crawl_settings(args: argparse.Namespace) -> tuple[type[Spider], dict[str, A
 
         pipeline = Pipeline.load(args.pipeline, allow_imports=args.allow_imports)
         overrides["pipelines"] = [*(overrides.get("pipelines") or getattr(cls, "pipelines", None) or ()), pipeline]
+    if args.quality:
+        from .data.schema import load_schema
+
+        name = load_schema(args.extract).name if getattr(args, "extract", None) else overrides.get("name") or cls.name
+        monitor = _quality_monitor(args.quality, name)
+        overrides["pipelines"] = [*(overrides.get("pipelines") or getattr(cls, "pipelines", None) or ()), monitor]
     if args.progress is not None:
         overrides["progress"] = args.progress
     rotator = _proxies(args)
@@ -1094,6 +1137,14 @@ def _workspace_settings(args: argparse.Namespace, recipe: dict[str, Any] | None)
     if settings and recipe is not None:
         settings["run_recipe"] = recipe
     return settings
+
+
+def _quality_monitor(path: str, name: str | None) -> Any:
+    """``--quality FILE``: measure the items, compare them with FILE (the last run's report: events
+    ``quality_degraded`` and ``schema_changed``), then keep this run's report there."""
+    from .data.quality import QualityMonitor
+
+    return QualityMonitor(name=name, baseline=path, save_to=path)
 
 
 def _project_settings(args: argparse.Namespace) -> dict[str, Any]:
@@ -1860,6 +1911,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     c.add_argument("--pipeline", metavar="FILE", help="clean, validate and filter items with a pipeline file")
     c.add_argument(
+        "--quality",
+        metavar="FILE",
+        help="measure the items' quality and compare it with the last run's, kept in FILE (events quality_degraded, "
+        "schema_changed)",
+    )
+    c.add_argument(
         "--allow-imports", action="store_true", help="let the --pipeline file call Python functions it names"
     )
     c.add_argument(
@@ -2014,6 +2071,11 @@ def build_parser() -> argparse.ArgumentParser:
     gp.add_argument("--sample", type=int, default=30, metavar="N", help="pages to survey per site (30)")
     gp.add_argument("--max-pages", type=int, metavar="N", help="stop after N pages")
     gp.add_argument("--record", action="store_true", help="keep the run's pages and items, to replay it")
+    gp.add_argument(
+        "--quality",
+        metavar="FILE",
+        help="measure the records' quality and compare it with the last run's, kept in FILE",
+    )
     gp.add_argument("--workspace", metavar="DIR", help="where runs are kept (default .wintergrab)")
     gp.add_argument("--project", metavar="FILE", help="(set by wintergrab run/schedule) post events to its webhooks")
     gp.add_argument("--job", metavar="NAME", help="(set by wintergrab run/schedule) the job's name, kept with the run")
@@ -2107,6 +2169,20 @@ def build_parser() -> argparse.ArgumentParser:
     it.add_argument("directory", nargs="?", metavar="DIR", help="where (default: here)")
     it.add_argument("--force", action="store_true", help="write over an existing wintergrab.yaml")
     it.set_defaults(func=cmd_init)
+
+    db = sub.add_parser(
+        "dashboard",
+        help="a web page over the runs: what each crawl did, and what one is doing now",
+        description="Serve a dashboard of the workspace's runs, and of the project's jobs, on this machine "
+        "(http://127.0.0.1:8710/): each run's numbers, failures, domains, extraction, changes and events, live "
+        "while it runs. Also as JSON: /api/runs, /api/runs/RUN, /api/jobs.",
+    )
+    db.add_argument("--workspace", metavar="DIR", help="the workspace (default: the project's, or .wintergrab)")
+    db.add_argument("--project", metavar="FILE", help="show this project's jobs (default: wintergrab.yaml here)")
+    db.add_argument("--host", default="127.0.0.1", help="the address to listen on (default: this machine only)")
+    db.add_argument("--port", type=int, default=8710, help="the port (default 8710)")
+    db.add_argument("--open", action="store_true", help="open it in a browser")
+    db.set_defaults(func=cmd_dashboard)
 
     ru = sub.add_parser(
         "runs",

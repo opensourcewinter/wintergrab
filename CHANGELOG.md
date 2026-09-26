@@ -403,7 +403,9 @@
   hours`, `daily at 06:00`, `weekly on monday at 06:00`, `once at
   2026-10-01 06:00`, in the machine's time or a `timezone`. A time missed
   while no scheduler was running is made up for once, as soon as one runs,
-  unless the job would start later than its `start_within`.
+  unless the job would start later than its `start_within`. On Windows,
+  which has no time zone database of its own, `tzdata` is installed with
+  wintergrab.
 - Webhooks (`Spider.webhooks`, or a project's `webhooks`) post events as
   JSON, batched (a second, at most 100 per delivery), signed with
   HMAC-SHA256 when given a `secret` (`X-Wintergrab-Signature`;
@@ -415,12 +417,42 @@
   counts), and one `record_created`, `record_updated` (what changed) or
   `record_deleted` per page. From a project's jobs: `job_started`,
   `job_finished`, `job_failed` (the run, its stats, its log).
-- `EVENT_KINDS` lists the kinds that are emitted: `pipeline_report` was
-  missing from it, and `extraction_failed` and `schema_changed`, which
-  nothing emitted, are gone.
+- `extraction_failed` (a page where `--extract` or a goal found no complete
+  record: `url`, `schema`, `missing`) and `schema_changed` (a quality
+  monitor found fields that came, went or changed type since the last run:
+  `added`, `removed`, `retyped`) were listed in `EVENT_KINDS` but never
+  emitted; now they are. `pipeline_report` was missing from the list.
+- `crawl --quality FILE` and `goal --quality FILE` measure the records'
+  quality and compare it with the last run's report, kept in FILE:
+  `quality_degraded` (price completeness 98% → 41%) and `schema_changed`
+  without writing a data pipeline.
+
+### The dashboard (`wintergrab.dashboard`)
+
+- `wintergrab dashboard` serves a page on this machine with the workspace's
+  runs and the project's jobs. Each run shows its numbers (pages, success,
+  failed, blocked, pages/sec, latency, records, browser pages, data
+  quality). Under them come its failures with their causes, each domain's
+  throttling, extraction problems, the quality against the last run,
+  fields that came or went, what changed since the last run, its events
+  and its settings. A running crawl's page follows it live; a run whose
+  process died shows as *not responding*. JSON at `/api/runs`,
+  `/api/runs/RUN` and `/api/jobs`.
+- It is read-only and listens on 127.0.0.1. It refuses requests addressed
+  to other host names (DNS rebinding), shows crawled content as escaped
+  text under a Content Security Policy that allows no script, and hides
+  credentials.
+- Runs keep their metrics (`metrics.json`: every two seconds while they
+  run, then the final ones) and the quality reports of their records.
 
 ### Fixes
 
+- A run's record (`run.json`) kept credentials as they were given: the
+  password in a proxy URL, `Authorization` and `Cookie` headers, settings
+  such as `api_token`, and the same in a crawl's command line. They are now
+  left out (`***`; see `wintergrab.redact`), and so are they in a project
+  job's `job_started` event and log. A replay does without them: the pages
+  come from the recording, and the spider's own values stand in.
 - A spider given an empty `HTTPCache` object (`cache=HTTPCache(...)` with
   nothing in it yet) used no cache at all: the cache's length made it
   falsy.

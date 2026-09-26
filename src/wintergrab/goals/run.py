@@ -95,6 +95,9 @@ class GoalSpider(Spider):
         data = record.to_dict()
         if data.get(self.identity) in (None, "", []):
             self.incomplete += 1
+            if self.events.wants("extraction_failed"):
+                self.events.emit("extraction_failed", url=response.url, schema=self.extractor.schema.name,
+                                 missing=[self.identity])  # fmt: skip
             return
         if not data.get("url"):
             data["url"] = response.url
@@ -203,7 +206,7 @@ def run_plan(
         output=output,
         keep_items=keep,
         max_pages=max_pages,
-        pipelines=[pipeline] if stages else [],
+        pipelines=[*([pipeline] if stages else []), *options.pop("pipelines", ())],  # the goal's first
         log_level=log_level,
         progress=progress,
         **options,

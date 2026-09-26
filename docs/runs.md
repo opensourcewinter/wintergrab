@@ -38,7 +38,8 @@ Runs live in a workspace, `.wintergrab` in the current directory by default
 
 | File | What |
 |---|---|
-| `run.json` | When it started and finished, its status, the spider's settings, its stats and failure diagnoses, where its items went, and how to run it again (the command line, the spider class, or a goal's plan) |
+| `run.json` | When it started and finished, its status, the spider's settings (without credentials, below), its stats and failure diagnoses, the quality of its records when it measured it, where its items went, and how to run it again (the command line, the spider class, or a goal's plan) |
+| `metrics.json` | Its [metrics](observability.md#metrics) (rates, latency percentiles, each domain's throttling, memory): every two seconds while it runs, then its final ones |
 | `events.jsonl` | Its [events](observability.md#events): starts, retries, failures, blocks, budgets, changes... The per-response ones (with their timings) are kept only when recording |
 | `items.jsonl` | (recorded) The items it wrote, after the pipelines |
 | `archive/` | (recorded) Every response it received: pages, redirects, errors, robots.txt, whatever their status or caching headers. The archive is an [HTTP cache](power-features.md) |
@@ -52,7 +53,18 @@ wintergrab runs                        # the runs, newest first
 wintergrab runs run-7                  # one run: its command, stats, failures and files
 wintergrab runs last --json
 wintergrab runs --remove run-7
+wintergrab dashboard                   # the same in a browser, live while a crawl runs
 ```
+
+See [the dashboard](dashboard.md).
+
+A run's record leaves credentials out. That covers the password in a URL
+(`http://user:***@proxy:8080`), and headers and settings named like
+credentials (`Authorization`, `Cookie`, `api_token`, `client_secret`...),
+in its settings and in its command line alike. A replay does without them.
+The pages come from the archive, and the spider's own values stand in for
+the settings left out. Query strings are kept, because they are part of
+which page a URL is.
 
 ## Replay
 

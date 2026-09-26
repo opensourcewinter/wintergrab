@@ -145,6 +145,35 @@ def test_changes_reach_webhooks(shop, receiver, tmp_path) -> None:  # noqa: F811
     assert events["site_changed"]["added"] == 1 and events["crawl_finished"]["origin"] == "shop"
 
 
+def test_extraction_and_quality_events(site, tmp_path) -> None:
+    from wintergrab.cli import main
+
+    def crawl(fields: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        schema = tmp_path / "book.schema.json"
+        schema.write_text(json.dumps({"name": "book", "fields": fields}), encoding="utf-8")
+        events = tmp_path / "events.jsonl"
+        events.unlink(missing_ok=True)
+        assert main(["-q", "crawl", site.url + "/books/", "--allow", "/books/catalogue/", "--extract", str(schema),
+                     "--quality", str(tmp_path / "quality.json"), "--events", str(events),
+                     "-o", str(tmp_path / "books.jsonl"), "--no-progress"]) == 0  # fmt: skip
+        found: dict[str, list[dict[str, Any]]] = {}
+        for line in events.read_text(encoding="utf-8").splitlines():
+            event = json.loads(line)
+            found.setdefault(event["event"], []).append(event)
+        return found
+
+    name = {"type": "string", "selectors": ["h1"], "required": True}
+    first = crawl({"name": name, "price": "money", "url": "url"})
+    assert "schema_changed" not in first and "quality_degraded" not in first  # the first run is the baseline
+    second = crawl({"name": name, "title": {"type": "string", "selectors": ["title"]}, "url": "url"})
+    [changed] = second["schema_changed"]
+    assert (changed["dataset"], changed["added"], changed["removed"]) == ("book", ["title"], ["price"])
+    assert [e["code"] for e in second["quality_degraded"]] == ["field-disappeared"]
+    third = crawl({"name": name, "isbn": {"type": "string", "selectors": [".isbn"], "required": True}})
+    failed = third["extraction_failed"]  # every book page: no ISBN on them
+    assert len(failed) == 15 and failed[0]["missing"] == ["isbn"] and failed[0]["schema"] == "book"
+
+
 def _project(tmp_path, site_url: str, hook_url: str, **extra: Any) -> Any:
     data = {
         "defaults": {"concurrency": 4},

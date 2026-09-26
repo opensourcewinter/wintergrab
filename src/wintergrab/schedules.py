@@ -274,9 +274,13 @@ def _at(text: str, hour: int, minute: int, weekday: str, zone: tzinfo | None) ->
 def _zone(timezone: Any) -> tzinfo | None:
     if timezone is None or isinstance(timezone, tzinfo):
         return timezone
-    try:
-        from zoneinfo import ZoneInfo
+    from zoneinfo import ZoneInfo, available_timezones
 
+    try:
         return ZoneInfo(str(timezone))
     except Exception as exc:  # ZoneInfoNotFoundError, a bad key
+        if not available_timezones():  # no time zone database at all (Windows without tzdata)
+            raise ConfigurationError(
+                f"time zone {timezone!r}: this Python has no time zone database (pip install tzdata)"
+            ) from exc
         raise ConfigurationError(f"unknown time zone {timezone!r}") from exc

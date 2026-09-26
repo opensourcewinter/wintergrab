@@ -147,6 +147,7 @@ class Engine:
         self._output_budget = False  # max_output_bytes set, checked after every written item
         self._elapsed_final = False
         self._last_sample = 0.0
+        self._last_metrics = 0.0  # when the run's metrics were last kept
         # extension points (bound methods of the hooks that exist, so unused ones cost nothing)
         self._mw_request: list[Any] = []
         self._mw_response: list[Any] = []
@@ -984,6 +985,9 @@ class Engine:
             if self._last_log and self._progress is None:
                 self._log_progress()
             self._last_log = now
+        if self.recorder is not None and now - self._last_metrics >= 2.0:
+            self._last_metrics = now
+            self.recorder.metrics(self.snapshot())  # for the dashboard, while the crawl runs
 
     def _log_progress(self, final: bool = False) -> None:
         s = self.stats

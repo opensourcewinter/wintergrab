@@ -45,7 +45,7 @@ from .similarity import content_hash
 if TYPE_CHECKING:
     from ..spider.spider import Spider
 
-__all__ = ["FieldQuality", "QualityMonitor", "QualityReport", "ks_statistic"]
+__all__ = ["FieldQuality", "QualityMonitor", "QualityReport", "ks_statistic", "schema_drift"]
 
 log = logging.getLogger("wintergrab.quality")
 
@@ -371,6 +371,29 @@ class QualityReport:
         return issues
 
 
+def schema_drift(issues: Iterable[Issue], baseline: QualityReport, report: QualityReport) -> dict[str, Any]:
+    """The fields that came, went or changed type since ``baseline``, from the issues of
+    :meth:`QualityReport.compare`: ``{"added": [...], "removed": [...], "retyped": {field: [before,
+    now]}}``, or ``{}`` when the fields are as they were."""
+    issues = list(issues)
+    added = sorted(i.field for i in issues if i.code == "field-appeared" and i.field)
+    removed = sorted(i.field for i in issues if i.code == "field-disappeared" and i.field)
+    retyped = {
+        i.field: [baseline.fields[i.field].get("dominant_type"), report.fields[i.field].get("dominant_type")]
+        for i in issues
+        if i.code == "type-drift" and i.field in baseline.fields and i.field in report.fields
+    }
+    if not (added or removed or retyped):
+        return {}
+    return {"added": added, "removed": removed, "retyped": retyped}
+
+
+def _describe_drift(drift: Mapping[str, Any]) -> str:
+    parts = [f"+{name}" for name in drift["added"]] + [f"-{name}" for name in drift["removed"]]
+    parts += [f"{name} {before} -> {now}" for name, (before, now) in drift["retyped"].items()]
+    return ", ".join(parts)
+
+
 def _distribution_shift(name: str, before: Any, now: Any) -> list[Issue]:
     if not before or not now:
         return []
@@ -559,6 +582,10 @@ class QualityMonitor:
                         message=issue.message, severity=issue.severity,
                     )  # fmt: skip
                     log.warning("quality: %s", issue)
+            drift = schema_drift(self.comparison, self.baseline, report)
+            if drift:
+                spider.events.emit("schema_changed", dataset=self.name, **drift)
+                log.warning("quality: the fields changed: %s", _describe_drift(drift))
         target = self.save_to
         if target == "auto":
             target = Path(spider.crawl_dir) / "quality.json" if spider.crawl_dir else None

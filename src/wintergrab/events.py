@@ -32,8 +32,10 @@ Event kinds emitted by wintergrab (see :data:`EVENT_KINDS`)::
     record_created     url                                              (with ``history``, one per page)
     record_updated     url, kinds, details                              (with ``history``, one per page)
     record_deleted     url                                              (with ``history``, one per page)
+    extraction_failed  url, schema, missing                             (a page gave no complete record)
     pipeline_report    pipeline, stages                                 (a data pipeline, when it closes)
-    quality_degraded   dataset, field, code, message, severity          (a data pipeline's quality monitor)
+    quality_degraded   dataset, field, code, message, severity          (a quality monitor, against the last run)
+    schema_changed     dataset, added, removed, retyped                 (a quality monitor: fields came or went)
     job_started        job, command                                     (a project's jobs)
     job_finished       job, status, exit_code, seconds, run, log, stats
     job_failed         job, status, exit_code, seconds, run, log, stats
@@ -66,7 +68,8 @@ EVENT_KINDS: frozenset[str] = frozenset(
         "crawl_started", "crawl_finished", "response", "item_scraped", "item_dropped", "request_retried",
         "request_failed", "blocked", "browser_needed", "throttle_backoff", "policy_refused", "budget_exhausted",
         "changes_detected", "site_changed", "record_created", "record_updated", "record_deleted",
-        "pipeline_report", "quality_degraded", "job_started", "job_finished", "job_failed",
+        "extraction_failed", "pipeline_report", "quality_degraded", "schema_changed",
+        "job_started", "job_finished", "job_failed",
     }
 )  # fmt: skip
 #: Kinds that fire once per response or item; only built when subscribed to.

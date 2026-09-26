@@ -208,6 +208,9 @@ def test_quality_in_a_crawl_compares_runs(site, tmp_path) -> None:
 
     events = []
     second = Shop(pipelines=[QualityMonitor(SCHEMA, baseline="auto")], broken=True)
-    second.events.subscribe(events.append, kinds=["quality_degraded"])
+    second.events.subscribe(events.append, kinds=["quality_degraded", "schema_changed"])
     second.run(resume=False)
-    assert [(e["field"], e["code"], e["severity"]) for e in events] == [("price", "field-disappeared", "error")]
+    degraded, changed = events
+    assert (degraded["field"], degraded["code"], degraded["severity"]) == ("price", "field-disappeared", "error")
+    assert changed.kind == "schema_changed" and changed.data == {"dataset": "products", "added": [], "removed": ["price"],
+                                                                 "retyped": {}}  # fmt: skip

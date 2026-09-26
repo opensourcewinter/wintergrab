@@ -21,7 +21,8 @@ thread, and at most ``max_queue`` events wait (more are dropped and counted).
 Which events there are: see :data:`wintergrab.events.EVENT_KINDS`: the crawl's (``crawl_started``,
 ``crawl_finished``, ``request_failed``, ``blocked``, ``budget_exhausted``...), the changes a
 ``history`` finds (``changes_detected``, ``site_changed``, and per page ``record_created``,
-``record_updated``, ``record_deleted``), and a project's jobs (``job_started``, ``job_finished``,
+``record_updated``, ``record_deleted``), the data's (``extraction_failed`` per page,
+``quality_degraded``, ``schema_changed``), and a project's jobs (``job_started``, ``job_finished``,
 ``job_failed``).
 """
 
@@ -51,7 +52,9 @@ log = logging.getLogger("wintergrab.webhooks")
 SIGNATURE_HEADER = "X-Wintergrab-Signature"
 _RETRY_AFTER = (1.0, 4.0)  # seconds before the second and the third attempt
 #: One per page or item: posted only when asked for by name.
-PER_PAGE = frozenset({"response", "item_scraped", "record_created", "record_updated", "record_deleted"})
+PER_PAGE = frozenset(
+    {"response", "item_scraped", "record_created", "record_updated", "record_deleted", "extraction_failed"}
+)
 
 
 def sign(body: bytes, secret: str) -> str:

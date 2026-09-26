@@ -102,6 +102,46 @@ def test_record_replay_and_runs_on_the_command_line(site, tmp_path, capsys) -> N
     assert [r.id for r in RunRegistry(workspace).runs()] == ["run-1"]
 
 
+class TokenBooks(Books):
+    api_token: str = "abc123"  # a credential the spider uses
+
+
+def test_credentials_are_not_kept(site, tmp_path, capsys) -> None:
+    from wintergrab.cli import main
+
+    workspace = tmp_path / "ws"
+    spider = TokenBooks(start_urls=[site.url + "/books/"], record=True, run_registry=str(workspace), log_level=None,
+                        default_headers={"Authorization": "Bearer s3cr3t", "Accept-Language": "en"},
+                        api_token="t0k3n", max_pages=4)  # fmt: skip
+    spider.run()
+    run = RunRegistry(workspace).get("last")
+    text = (run.directory / "run.json").read_text(encoding="utf-8")
+    assert "s3cr3t" not in text and "t0k3n" not in text
+    assert run.settings["default_headers"] == {"Authorization": "***", "Accept-Language": "en"}
+    assert run.settings["api_token"] == "***"
+    assert replay(run, TokenBooks, registry=workspace).same  # the spider's own values stand in
+
+    crawl = ["crawl", site.url + "/books/", "--allow", "/books/", "--max-pages", "3", "--no-progress", "-o",
+             str(tmp_path / "out.jsonl"), "--record", "--workspace", str(workspace),
+             "-s", 'default_headers={"Cookie": "sid=c00k1e"}']  # fmt: skip
+    assert main(crawl) == 0
+    run = RunRegistry(workspace).get("last")
+    assert "c00k1e" not in (run.directory / "run.json").read_text(encoding="utf-8")
+    assert 'default_headers={"Cookie": "***"}' in run.recipe["command"]
+    capsys.readouterr()
+    assert main(["replay", "last", "--workspace", str(workspace)]) == 0  # without the options left out
+
+
+def test_redact_argv() -> None:
+    from wintergrab.redact import redact_argv
+
+    argv = ["crawl", "https://a.example/?q=1", "--proxy", "http://u:pw@proxy.example:8080", "-H",
+            "Authorization: Bearer z", "-H", "Accept: text/html", "--set=tokenizer=word", "--cookie", "sid=1"]  # fmt: skip
+    assert redact_argv(argv) == ["crawl", "https://a.example/?q=1", "--proxy", "http://***@proxy.example:8080", "-H",
+                                 "Authorization: ***", "-H", "Accept: text/html", "--set=tokenizer=word", "--cookie",
+                                 "sid=***"]  # fmt: skip
+
+
 def test_a_run_stopped_at_a_limit(fresh_site, tmp_path) -> None:
     workspace = tmp_path / "ws"
     result = Books(start_urls=[fresh_site.url + "/books/"], record=True, run_registry=str(workspace),

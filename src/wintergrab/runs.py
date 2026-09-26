@@ -33,6 +33,7 @@ import contextlib
 import importlib
 import inspect
 import json
+import logging
 import os
 import time
 from collections.abc import Iterator, Mapping, Sequence
@@ -42,6 +43,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from .errors import ConfigurationError
+from .redact import REDACTED, redact, redact_argv
+from .utils import replace_file
 
 if TYPE_CHECKING:
     from .data.versions import DatasetDiff
@@ -49,6 +52,8 @@ if TYPE_CHECKING:
     from .spider import CrawlResult, Spider
 
 __all__ = ["DEFAULT_WORKSPACE", "ReplayResult", "Run", "RunRecorder", "RunRegistry", "replay"]
+
+log = logging.getLogger("wintergrab.runs")
 
 #: Where runs are kept by default: ``.wintergrab`` in the current directory.
 DEFAULT_WORKSPACE = ".wintergrab"
@@ -81,6 +86,8 @@ class Run:
         output: Where the items went.
         failures: The failure diagnoses: ``{"signature", "domain", "urls", "cause"}``.
         label: A label given to the run (the project job that ran it).
+        quality: The quality reports of its records, when it measured them (``--quality``, a
+            ``QualityCheck``): ``{"dataset", "score", "records", "metrics", "issues"}``.
         error: What stopped it, if it failed.
         directory: Where it is kept.
     """
@@ -100,6 +107,7 @@ class Run:
     failures: list[dict[str, Any]] = dataclass_field(default_factory=list)
     error: str | None = None
     label: str | None = None
+    quality: list[dict[str, Any]] = dataclass_field(default_factory=list)
     directory: Path = dataclass_field(default=Path("."), repr=False, compare=False)
 
     @property
@@ -157,6 +165,14 @@ class Run:
             if not wanted or event.get("event") in wanted or event.get("kind") in wanted:
                 yield event
 
+    def metrics(self) -> dict[str, Any]:
+        """The crawl's metrics (rates, latency, domains...): the last ones kept while it ran, or its
+        final ones (``{}`` for runs kept before metrics were)."""
+        try:
+            return dict(json.loads((self.directory / "metrics.json").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            return {}
+
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data.pop("directory")
@@ -213,7 +229,7 @@ def _plain(value: Any) -> bool:
 def _atomic_write(path: Path, text: str) -> None:
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    replace_file(tmp, path)  # (the dashboard may be reading it)
 
 
 class RunRegistry:
@@ -326,7 +342,8 @@ class RunRegistry:
 # recording (what the engine does for a registered run)
 # ---------------------------------------------------------------------------------------------- #
 def settings_of(spider: Spider) -> dict[str, Any]:
-    """A spider's settings, as JSON values (the ones that are objects as their ``repr``)."""
+    """A spider's settings, as JSON values (the ones that are objects as their ``repr``), without
+    credentials (see :mod:`wintergrab.redact`)."""
     names = [n for cls in reversed(type(spider).__mro__) for n in getattr(cls, "__annotations__", {})]
     out: dict[str, Any] = {}
     for name in dict.fromkeys(names):
@@ -335,14 +352,17 @@ def settings_of(spider: Spider) -> dict[str, Any]:
         value = getattr(spider, name)
         if callable(value) and not isinstance(value, type):
             continue
-        out[name] = _jsonable(value)
+        out[name] = redact(_jsonable(value), name)
     return out
 
 
 def recipe_of(spider: Spider) -> dict[str, Any]:
     """How to run ``spider`` again: its ``run_recipe``, or its class when it can be imported."""
     if spider.run_recipe:
-        return dict(spider.run_recipe)
+        recipe = dict(spider.run_recipe)
+        if isinstance(recipe.get("command"), list):
+            recipe["command"] = redact_argv(recipe["command"])  # --proxy http://user:***@..., -H "Cookie: ***"
+        return recipe
     cls = type(spider)
     module = cls.__module__
     if module.startswith("wintergrab_user_"):  # loaded from a file by the command line
@@ -392,6 +412,14 @@ class RunRecorder:
         kinds = EVENT_KINDS - HIGH_VOLUME
         return kinds | {"response"} if self.record else kinds
 
+    def metrics(self, snapshot: Mapping[str, Any]) -> None:
+        """Keep the crawl's metrics as they are now (``metrics.json``, read while the crawl runs)."""
+        if self.run is not None:
+            try:
+                _atomic_write(self.run.directory / "metrics.json", json.dumps(_jsonable(dict(snapshot))))
+            except OSError as exc:
+                log.debug("could not write the run's metrics: %s", exc)
+
     def item(self, item: Any) -> None:
         if self._items is not None:
             from .spider.exporters import to_dict
@@ -417,9 +445,34 @@ class RunRecorder:
                  "cause": d.confirmed_cause or d.likely_cause}
                 for d in result.failures[:20]
             ]  # fmt: skip
+            if result.metrics:
+                self.metrics(result.metrics)
+        run.quality = _quality_of(self.spider)
         output = self.spider.output
         run.output = None if output in (None, "-") else str(output)
         self.registry.save(run)
+
+
+def _quality_of(spider: Spider) -> list[dict[str, Any]]:
+    """The reports of the quality monitors among the spider's pipelines (in data pipelines too)."""
+    from .data.pipeline import Pipeline, QualityCheck
+    from .data.quality import QualityMonitor
+
+    monitors: list[QualityMonitor] = []
+    for pipe in spider.pipelines or ():
+        if isinstance(pipe, QualityMonitor):
+            monitors.append(pipe)
+        elif isinstance(pipe, Pipeline):
+            monitors.extend(stage.monitor for stage in pipe if isinstance(stage, QualityCheck))
+    reports = []
+    for monitor in monitors:
+        if not monitor.records:
+            continue
+        report = monitor.report()
+        reports.append(_jsonable({"dataset": monitor.name, "score": report.score, "records": report.records,
+                                  "metrics": report.metrics,
+                                  "issues": [issue.to_dict() for issue in monitor.comparison]}))  # fmt: skip
+    return reports
 
 
 # ---------------------------------------------------------------------------------------------- #
@@ -537,6 +590,7 @@ def replay(
         "webhooks": (),  # a replay tells no one
         "retry_dead_letters": False,
         "network_policy": None,  # nothing reaches the network: no address to check
+        "proxies": None,  # (and the recording keeps no proxy's password)
         # the recording says which pages: no page limits (max_items stays: it shapes the output)
         "max_pages": None,
         "max_requests": None,
@@ -577,8 +631,41 @@ def _free(path: Path) -> Path:
 
 
 def _recorded_settings(run: Run) -> dict[str, Any]:
-    """The run's settings a replay can take again (plain values, not marked ones)."""
-    return {k: v for k, v in run.settings.items() if k not in _NOT_REPLAYED and _plain(v)}
+    """The run's settings a replay can take again (plain values: not marked ones, and not the ones
+    whose credentials were left out: the spider's own values stand)."""
+    return {k: v for k, v in run.settings.items() if k not in _NOT_REPLAYED and _plain(v) and not _has_redacted(v)}
+
+
+def _has_redacted(value: Any) -> bool:
+    if isinstance(value, str):
+        return value == REDACTED or f"{REDACTED}@" in value
+    if isinstance(value, Mapping):
+        return any(_has_redacted(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_redacted(v) for v in value)
+    return False
+
+
+def _replayable_argv(argv: Sequence[str]) -> list[str]:
+    """A recorded command line without the options whose credentials were left out."""
+    out: list[str] = []
+    skip = False
+    for i, arg in enumerate(argv):
+        if skip:
+            skip = False
+            continue
+        takes_value = arg in ("-s", "--set", "-H", "--header", "--cookie", "-b", "--proxy")
+        if takes_value and i + 1 < len(argv) and _has_redacted_text(argv[i + 1]):
+            skip = True
+            continue
+        if arg.startswith("--") and "=" in arg and _has_redacted_text(arg.partition("=")[2]):
+            continue
+        out.append(arg)
+    return out
+
+
+def _has_redacted_text(text: str) -> bool:
+    return text.endswith(REDACTED) or f"{REDACTED}@" in text or f'"{REDACTED}"' in text
 
 
 def _replay_crawl(run: Run, spider: type[Spider] | None, overrides: dict[str, Any]) -> CrawlResult | None:
@@ -588,7 +675,7 @@ def _replay_crawl(run: Run, spider: type[Spider] | None, overrides: dict[str, An
     if recipe.get("command"):
         from .cli import spider_from_command
 
-        cls, settings = spider_from_command(list(recipe["command"]))
+        cls, settings = spider_from_command(_replayable_argv(recipe["command"]))
         return cls(**{**settings, **overrides}).run(resume=False)
     if recipe.get("goal_plan"):
         from .goals.plan import GoalPlan
