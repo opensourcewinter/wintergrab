@@ -172,3 +172,38 @@ def test_the_command_line_takes_a_model(api, site, tmp_path, capsys) -> None:
     assert main(["get", url, "--extract", str(schema), "--model", "openai:m", "--model-url", api.url + "/v1"]) == 0
     record = json.loads(capsys.readouterr().out)
     assert record["name"] == "Book number 3" and record["blurb"] == "Book number 3"
+
+
+def test_a_model_reads_a_goal_and_is_checked(api) -> None:
+    from wintergrab.goals import model_reader, parse_goal
+
+    model = OpenAICompatible("m", base_url=api.url + "/v1")
+    text = "espresso machines under 300 euros with a steam wand on coffee.example, the 20 best rated"
+    api.answer = json.dumps({"entity": "product", "fields": ["name", "price", "rating", "steam_wand"],
+                             "sites": ["coffee.example", "https://amazon.example"], "scope": ["espresso machines"],
+                             "filters": ["price < 300 and (currency is None or currency == 'EUR')"], "limit": 20,
+                             "monitor": None, "notes": ["'best rated' read as a limit"]})  # fmt: skip
+    goal = parse_goal(text, parser=model_reader(model))
+    assert goal.scope == ["espresso machines"] and goal.limit == 20 and goal.sites == ["https://coffee.example"]
+    assert goal.filters[0].expression.startswith("price < 300")
+    assert "read by openai:m" in goal.notes and any("amazon.example" in n for n in goal.notes)  # an invented site
+    prompt = api.requests[-1][2]["messages"][0]["content"]
+    assert "Request: " + text in prompt and "- property: name (string), price (money)" in prompt
+
+    api.answer = json.dumps({"entity": "spaceship", "fields": ["name"]})  # not a kind there is
+    goal = parse_goal(text, parser=model_reader(model))
+    assert goal.entity == "product" and goal.sites == ["https://coffee.example"]  # the rules read it
+    assert any("could not read it" in n and "read by the rules" in n for n in goal.notes)
+    api.answer = json.dumps({"entity": "product", "filters": ["price <<< 3"]})  # not an expression
+    assert "read by the rules" in parse_goal(text, parser=model_reader(model)).notes[-1]
+
+
+def test_the_goal_command_takes_a_model(api, site, capsys) -> None:
+    from wintergrab.cli import main
+
+    api.answer = json.dumps({"entity": "product", "fields": ["name", "price"], "sites": [site.url + "/shop/"],
+                             "filters": ["price < 50"]})  # fmt: skip
+    assert main(["goal", f"cheap things on {site.url}/shop/", "--model", "openai:m", "--model-url", api.url + "/v1",
+                 "--plan-only", "--sample", "5"]) == 0  # fmt: skip
+    shown = capsys.readouterr()
+    assert "where price < 50" in shown.err and "note: read by openai:m" in shown.err

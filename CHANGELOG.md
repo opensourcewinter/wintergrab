@@ -470,6 +470,12 @@
   request per page. Its answers are checked against the page like any
   value: a value the page does not contain is kept aside, never taken. A
   crawl logs the requests and tokens it used.
+- `goal "..." --model PROVIDER:NAME` (`parse_goal(text,
+  parser=model_reader(model))`) has a model read the request. The part of
+  the site, and conditions phrased in their own words, are what the rules
+  read poorly. The reading is checked: a known kind, conditions that
+  compile, and no site the request does not name. When the model cannot
+  read it, the rules do.
 - None is needed or called unless named.
 
 ### Jobs that run when something changes (`wintergrab.watch`)

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from .goal import ENTITIES, EntityKind, Goal, GoalFilter, parse_goal
 from .plan import Estimate, GoalPlan, SitePlan, path_pattern, plan_goal
+from .reading import model_reader
 from .run import GoalResult, GoalSpider, run_plan
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     "GoalResult",
     "GoalSpider",
     "SitePlan",
+    "model_reader",
     "parse_goal",
     "path_pattern",
     "plan_goal",

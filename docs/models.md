@@ -58,6 +58,14 @@ and 8 seconds, and after that the page is extracted without it. The crawl
 logs what the model used: `openai:NAME: 212 request(s), 380,114 input and
 6,020 output tokens`.
 
+## Reading goal requests
+
+`wintergrab goal "..." --model PROVIDER:NAME` has the model read the request.
+It gives the kind of record, the fields, the part of the site, the
+conditions, a limit, and whether to keep watching, and all of it is
+checked: see [goals](goals.md#what-a-request-can-say). The crawl that
+follows extracts without the model.
+
 ## Keys and what leaves your machine
 
 - **Keys** come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`)

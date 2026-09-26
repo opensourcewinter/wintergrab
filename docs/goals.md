@@ -67,13 +67,28 @@ record without the value (no rating) does not meet a condition on it, and
 prices are compared in their own currency (converting needs exchange rates,
 which wintergrab does not fetch: see `ConvertCurrency`).
 
-The rules are in `wintergrab.goals.goal`. A model can read requests
-instead, through any function that returns the goal as a dict; the answer
-is checked like any other (a known kind of record, conditions that compile):
+The rules are in `wintergrab.goals.goal`. A [language model](models.md) can
+read requests instead: `--model PROVIDER:NAME` on the command line, or any
+function that returns the goal as a dict. The answer is checked like any
+other: it must name a known kind of record, and its conditions must compile.
+A site the request does not name is dropped, since a model may invent one.
+When the answer cannot be used, the rules read the request, and the notes
+say so.
+
+```bash
+wintergrab goal "espresso machines with a steam wand under 300 euros on coffee.example" --model ollama:NAME
+```
 
 ```python
-goal = parse_goal("well paid remote jobs", parser=my_model_reader)
+from wintergrab.goals import model_reader
+from wintergrab.models import load_model
+
+goal = parse_goal("well paid remote jobs on jobs.example", parser=model_reader(load_model("ollama:NAME")))
 ```
+
+A model helps with what the rules read poorly: the part of a site
+("espresso machines"), and conditions phrased in their own words ("with a
+steam wand", "remote").
 
 ## The plan
 

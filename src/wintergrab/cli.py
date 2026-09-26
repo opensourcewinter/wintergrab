@@ -589,7 +589,12 @@ def cmd_goal(args: argparse.Namespace) -> int:
             if not args.text:
                 print('error: say what to collect, e.g. wintergrab goal "products with name and price on shop.example"')
                 return 2
-            goal = parse_goal(" ".join(args.text), sites=args.site or [])
+            reader = None
+            if args.model:
+                from .goals import model_reader
+
+                reader = model_reader(_model(args))
+            goal = parse_goal(" ".join(args.text), sites=args.site or [], parser=reader)
             if args.verbose >= 0:
                 print("Understood: " + goal.describe().replace("\n", "\n            "), file=sys.stderr)
             if not goal.sites:
@@ -2123,6 +2128,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="FILE",
         help="measure the records' quality and compare it with the last run's, kept in FILE",
     )
+    gp.add_argument(
+        "--model",
+        metavar="PROVIDER:NAME",
+        help="read the request with a language model (openai:NAME, anthropic:NAME, ollama:NAME); its reading is "
+        "checked, and the rules read it when the model cannot (see docs/models.md)",
+    )
+    gp.add_argument("--model-url", metavar="URL", help="(--model) where the model's API is (a server of your own)")
     gp.add_argument("--workspace", metavar="DIR", help="where runs are kept (default .wintergrab)")
     gp.add_argument("--project", metavar="FILE", help="(set by wintergrab run/schedule) post events to its webhooks")
     gp.add_argument("--job", metavar="NAME", help="(set by wintergrab run/schedule) the job's name, kept with the run")

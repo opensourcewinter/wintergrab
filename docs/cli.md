@@ -211,7 +211,7 @@ See [intelligence.md](intelligence.md#site-profiles).
 ```bash
 wintergrab goal "REQUEST" [--site URL] [--sample N] [--plan-only] [--save-plan FILE] [--explain] [--json]
                           [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-optimize] [--record]
-                          [--quality FILE] [-o FILE]
+                          [--quality FILE] [--model PROVIDER:NAME [--model-url URL]] [-o FILE]
 wintergrab goal --plan FILE [-y] [-o FILE]
 ```
 
