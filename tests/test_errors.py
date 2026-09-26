@@ -64,6 +64,9 @@ def test_context_and_with_context() -> None:
     assert cfg.key == "crawl.concurrency" and cfg.context["key"] == "crawl.concurrency"
     status = errors.HTTPStatusError(Response("http://x/", status=503))
     assert status.context == {"url": "http://x/", "status": 503}
+    lost = errors.ExportError("items: 64 item(s) not written: the database hung up", items=64)
+    assert lost.items == 64 and lost.context == {"items": 64}  # (a crawl counts them: items_not_written)
+    assert errors.ExportError("could not write items.parquet").items is None  # how many is not always known
 
 
 @pytest.mark.parametrize(
@@ -78,6 +81,7 @@ def test_context_and_with_context() -> None:
         errors.BrowserFetchError("http://x/", "crashed"),
         errors.CacheMiss("http://x/"),
         errors.ConfigurationError("bad", key="k"),
+        errors.ExportError("shop: 2 item(s) not written", items=2),
         errors.ValidationError("invalid", issues=["a"]),
         errors.BudgetExceeded("max_requests"),
         errors.HTTPStatusError(Response("http://x/", status=500), "server error"),

@@ -765,6 +765,11 @@ class Engine:
             len(self.scheduler) + len(self._delayed) + len(self._inflight) if self._persistent else len(pending)
         )
         keep = status in ("paused", "limit") or self._fatal is not None
+        # The output first: closed, so what it took is on disk before the queue's state says so, and what it did
+        # not take (a flush or the close that failed) is in the stats the state and the summary keep.
+        if self.exporter is not None:
+            exporter, self.exporter = self.exporter, None
+            self._to_output(exporter.close)
         if self.checkpoint is not None and self._state_ready:
             try:
                 if keep and pending_count:
@@ -801,8 +806,6 @@ class Engine:
                 for suffix in ("", "-wal", "-shm"):
                     path.with_name(path.name + suffix).unlink(missing_ok=True)
         await self._close_pipelines()
-        if self.exporter is not None:
-            self._to_output(self.exporter.close)
         restarts = sum(int(getattr(self.sessions.get(name), "restarts", 0) or 0) for name in self.sessions)
         if restarts:  # (a browser that crashed, or was killed, and was started again)
             self.stats["browser_restarts"] = restarts

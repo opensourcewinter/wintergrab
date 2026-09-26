@@ -1109,7 +1109,9 @@ an error that says so, not a setting silently ignored
   it says how many: `ExportError.items`) count it, and the crawl goes on.
   `wintergrab crawl` and `wintergrab goal` say how many items were not
   written, and exit with status 1. A flush that failed is no longer tried
-  again with each item after it.
+  again with each item after it. The output is closed before the crawl's
+  state and summary are saved, so a close that fails is in their counts too
+  (before, a paused crawl resumed without it).
 
 - PostgreSQL connections (outputs, and the shared frontier) give up after 10
   seconds unless the URL says `connect_timeout` or `PGCONNECT_TIMEOUT` is

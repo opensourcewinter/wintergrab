@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+import errno
+import json
+import logging
 import os
 import sys
 import uuid
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, ClassVar
 
 import pytest
 
 from wintergrab.data.io import read_records, register_reader
-from wintergrab.errors import ConfigurationError
-from wintergrab.spider.exporters import Exporter, open_exporter, register_exporter
+from wintergrab.errors import ConfigurationError, ExportError
+from wintergrab.spider.exporters import (
+    EXPORTERS,
+    FLUSH_EVERY,
+    Exporter,
+    JsonLinesExporter,
+    open_exporter,
+    output_failures,
+    register_exporter,
+)
 
 ITEMS: list[Any] = [
     {"url": "https://s.example/1", "price": 10, "tags": ["a", "b"], "ok": True, "code": 7},
@@ -311,6 +323,189 @@ def test_registering_outputs_and_readers(tmp_path) -> None:
         register_exporter("not a key", _Memory)
 
 
+# -- An output that fails: the crawl goes on, and says what it did not write --------------------------- #
+class _Errors(logging.Handler):
+    """The errors wintergrab logs while the handler is on its logger (``caplog`` misses them once the CLI has
+    configured the logger, which stops it propagating)."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.ERROR)
+        self.messages: list[str] = []
+        self.logger = logging.getLogger("wintergrab")
+        self.logger.addHandler(self)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+    def close(self) -> None:
+        self.logger.removeHandler(self)
+        super().close()
+
+
+class FullDisk(JsonLinesExporter):
+    """An output that takes nothing: every write is a full disk (registered as ``.full`` by the tests)."""
+
+    def write(self, item: Any) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+
+class Unreliable(JsonLinesExporter):
+    """A JSON Lines output that fails now and then (registered as ``.failing``): the write of an item whose name
+    ends in 3 (a full disk), its first flush (as a database that hung up does, a batch of 3 items with it) and
+    its close. ``opened`` keeps the instances for the tests to look at."""
+
+    opened: ClassVar[list[Unreliable]] = []
+
+    def __init__(self, path: Path, *, append: bool) -> None:
+        super().__init__(path, append=append)
+        self.flushes = 0
+        self.closed = False
+        Unreliable.opened.append(self)
+
+    def write(self, item: Any) -> None:
+        if str(item.get("name", "")).endswith("3"):
+            raise OSError(errno.ENOSPC, "No space left on device")
+        super().write(item)
+
+    def flush(self) -> None:
+        self.flushes += 1
+        if self.flushes == 1:
+            raise ExportError("items: 3 item(s) not written: the database hung up, and does not answer again", items=3)
+        super().flush()
+
+    def close(self) -> None:
+        self.closed = True
+        super().close()
+        raise OSError(errno.EIO, "Input/output error")
+
+
+def test_an_output_that_fails_does_not_stop_the_crawl(site, tmp_path, monkeypatch) -> None:
+    """A write, a flush (at a checkpoint) or a close that fails is logged and counted, and the crawl goes on: with
+    its shutdown (the state saved, the frontier closed), and when it is resumed."""
+    from wintergrab import Spider
+
+    class Catalog(Spider):  # 5 listing pages x 4 products; pauses itself after ``pause_after`` items
+        log_level = None
+        obey_robots_txt = False
+        concurrency = 2
+        pause_after: int | None = None
+
+        def parse(self, response: Any) -> Any:
+            for link in response.css(".product .name a"):
+                yield response.follow(link, callback=self.parse_product)
+            yield response.follow_next()
+
+        def parse_product(self, response: Any) -> Any:
+            if self.pause_after is not None and self.stats.get("items", 0) + 1 >= self.pause_after:
+                self.pause()
+            yield {"name": response.css("h1::text").get()}
+
+    monkeypatch.setitem(EXPORTERS, ".failing", Unreliable)
+    monkeypatch.setattr(Unreliable, "opened", [])
+    out, crawl_dir = tmp_path / "items.failing", tmp_path / "crawl"
+    settings: dict[str, Any] = {
+        "start_urls": [site.url + "/products/page/1"],
+        "frontier": "disk",
+        "crawl_dir": str(crawl_dir),
+        "output": str(out),
+    }
+    errors = _Errors()
+    first = Catalog(pause_after=8, **settings).run()
+    # The checkpoint at the start flushed the output, and the flush failed; the close failed. Neither stopped the
+    # crawl: it paused when told to, saved its state, and shut down.
+    assert first.status == "paused" and (crawl_dir / "state.pickle").exists() and first.stats["status"] == "paused"
+    output = Unreliable.opened[0]
+    assert output.flushes == 1 and output.closed  # the checkpoint at the start; the pause closed it, then saved
+    assert first.stats["export_errors"] >= 2 and first.stats["items_not_written"] >= 3
+    assert first.stats["items"] > len(out.read_text(encoding="utf-8").splitlines())  # (the flush: 3 items said lost)
+    second = Catalog(**settings).run()
+    errors.close()
+    assert second.status == "finished" and second.stats["status"] == "finished" and second.stats["runs"] == 2
+    assert not (crawl_dir / "state.pickle").exists() and not (crawl_dir / "frontier.sqlite3").exists()
+    assert Unreliable.opened[1].append and Unreliable.opened[1].closed  # continued, and closed (which failed too)
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    expected = sorted(f"Product {i}" for i in range(1, 21) if i not in (3, 13))  # what the output refused is gone
+    assert sorted(r["name"] for r in rows) == expected  # nothing else lost, nothing twice
+    assert second.stats["items"] == 20  # (cumulative over the two runs, as the errors are)
+    # (the first run's close failed after its state was saved: the output is closed before, so the count has it)
+    assert second.stats["export_errors"] == 2 + 2 + 2  # two writes, a flush and a close per run
+    assert second.stats["items_not_written"] == 2 + 3 + 3  # the two items refused; what each failed flush said
+    messages = errors.messages
+    assert sum(f"could not write item to {out}: " in m and "No space left on device" in m for m in messages) == 2
+    assert sum(f"could not write items to {out}: " in m and "the database hung up" in m for m in messages) == 2
+    assert sum(f"could not write items to {out}: " in m and "Input/output error" in m for m in messages) == 2
+    summary = json.loads((crawl_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "finished" and summary["stats"]["export_errors"] == 6  # (the close's error too)
+
+
+def test_crawl_says_what_its_output_did_not_take(site, tmp_path, monkeypatch, capsys) -> None:
+    from wintergrab.cli import main
+
+    monkeypatch.setitem(EXPORTERS, ".full", FullDisk)
+    out = tmp_path / "items.full"
+    errors = _Errors()
+    code = main(["-q", "crawl", site.url + "/products/page/1", "--follow", "a.next", "--follow", ".product .name",
+                 "--each", "h1", "--field", "name=::text", "-o", str(out), "--no-progress"])  # fmt: skip
+    errors.close()
+    assert code == 1
+    assert f"20 item(s) not written to {out} (20 error(s), logged above)" in capsys.readouterr().err
+    assert (
+        sum(f"could not write item to {out}: " in m and "No space left on device" in m for m in errors.messages) == 20
+    )
+
+
+def test_goal_says_what_its_output_did_not_take(site, tmp_path, monkeypatch, capsys) -> None:
+    from wintergrab.cli import main
+    from wintergrab.goals import parse_goal, plan_goal
+
+    monkeypatch.setitem(EXPORTERS, ".full", FullDisk)
+    plan = tmp_path / "books.plan.json"
+    goal = parse_goal("books rated 4 stars or more with title and price", sites=[site.url + "/books/"])
+    plan_goal(goal, sample=15, log_level=None).save(plan)
+    out = tmp_path / "books.full"
+    assert main(["goal", "--plan", str(plan), "--yes", "-o", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "4 record(s)" in err and f"4 item(s) not written to {out} (4 error(s), logged above)" in err
+    assert main(["-q", "goal", "--plan", str(plan), "--yes", "-o", str(out)]) == 1  # no summary: the line alone
+    err = capsys.readouterr().err
+    assert "record(s)" not in err and f"4 item(s) not written to {out} (4 error(s), logged above)" in err
+
+
+def test_the_line_that_says_what_an_output_did_not_take() -> None:
+    assert output_failures(3, 2, "items.jsonl") == "2 item(s) not written to items.jsonl (3 error(s), logged above)"
+    assert output_failures(1, 0, "-") == (
+        "1 error(s) writing to standard output (logged above): items may be missing from it"
+    )  # (an error that did not say how many items it lost)
+    assert output_failures(2, 1200, "postgresql://crawler:hunter2@db.example/shop") == (
+        "1,200 item(s) not written to postgresql://***@db.example/shop (2 error(s), logged above)"
+    )
+
+
+def test_a_flush_that_failed_is_not_tried_again_with_each_item(tmp_path) -> None:
+    class Stuck(JsonLinesExporter):
+        def __init__(self, path: Path, *, append: bool) -> None:
+            super().__init__(path, append=append)
+            self.flushes = 0
+
+        def flush(self) -> None:
+            self.flushes += 1
+            raise OSError(errno.EIO, "Input/output error")
+
+    exporter = Stuck(tmp_path / "items.jsonl", append=False)
+    for i in range(FLUSH_EVERY - 1):
+        exporter.write({"i": i})
+    with pytest.raises(OSError, match="Input/output error"):
+        exporter.write({"i": FLUSH_EVERY - 1})  # the batch is full: flushed, which fails
+    assert exporter.flushes == 1
+    for i in range(FLUSH_EVERY - 1):
+        exporter.write({"i": i})  # the next batch: nothing tried until it is full
+    assert exporter.flushes == 1
+    with pytest.raises(OSError, match="Input/output error"):
+        exporter.write({"i": FLUSH_EVERY - 1})
+    assert exporter.flushes == 2
+    exporter._fh.close()
+
+
 # -- PostgreSQL: WINTERGRAB_TEST_POSTGRES=postgresql://user@host:port/db names a server to test against -- #
 POSTGRES = os.environ.get("WINTERGRAB_TEST_POSTGRES")
 needs_postgres = pytest.mark.skipif(not POSTGRES, reason="set WINTERGRAB_TEST_POSTGRES to a PostgreSQL URL")
@@ -413,6 +608,42 @@ def test_postgres_errors_keep_passwords_out() -> None:
     assert "hunter2" not in str(error.value) and "postgresql://***@127.0.0.1:1/shop" in str(error.value)
     with pytest.raises(ConfigurationError, match="letters, digits"):
         open_exporter("postgresql://crawler@127.0.0.1:1/shop?table=items;drop")
+
+
+def test_postgres_connections_give_up_after_ten_seconds(monkeypatch) -> None:
+    """libpq waits minutes for a host that vanished: connections get connect_timeout=10, unless the URL or
+    PGCONNECT_TIMEOUT sets one."""
+    from wintergrab.spider.shared import SharedScheduler
+    from wintergrab.storage import postgres
+
+    monkeypatch.delenv("PGCONNECT_TIMEOUT", raising=False)
+    assert postgres.connect_options("postgresql://crawler@db.example/shop") == {"connect_timeout": 10}
+    assert postgres.connect_options("postgresql://crawler@db.example/shop?sslmode=require&connect_timeout=3") == {}
+    monkeypatch.setenv("PGCONNECT_TIMEOUT", "5")
+    assert postgres.connect_options("postgresql://crawler@db.example/shop") == {}
+    monkeypatch.delenv("PGCONNECT_TIMEOUT")
+
+    connections: list[tuple[str, dict[str, Any]]] = []  # what psycopg is asked (a fake: no server, no library)
+
+    class Error(Exception):
+        pass
+
+    def connect(dsn: str, **options: Any) -> Any:
+        connections.append((dsn, options))
+        raise Error("connection refused")
+
+    monkeypatch.setattr(postgres, "_psycopg", lambda: SimpleNamespace(Error=Error, connect=connect))
+    for query in ("table=items", "connect_timeout=3"):
+        with pytest.raises(ConfigurationError, match="cannot connect to") as error:
+            open_exporter("postgresql://crawler@db.example/shop?" + query)
+        assert "postgresql://***@db.example/shop" in str(error.value)
+    with pytest.raises(ConfigurationError, match="frontier: cannot connect to"):
+        SharedScheduler("postgresql://crawler@db.example/shop?crawl=books", None)
+    assert connections == [
+        ("postgresql://crawler@db.example/shop", {"autocommit": False, "connect_timeout": 10}),
+        ("postgresql://crawler@db.example/shop?connect_timeout=3", {"autocommit": False}),
+        ("postgresql://crawler@db.example/shop", {"autocommit": False, "connect_timeout": 10}),  # the shared frontier
+    ]
 
 
 def test_output_urls_keep_their_password_out(site, tmp_path, capsys) -> None:
