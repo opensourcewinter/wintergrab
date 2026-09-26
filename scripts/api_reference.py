@@ -28,6 +28,7 @@ MODULES = [
     ("wintergrab.extraction.templates", "Ready-made schemas"),
     ("wintergrab.data", "Schemas, normalizing, validating, pipelines, quality"),
     ("wintergrab.data.io", "Reading records"),
+    ("wintergrab.data.places", "Where records are"),
     ("wintergrab.data.graph", "Knowledge graphs"),
     ("wintergrab.goals", "Goals in plain words"),
     ("wintergrab.intel", "Page types, technologies, site profiles"),
@@ -144,6 +145,7 @@ def render() -> str:
         "checks that it is up to date.",
         "",
     ]
+    documented: dict[int, str] = {}  # the objects documented, and where
     for module_name, purpose in MODULES:
         module = importlib.import_module(module_name)
         names = list(getattr(module, "__all__", ()))
@@ -154,9 +156,21 @@ def render() -> str:
             obj = getattr(module, name, None)
             if obj is None:
                 continue
+            if callable(obj) and id(obj) in documented:
+                out += [f"`{name}`: see [`{documented[id(obj)]}`](#{_anchor(documented[id(obj)])}).", ""]
+                continue
+            if callable(obj):
+                documented[id(obj)] = module_name
             out += _entry(name, obj, module_name)
         out.append("")
     return "\n".join(out).rstrip() + "\n"
+
+
+def _anchor(module_name: str) -> str:
+    """The anchor of a module's heading on GitHub (its heading text, lowercased, punctuation dropped)."""
+    title = dict(MODULES)[module_name]
+    text = f"{module_name}: {title}".lower()
+    return "".join(ch for ch in text if ch.isalnum() or ch in " -_").replace(" ", "-")
 
 
 def main(argv: list[str] | None = None) -> int:

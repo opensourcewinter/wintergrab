@@ -283,7 +283,7 @@ def _microdata_value(el: etree._Element, base_url: str | None) -> str:
     return text_content(el)
 
 
-_OG_PREFIXES = ("og:", "article:", "product:", "book:", "profile:", "music:", "video:", "fb:")
+_OG_PREFIXES = ("og:", "article:", "product:", "book:", "profile:", "music:", "video:", "fb:", "place:")
 _OG_URL_KEYS = frozenset(
     {
         "url",
@@ -299,7 +299,7 @@ _OG_URL_KEYS = frozenset(
     }
 )
 _TWITTER_URL_KEYS = frozenset({"url", "image", "image:src", "player", "player:stream"})
-_META_NAMES = ("description", "keywords", "author", "robots")
+_META_NAMES = ("description", "keywords", "author", "robots", "geo.position", "icbm", "geo.region", "geo.placename")
 
 
 def _meta_tags(root: etree._Element, base_url: str | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -336,6 +336,13 @@ def _meta_tags(root: etree._Element, base_url: str | None) -> tuple[dict[str, An
     for name in _META_NAMES:
         if name in named:
             meta[name] = named[name]
+    point = meta.get("geo.position") or meta.get("icbm")  # "52.5163;13.3777", "52.5163, 13.3777"
+    if point:
+        from ..data.normalize.geo import parse_coordinates
+
+        found = parse_coordinates(point.replace(";", ","))
+        if found:
+            meta["geo.latitude"], meta["geo.longitude"] = str(found[0]), str(found[1])
 
     canonical = favicon = touch_icon = None
     feeds: list[str] = []

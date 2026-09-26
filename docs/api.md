@@ -93,7 +93,8 @@ checks that it is up to date.
   - `refresh(self, entry: CachedResponse, not_modified: Response) -> CachedResponse`: Apply a ``304 Not Modified`` to a stored entry and return the updated entry.
   - `storable(self, request: Request, response: Response) -> bool`
 - **`HTTPError`** (exception). Raised by :meth:`Response.raise_for_status` for 4xx/5xx responses.
-- **`HTTPStatusError`** (exception). Raised by :meth:`Response.raise_for_status` for 4xx/5xx responses.
+`HTTPStatusError`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
 - **`IgnoreRequest`** (exception). Raised by a middleware's ``process_request`` to drop a request without an error.
 - **`ItemPipeline()`** (class). Optional base class for pipelines (every method is optional).
   - `close_spider(self, spider: Spider) -> Any`: Called once after the crawl ends.
@@ -269,21 +270,8 @@ checks that it is up to date.
 
 ## `wintergrab.spider`: Crawling
 
-- **`AutoThrottle(*, enabled: bool = True, base_delay: float = 0.0, max_delay: float = 60.0, max_concurrency: int = 4, target_concurrency: float | None = None, backoff_factor: float = 2.0, min_backoff_delay: float = 1.0, recovery: float = 0.85, increase_every: int = 10, randomize: bool = True)`** (class). Adaptive, per-domain request pacing (AIMD - like TCP congestion control).
-  - `can_start(self, slot: DomainSlot, now: float) -> bool`
-  - `describe(self, domain: str) -> str`: One line for reports, e.g.
-  - `mode(self, slot: DomainSlot, now: float | None = None) -> str`: ``"paused"`` (honouring Retry-After), ``"backing off"`` (push-back in the last 30 s), ``"recovering"`` (slower than the target after a push-back) or ``"normal"``.
-  - `on_error(self, domain: str)`: A timeout or connection error: back off gently.
-  - `on_finish(self, slot: DomainSlot)`
-  - `on_pushback(self, domain: str, retry_after: float | None = None)`: The site said "slow down" (429/503/block page).
-  - `on_start(self, slot: DomainSlot, now: float)`
-  - `on_success(self, domain: str, latency: float)`
-  - `restore(self, data: dict[str, dict[str, Any]])`
-  - `set_min_delay(self, domain: str, delay: float)`: Enforce a floor (e.g.
-  - `slot(self, domain: str) -> DomainSlot`
-  - `snapshot(self) -> dict[str, dict[str, Any]]`
-  - `state(self, domain: str, now: float | None = None) -> dict[str, Any]`: Live throttle state of a domain: delays, concurrency, latency, target rate and back-off mode.
-  - `target_delay(self, slot: DomainSlot) -> float`: The delay healthy responses pull towards: ``latency / target_concurrency`` (at least the floor).
+`AutoThrottle`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
 - **`CrawlOptimizer(path: str | os.PathLike[str] | None = None, *, min_pages: int = 20, probe_every: int = 10, depth: int = 2, prioritize: bool = True, prune: bool = True, parameters: bool = True)`** (class). Learns which URL patterns give items and acts on it (see the module docs).
   - `boost(self, url: str) -> int`: Priority to add to a request of ``url``: 20 when its pattern's pages hold items, 10 when they lead to pages that do, 0 otherwise (or not known yet).
   - `classmethod coerce(cls, value: Any, *, crawl_dir: str | os.PathLike[str] | None = None) -> CrawlOptimizer | None`: A spider's ``optimize`` setting: ``True``, a file path or an optimizer.
@@ -300,41 +288,21 @@ checks that it is up to date.
   - `save(self, path: str | os.PathLike[str] | None = None)`: Write what was learned to ``path`` (default: the file it was loaded from), atomically.
   - `skip(self, request: Request, parent: Request | None = None) -> bool`: Whether to leave ``request`` out: its pattern is barren (and it is not a probe).
   - `to_dict(self) -> dict[str, Any]`
-- **`CrawlResult(items: list[Any] = ..., stats: dict[str, Any] = ..., status: str = 'finished', crawl_dir: str | None = None, failures: list[FailureDiagnosis] = ..., metrics: dict[str, Any] = ..., changes: Any = None, profile: Any = None, fetch_strategy: Any = None, optimizer: Any = None, run_id: str | None = None)`** (class). What :meth:`Spider.run` returns.
-  - `failure_report(self, limit: int = 10) -> str`: The failure diagnoses as readable text.
-  - `save(self, path: str | Path) -> Path`: Write :attr:`items` to ``.jsonl``, ``.json`` or ``.csv``.
-- **`DropItem`** (exception). Raised by a pipeline to drop an item; the message says why (counted in the stats).
+`CrawlResult`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
+`DropItem`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
 - **`FailureDiagnosis(domain: str, signature: str, category: str, attempts: int, failed_urls: int, affected_urls: int, sample_urls: list[str], first_seen: float, last_seen: float, last_success: float | None, confirmed_cause: str | None, likely_cause: str | None, evidence: list[str], crawler_state: str)`** (class). One kind of failure on one domain, with what is known and what is guessed.
   - `describe(self) -> str`: A multi-line, human-readable report.
   - `to_dict(self) -> dict[str, Any]`
-- **`IgnoreRequest`** (exception). Raised by a middleware's ``process_request`` to drop a request without an error.
-- **`ItemPipeline()`** (class). Optional base class for pipelines (every method is optional).
-  - `close_spider(self, spider: Spider) -> Any`: Called once after the crawl ends.
-  - `open_spider(self, spider: Spider) -> Any`: Called once before the crawl starts.
-  - `process_item(self, item: Any, spider: Spider) -> Any`: Return the item (possibly changed), or ``None`` / raise :class:`DropItem` to drop it.
-- **`SessionManager()`** (class). A registry of async fetchers, each with its own cookies and settings.
-  - `add(self, name: str, fetcher: Any, *, default: bool = False) -> Any`: Register an :class:`~wintergrab.AsyncFetcher` or :class:`~wintergrab.AsyncBrowserFetcher`.
-  - `close_all(self)`
-  - `get(self, name: str | None = None) -> Any`
-- **`Spider(**overrides: Any)`** (class). Base class for crawlers.
-  - `arun(self, *, resume: bool = True) -> CrawlResult`: Run the crawl inside an existing event loop.
-  - `configure_sessions(self, sessions: SessionManager)`: Register the fetch sessions this spider uses.
-  - `fatal(self, error: WintergrabError | Exception)`: Abort the crawl with an error (raised from :meth:`run`).
-  - `get_network_policy(self) -> NetworkPolicy | None`: The spider's shared :class:`~wintergrab.netpolicy.NetworkPolicy` (``None`` = no restriction).
-  - `http_cache(self) -> HTTPCache | None`: The spider's shared :class:`HTTPCache` (``None`` unless :attr:`cache` is set).
-  - `is_blocked(self, response: Response) -> bool`: Decide whether a response is a block/challenge page (retried, and slows the domain down).
-  - `metrics(self) -> dict[str, Any]`: Live metrics of the running crawl: rates, latency, per-domain throttle state, budgets (empty when idle).
-  - `needs_browser(self, response: Response) -> str | bool | None`: With :attr:`adaptive_fetch`: whether a page fetched over HTTP needs a browser to show its content.
-  - `on_close(self, result: CrawlResult) -> Any`: Called once after crawling ends (may be async).
-  - `on_error(self, request: Request, error: BaseException) -> Any`: Called when a request finally fails (after retries) and has no errback.
-  - `on_start(self) -> Any`: Called once before crawling starts (may be async).
-  - `parse(self, response: Response) -> Any`: Default callback.
-  - `pause(self)`: Stop gracefully and save state so the crawl can resume (thread-safe).
-  - `process_item(self, item: Any) -> Any`: Clean/validate each item.
-  - `run(self, *, resume: bool = True) -> CrawlResult`: Run the crawl and block until it finishes, pauses or stops.
-  - `start_requests(self) -> Iterable[Request | str] | AsyncIterable[Request | str]`: Initial requests: one per URL in :attr:`start_urls` and :attr:`sitemap_urls`.
-  - `stop(self)`: Stop gracefully without keeping the queue (thread-safe).
-  - `stream(self, *, resume: bool = True) -> AsyncIterator[Any]`: Run the crawl and yield items as they are scraped::
+`IgnoreRequest`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
+`ItemPipeline`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
+`SessionManager`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
+`Spider`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
 - **`open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter`**. Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``).
 - **`write_items(path: str | os.PathLike[str], items: list[Any]) -> Path`**. Write a list of items in one go (format chosen by extension).
 
@@ -521,6 +489,11 @@ checks that it is up to date.
   - `to_config(self) -> dict[str, Any]`: The stage's configuration-file form: ``{kind: options}``.
 - **`Issue(field: str | None, code: str, message: str, severity: str = 'error', value: Any = None)`** (class). Something wrong (or suspicious) with a value, a record or a dataset.
   - `to_dict(self) -> dict[str, Any]`
+- **`Locate(*, add: Sequence[str] = ('country', 'region', 'city', 'postal_code', 'coordinates'), prefix: str = '', country: str | None = None, fields: Mapping[str, str | Sequence[str]] | None = None, name: str | None = None)`** (class). Add where a record is: read from its address, location, city, region, postal code, country, coordinates and map link fields, and normalized (:func:`wintergrab.data.places.place_of`).
+  - `apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None`: Return the record (changed in place, or a new dict), or ``None`` to drop it (set ``ctx.reason``).
+  - `details(self) -> str`: A short note for :meth:`Pipeline.describe`.
+  - `classmethod from_config(cls, options: Any, loader: ConfigLoader) -> Locate`
+  - `to_config(self) -> dict[str, Any]`: The stage's configuration-file form: ``{kind: options}``.
 - **`Lookup(on: str, table: Mapping[Any, Any] | Sequence[Mapping[str, Any]] | str | Path, *, key: str | None = None, fields: Sequence[str] | None = None, prefix: str = '', required: bool = False, overwrite: bool = False, name: str | None = None)`** (class). Add fields from a reference table, matched on a field.
   - `apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None`: Return the record (changed in place, or a new dict), or ``None`` to drop it (set ``ctx.reason``).
   - `details(self) -> str`: A short note for :meth:`Pipeline.describe`.
@@ -558,6 +531,9 @@ checks that it is up to date.
   - `save(self, path: str | Path) -> Path`: Write :meth:`to_config` as JSON (or YAML for ``.yaml``/``.yml``).
   - `stream(self, records: Iterable[Any]) -> Iterator[dict[str, Any]]`: Process records one at a time, yielding those that come through (for large inputs).
   - `to_config(self) -> dict[str, Any]`: The configuration form (raises for stages built from Python functions).
+- **`Place(country: str | None = None, region: str | None = None, city: str | None = None, postal_code: str | None = None, street: str | None = None, coordinates: tuple[float, float] | None = None, remote: bool = False, unsure: str | None = None, sources: dict[str, str] = ...)`** (class). Where a record is; ``None`` for what it does not say.
+  - `key(self, part: str) -> Any`: What records are grouped by for ``part``: a city with its region or country (two Portlands are two cities), the others as they are.
+  - `to_dict(self) -> dict[str, Any]`
 - **`QualityCheck(schema: Schema | Mapping[str, Any] | str | Path | None = None, *, monitor: QualityMonitor | None = None, name: str | None = None, **options: Any)`** (class). Measure dataset quality as records pass; never drops anything.
   - `apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None`: Return the record (changed in place, or a new dict), or ``None`` to drop it (set ``ctx.reason``).
   - `close_spider(self, spider: Any) -> Any`: Called once after a crawl.
@@ -643,8 +619,10 @@ checks that it is up to date.
 - **`compile_expression(source: str) -> Expression`**. :class:`Expression` with a cache (the same source compiles once).
 - **`content_hash(value: Any) -> str`**. A stable hex digest of ``value``'s normalized text (dicts and lists: of their sorted items).
 - **`diff_records(old: Iterable[Mapping[str, Any]], new: Iterable[Mapping[str, Any]], key: str | Sequence[str] | None = None, *, ignore: Iterable[str] = (), private: bool = False) -> DatasetDiff`**. The differences between two datasets.
+- **`distance_km(a: Any, b: Any) -> float | None`**. The great-circle distance between two points, in kilometres (to 0.1 km); ``None`` when either has no coordinates.
 - **`explain_inference(records: Iterable[Mapping[str, Any]], **options: Any) -> list[TypeGuess]`**. Why each field got its type (share of values the type could read, presence...).
 - **`get_path(record: Any, path: str, default: Any = None) -> Any`**. The value at a dotted ``path`` (``"offers.0.price"``); a key with that exact name wins.
+- **`group_records(records: Iterable[Mapping[str, Any]], by: str | Callable[[Mapping[str, Any]], Any], *, stats: Sequence[str] = (), country: str | None = None, fields: Mapping[str, str | Sequence[str]] | None = None, places: Sequence[Place] | None = None) -> list[Group]`**. Group ``records`` by a place part (``"country"``, ``"region"``, ``"city"``, ``"postal_code"``, ``"remote"``: read with :func:`places_of`, so ``"Germany"``, ``"DE"`` and ``"Deutschland"`` are one group), by another field (a dotted path), or by a function of the record.
 - **`hamming(a: int, b: int) -> int`**. Number of differing bits.
 - **`infer_schema(records: Iterable[Mapping[str, Any]], *, name: str = 'inferred', sample: int = 1000, threshold: float = 0.9, guesses: list[TypeGuess] | None = None) -> Schema`**. Guess a schema from up to ``sample`` records (see the module docs).
 - **`is_valid(issues: Iterable[Issue]) -> bool`**. ``True`` when none of ``issues`` is an error (warnings and info are fine).
@@ -653,6 +631,8 @@ checks that it is up to date.
 - **`load_schema(path: str | Path) -> Schema`**. Read a schema file (``.json``, ``.yaml``/``.yml``, ``.toml``).
 - **`minhash(features: str | Iterable[str], num_perm: int = 128, seed: int = 1) -> tuple[int, ...]`**. MinHash signature of a text's shingles (or of a set of features).
 - **`minhash_similarity(a: Sequence[int], b: Sequence[int]) -> float`**. Estimated Jaccard similarity: the share of agreeing signature slots.
+- **`place_of(record: Mapping[str, Any], *, country: str | None = None, fields: Mapping[str, str | Sequence[str]] | None = None) -> Place`**. The place of ``record`` (see the module docs).
+- **`places_of(records: Iterable[Mapping[str, Any]], *, country: str | None = None, fields: Mapping[str, str | Sequence[str]] | None = None, settle: float = 0.8) -> tuple[list[Place], str | None]`**. The places of ``records``, and the country that settled the most codes naming several places, if any.
 - **`register_operation(name: str, build: Callable[[Any], OperationFn], *, elementwise: bool = True, strict: bool = False, accepts_none: bool = False, argument: str = 'none') -> Operation`**. Add a :class:`Transform` operation (see :class:`Operation` for the options).
 - **`register_type(name: str, normalizer: Normalizer, json_schema: Mapping[str, Any] | None = None)`**. Add a field type: ``normalizer(raw, field, context, notes) -> value | None``.
 - **`simhash(features: str | Iterable[str], bits: int = 64) -> int`**. SimHash of a text (its word 3-gram shingles) or of explicit features (repeats count as weight).
@@ -666,6 +646,26 @@ checks that it is up to date.
 - **`URL_READERS`**: a dict
 - **`read_records(path: str | Path, *, limit: int | None = None) -> Iterator[dict[str, Any]]`**. The records in a file, one at a time.
 - **`register_reader(key: str, reader: Reader | str)`**. Read more: ``".ext"`` for files with that extension, ``"scheme"`` for ``scheme://`` URLs.
+
+## `wintergrab.data.places`: Where records are
+
+- **`DEFAULT_PARTS`** = `('country', 'region', 'city', 'postal_code', 'coordinates')`
+- **`PLACE_FIELDS`**: a dict
+- **`PLACE_PARTS`** = `('country', 'region', 'city', 'postal_code', 'street', 'coordinates', 'remote')`
+- **`Group(key: Any, label: str, count: int, share: float, stats: dict[str, dict[str, float | int]] = ..., indices: list[int] = ...)`** (class). Records sharing a value (:func:`group_records`).
+  - `to_dict(self) -> dict[str, Any]`
+`Place`: see [`wintergrab.data`](#wintergrabdata-schemas-normalizing-validating-pipelines-quality).
+
+- **`coordinates_of(value: Any) -> tuple[float, float] | None`**. ``(latitude, longitude)`` of a value: a pair, ``"48.8584, 2.2945"`` (or degrees, minutes and seconds), ``{"latitude": ..., "longitude": ...}`` (schema.org ``GeoCoordinates``), a GeoJSON point (``{"type": "Point", "coordinates": [lon, lat]}``), a map link, or a :class:`Place`; ``None`` otherwise.
+`distance_km`: see [`wintergrab.data`](#wintergrabdata-schemas-normalizing-validating-pipelines-quality).
+
+`group_records`: see [`wintergrab.data`](#wintergrabdata-schemas-normalizing-validating-pipelines-quality).
+
+- **`in_box(point: Any, south: float, west: float, north: float, east: float) -> bool | None`**. Whether a point is inside a box of latitudes and longitudes (a box across the 180th meridian has ``west > east``); ``None`` when the point has no coordinates.
+`place_of`: see [`wintergrab.data`](#wintergrabdata-schemas-normalizing-validating-pipelines-quality).
+
+`places_of`: see [`wintergrab.data`](#wintergrabdata-schemas-normalizing-validating-pipelines-quality).
+
 
 ## `wintergrab.data.graph`: Knowledge graphs
 

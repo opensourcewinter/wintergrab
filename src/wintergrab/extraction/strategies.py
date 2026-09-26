@@ -23,7 +23,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, ClassVar
 from urllib.parse import urlsplit
 
-from ..data.normalize import iter_numbers, normalize_availability, normalize_phone, parse_rating
+from ..data.normalize import coordinates_in_url, iter_numbers, normalize_availability, normalize_phone, parse_rating
 from ..parser import Selector
 from ..parser.text import tag_name, text_content
 from .page import PageContext, schema_types
@@ -98,6 +98,14 @@ _KIND_NAMES = {
 }  # fmt: skip
 
 
+# Fields holding a point on a map, or one of its coordinates.
+_POINT_NAMES = {
+    "latitude": {"latitude", "lat"},
+    "longitude": {"longitude", "lon", "lng", "long"},
+    "coordinates": {"coordinates", "geo", "gps", "geo_coordinates", "lat_lng", "latlng"},
+}
+
+
 def field_kind(f: SchemaField) -> str:
     """What a field holds, for the heuristic strategies (see :func:`_kind`)."""
     return _kind(f.name, f.type, tuple(f.aliases))
@@ -110,9 +118,14 @@ def _kind(name: str, kind: str, aliases: tuple[str, ...]) -> str:
     One of ``title``, ``description``, ``price``, ``currency``, ``availability``,
     ``rating``, ``review_count``, ``image``, ``url``, ``date``, ``author``,
     ``email``, ``phone``, ``address``, ``sku``, ``brand``, ``category``,
-    ``bedrooms``, ``bathrooms``, ``floor_area`` or ``other``.
+    ``bedrooms``, ``bathrooms``, ``floor_area``, ``latitude``, ``longitude``,
+    ``coordinates`` or ``other``.
     """
     keys = set(candidate_names(name, aliases))
+    if kind in ("number", "coordinates", "string"):
+        for point, names in _POINT_NAMES.items():
+            if keys & names and (point == "coordinates" or kind == "number"):
+                return point
     if kind in ("integer", "number") and keys & {"bedrooms", "beds", "bedroom"}:
         return "bedrooms"
     if kind in ("integer", "number") and keys & {"bathrooms", "baths", "bathroom"}:
@@ -712,6 +725,16 @@ class DomHeuristics(Strategy):
     def _address(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
         return [(a.text, "dom:address") for a in page.root.css("address") if a.text]
 
+    # a point on a map: the page's map links and embeds, and map elements' coordinates attributes
+    def _latitude(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
+        return [(lat, source) for (lat, _), source in _map_points(page)]
+
+    def _longitude(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
+        return [(lon, source) for (_, lon), source in _map_points(page)]
+
+    def _coordinates(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
+        return [(f"{lat}, {lon}", source) for (lat, lon), source in _map_points(page)]
+
     def _description(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
         found = self._texts(page, "description", "[class*=description]", max_len=20_000)
         return sorted(found, key=lambda pair: -len(pair[0]))[:1]
@@ -745,6 +768,29 @@ class DomHeuristics(Strategy):
         if len(crumbs) >= 2:  # the last link is the most specific category (the first is the home page)
             return [(crumbs if f.many else crumbs[-1], "dom:breadcrumb")]
         return []
+
+
+_POINT_ATTRIBUTES = (("data-lat", "data-lng"), ("data-lat", "data-lon"), ("data-latitude", "data-longitude"))
+
+
+def _map_points(page: PageContext) -> list[tuple[tuple[float, float], str]]:
+    """The points the page shows on maps: links to a map (Google Maps, OpenStreetMap, Apple Maps...),
+    embedded maps and static map images, and elements carrying ``data-lat``/``data-lng``."""
+    out: list[tuple[tuple[float, float], str]] = []
+    for query, attribute in (("a[href]", "href"), ("iframe[src]", "src"), ("img[src]", "src")):
+        for match in page.root.css(query):
+            point = coordinates_in_url(match.attr(attribute))
+            if point is not None:
+                out.append((point, f"dom:{query.split('[')[0]}[{attribute}] map"))
+    for lat_attr, lon_attr in _POINT_ATTRIBUTES:
+        for match in page.root.css(f"[{lat_attr}][{lon_attr}]"):
+            try:
+                lat, lon = float(match.attr(lat_attr) or ""), float(match.attr(lon_attr) or "")
+            except ValueError:
+                continue
+            if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat, lon) != (0.0, 0.0):
+                out.append(((round(lat, 7), round(lon, 7)), f"dom:[{lat_attr}]"))
+    return out
 
 
 def _is_this_page(page: PageContext, link: Selector) -> bool:

@@ -502,6 +502,37 @@
   INPUT --field FIELD [--model PROVIDER:NAME]`, which sums up the
   languages, keywords and sentiments.
 
+### Places (`wintergrab.data.places`)
+
+- `place_of(record)` reads where a record is from the fields it has: an
+  address (one line, WINTERGRAB's address object, schema.org's
+  `PostalAddress` or `Place`), a location as listings write it (`"Austin,
+  TX"`, `"Remote - US"`, `"Hybrid: Amsterdam, NL"`), city, region, postal
+  code and country fields (trusted over the address), and coordinates.
+  Countries become ISO 3166-1 codes; regions ISO 3166-2 codes where the
+  country's regions are known, else as written; postal codes their
+  country's format. Each part says which field it came from.
+- A code naming several places (`"CA"`: California or Canada; `"WA"`,
+  `"IN"`, `"NL"`, `"Georgia"`...) is read in the country given, or in the
+  one the other records name most (`places_of`, at least three records
+  and 80% of those naming any of its countries), or not at all, and the
+  place says which code it could not read.
+- Coordinates are read, never looked up: coordinates fields, GeoJSON
+  points, `latitude`/`longitude`, and map links (`coordinates_in_url`:
+  Google Maps, OpenStreetMap, Apple Maps, Bing Maps, HERE, Waze, `geo:`).
+  Extraction fills `latitude`, `longitude` and `coordinates` fields from a
+  page's `geo.position`/`ICBM` meta tags, OpenGraph's `place:location`, its
+  map links, embeds and static maps, and `data-lat`/`data-lng` attributes.
+- `distance_km` (great-circle, within 0.5% of the ellipsoid's), `in_box`
+  (boxes across the 180th meridian too), and `group_records(records, by,
+  stats=)`: by country, region, city (two Portlands are two cities),
+  postal code, remote, or any field; numeric statistics per group, money by
+  currency.
+- The pipeline stage `locate` (`Locate`), the expression functions
+  `distance_km`, `in_box` and `coordinates`, and `wintergrab data places
+  INPUT [--country C] [--in PLACE] [--near LAT,LON --within KM] [--remote]
+  [--by PART --stats FIELD] [-o OUT]`. docs/places.md.
+
 ### Knowledge graphs (`wintergrab.data.graph`)
 
 - `wintergrab data graph [KIND=]INPUT... -o GRAPH` (`KnowledgeGraph`)
@@ -564,6 +595,10 @@
   without scripts, under a policy that allows none. Changes need the
   builder page's token, as JSON from the same origin. The builder listens
   on 127.0.0.1 and refuses other host names.
+- On a phone (a window narrower than 760px), the page is on top, where it
+  stays while the specification scrolls beneath it, and taps pick. With
+  `--host 0.0.0.0`, `build` and `dashboard` print the address other devices
+  on the network open.
 - Schemas can say where a listing's records are: `container` (the elements
   holding one each) and `next_page`. `Extractor.extract_all` uses the
   schema's container. `get --extract` reads every card, and `crawl
@@ -698,6 +733,13 @@
   instead of 1.1 ms on an 11 KB page without pagination, with the same
   answers (checked against the previous version on 120,000 generated
   pages).
+- `parse_address` misread places as listings write them: `"San Francisco,
+  CA"` was in Canada with no city, `"New York, NY"` had the city `NY`,
+  `"Austin, TX, USA"` the street `Austin`, and `"10117 Berlin, Germany"` lost
+  its city and postal code. It now reads a region's code or name, a postal
+  code in a part of its own or beside the city, and a street only where
+  one is written (a house number, a street word), and it notes a code
+  naming several places rather than choosing one.
 - A product's category read from a breadcrumb was the next-to-last link
   even when the page itself was not linked: "Books" rather than "Poetry"
   in Home > Books > Poetry > A Light in the Attic. The last link is left

@@ -50,7 +50,7 @@ parse_address("1600 Amphitheatre Parkway, Mountain View, CA 94043, USA").region 
 | Dates and times | `parse_date`, `parse_datetime`, `parse_duration` (relative dates: "3 days ago") |
 | Measurements | `parse_quantity`, `parse_dimensions`, `convert`, `unit_info` (mass, length, volume, area, data, power, energy, electricity, frequency, time, speed, temperature) |
 | Contact | `parse_phone`/`normalize_phone` (E.164), `normalize_email`, `normalize_url_value` |
-| Places | `normalize_country` (ISO 3166), `normalize_region` (ISO 3166-2), `postal_code`, `parse_address`, `parse_coordinates` |
+| Places | `normalize_country` (ISO 3166), `normalize_region` (ISO 3166-2), `postal_code`, `parse_address` (full addresses and listings' places: `"Austin, TX"`), `parse_coordinates`, `coordinates_in_url` (map links); records' places: [places](places.md) |
 | Languages | `normalize_language` (BCP 47) |
 | Text | `clean_text`, `fix_mojibake`, `mojibake_score`, `has_replacement_characters`, `is_placeholder` |
 | Other | `parse_boolean`, `normalize_availability` (schema.org names), `parse_rating` |
@@ -212,6 +212,7 @@ access, no imports, no comprehensions or lambdas, and only these functions:
 | Text | `len`, `lower`, `upper`, `title`, `strip`, `clean`, `contains`, `icontains`, `startswith`, `endswith`, `matches`, `extract`, `replace`, `sub`, `split`, `join`, `words` |
 | Values | `first`, `last`, `coalesce`, `min`, `max`, `sum`, `any`, `all`, `abs`, `round`, `int`, `float`, `str`, `bool`, `get` |
 | Parsing | `number`, `integer`, `money`, `currency`, `date`, `datetime`, `boolean` |
+| Places | `coordinates`, `distance_km`, `in_box` ([places](places.md)) |
 | URLs | `host`, `domain`, `path`, `param` |
 | Other | `now`, `today`, `hash` |
 
@@ -290,6 +291,7 @@ pipeline: 4 in -> 2 out
 | `Enrich(fn)` | merges the fields a function returns; the function may be `async` (a web service, an AI provider adapter) |
 | `Analyze(field, add=...)` | adds a text field's `language`, `keywords`, `words` and `reading_minutes` (and `language_confidence`, `sentences`, `characters`, `script`), with no model ([content](intelligence.md#content-language-keywords-topics)); a text written without spaces between words gets `None` words and reading time |
 | `Classify(field, model, categories=...)` | adds a model's `topic`, `category` (one of yours), `sentiment` and `entities` (found in the text), checked; a model that fails leaves the record as it was |
+| `Locate(country=, add=...)` | adds where the record is, from its address, location, city, region, postal code, country and coordinates fields, normalized: `country`, `region`, `city`, `postal_code`, `coordinates` ([places](places.md)) |
 | `QualityCheck(schema)` | measures quality as records pass (see [Quality](#quality)) |
 
 Any object with `process_item` and any `record -> record | None` function
@@ -507,6 +509,7 @@ wintergrab data entities companies.jsonl --field name --attribute website -o ent
 wintergrab data commit prices/ today.jsonl --key url -m "daily run"
 wintergrab data log prices/
 wintergrab data graph job=jobs.jsonl company=companies.jsonl -o graph.graphml
+wintergrab data places jobs.jsonl --country US --by region --stats salary
 wintergrab data diff prices/@previous prices/@latest -o changes.jsonl
 wintergrab data diff yesterday.jsonl today.jsonl --key sku --exit-code
 

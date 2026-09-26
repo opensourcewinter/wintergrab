@@ -14,6 +14,8 @@
 * :mod:`~wintergrab.data.quality` - dataset quality metrics and degradation alerts.
 * :mod:`~wintergrab.data.entities` - entity resolution: which names are the same company,
   brand, product, person or place, with evidence.
+* :mod:`~wintergrab.data.places` - where records are: addresses and locations read into
+  countries, regions, cities, postal codes and coordinates; distances; filters and groups by place.
 * :mod:`~wintergrab.data.versions` - dataset versions, and what was added, removed and
   changed between two datasets.
 
@@ -38,6 +40,7 @@ from .pipeline import (
     Enrich,
     Exclude,
     Filter,
+    Locate,
     Lookup,
     Normalize,
     Operation,
@@ -51,6 +54,7 @@ from .pipeline import (
     Validate,
     register_operation,
 )
+from .places import Place, distance_km, group_records, place_of, places_of
 from .quality import FieldQuality, QualityMonitor, QualityReport, ks_statistic
 from .schema import FIELD_TYPES, FieldResult, NormalizeContext, Schema, SchemaField, load_schema, register_type
 from .similarity import (
@@ -89,6 +93,7 @@ __all__ = [
     "FieldResult",
     "Filter",
     "Issue",
+    "Locate",
     "Lookup",
     "Match",
     "Mention",
@@ -97,6 +102,7 @@ __all__ = [
     "NormalizeContext",
     "Operation",
     "Pipeline",
+    "Place",
     "QualityCheck",
     "QualityMonitor",
     "QualityReport",
@@ -115,8 +121,10 @@ __all__ = [
     "compile_expression",
     "content_hash",
     "diff_records",
+    "distance_km",
     "explain_inference",
     "get_path",
+    "group_records",
     "hamming",
     "infer_schema",
     "is_valid",
@@ -125,6 +133,8 @@ __all__ = [
     "load_schema",
     "minhash",
     "minhash_similarity",
+    "place_of",
+    "places_of",
     "register_operation",
     "register_type",
     "simhash",

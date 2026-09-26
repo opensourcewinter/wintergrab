@@ -213,6 +213,10 @@ META_KEYS: dict[str, tuple[tuple[str, str], ...]] = {
     "site_name": (("opengraph", "site_name"),),
     "language": (("meta", "language"), ("opengraph", "locale")),
     "type": (("opengraph", "type"),),
+    "latitude": (("opengraph", "place:location:latitude"), ("meta", "geo.latitude")),
+    "longitude": (("opengraph", "place:location:longitude"), ("meta", "geo.longitude")),
+    "coordinates": (("meta", "geo.position"), ("meta", "icbm")),
+    "region": (("meta", "geo.region"),),
 }
 
 # UN/CEFACT unit codes used by schema.org QuantitativeValue.unitCode.

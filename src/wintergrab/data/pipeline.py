@@ -70,6 +70,7 @@ from .normalize import (
     currency_minor_units,
     detect_currency,
     fix_mojibake,
+    normalize_country,
     normalize_url_value,
     parse_boolean,
     parse_date,
@@ -81,6 +82,7 @@ from .normalize import (
     parse_quantity,
     unit_info,
 )
+from .places import DEFAULT_PARTS, PLACE_FIELDS, PLACE_PARTS
 from .quality import QualityMonitor, QualityReport
 from .schema import FieldResult, NormalizeContext, Schema, load_schema
 from .similarity import content_hash
@@ -97,6 +99,7 @@ __all__ = [
     "Enrich",
     "Exclude",
     "Filter",
+    "Locate",
     "Lookup",
     "Normalize",
     "Operation",
@@ -1940,6 +1943,89 @@ def _text_of(value: Any) -> str:
     return ""
 
 
+class Locate(Stage):
+    """Add where a record is: read from its address, location, city, region, postal code, country,
+    coordinates and map link fields, and normalized (:func:`wintergrab.data.places.place_of`).
+
+    ``Locate()`` adds ``country`` (ISO 3166-1), ``region`` (ISO 3166-2 where WINTERGRAB knows the country's
+    regions, else as written), ``city``, ``postal_code`` and ``coordinates`` (``[lat, lon]``, when the
+    record states them or links to a map showing them); ``add`` picks among those, ``street`` and
+    ``remote``; ``prefix`` names them (``place_country``...). ``country`` is the country the records'
+    addresses are in when they do not say it, and settles codes naming several places (``"CA"``:
+    California or Canada); ``fields`` maps parts (``city``, ``address``...) to the records' own field
+    names. A value a record has is not replaced by nothing. Records whose place names a code that nothing
+    settled are counted as ``unsure``.
+    """
+
+    kind = "locate"
+    FEATURES = PLACE_PARTS
+
+    def __init__(
+        self,
+        *,
+        add: Sequence[str] = DEFAULT_PARTS,
+        prefix: str = "",
+        country: str | None = None,
+        fields: Mapping[str, str | Sequence[str]] | None = None,
+        name: str | None = None,
+    ) -> None:
+        super().__init__(name=name)
+        unknown = [a for a in add if a not in self.FEATURES]
+        if unknown:
+            raise ConfigurationError(
+                f"unknown part(s) {', '.join(unknown)}; known: {', '.join(self.FEATURES)}", key=self.name
+            )
+        strange = [f for f in fields or {} if f not in PLACE_FIELDS]
+        if strange:
+            raise ConfigurationError(
+                f"fields: unknown part(s) {', '.join(strange)}; known: {', '.join(PLACE_FIELDS)}", key=self.name
+            )
+        if country is not None and normalize_country(country) is None:
+            raise ConfigurationError(f"country: {country!r} is not a country", key=self.name)
+        self.add, self.prefix, self.country = tuple(add), prefix, country
+        self.fields = dict(fields or {})
+
+    def apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None:
+        from .places import place_of
+
+        place = place_of(record, country=self.country, fields=self.fields)
+        values = place.to_dict()
+        for part in self.add:
+            key = self.prefix + part
+            if values[part] is None and not _empty(record.get(key)):
+                continue  # not replaced by nothing
+            record[key] = values[part]
+        if place.unsure:
+            self.stats["unsure"] += 1
+        elif not place.known:
+            self.stats["unknown"] += 1
+        return record
+
+    def details(self) -> str:
+        notes = [f"{self.stats[k]} {k}" for k in ("unknown", "unsure") if self.stats[k]]
+        return ", ".join(notes)
+
+    @classmethod
+    def from_config(cls, options: Any, loader: ConfigLoader) -> Locate:
+        opts = _options(options, {"add", "prefix", "country", "fields", "name"}, cls.kind)
+        if "add" in opts:
+            opts["add"] = _names(opts["add"], "add", cls.kind)
+        if "fields" in opts and not isinstance(opts["fields"], Mapping):
+            raise ConfigurationError("fields must map parts to field names", key=cls.kind)
+        return cls(**opts)
+
+    def to_config(self) -> dict[str, Any]:
+        options: dict[str, Any] = {}
+        if self.add != DEFAULT_PARTS:
+            options["add"] = list(self.add)
+        for key, default in (("prefix", ""), ("country", None)):
+            if getattr(self, key) != default:
+                options[key] = getattr(self, key)
+        if self.fields:
+            options["fields"] = dict(self.fields)
+        return self._named(options)
+
+
 class QualityCheck(Stage):
     """Measure dataset quality as records pass; never drops anything.
 
@@ -2141,6 +2227,7 @@ STAGES: dict[str, type[Stage]] = {
         Enrich,
         Analyze,
         Classify,
+        Locate,
         QualityCheck,
         _Function,
     )

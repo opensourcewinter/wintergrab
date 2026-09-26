@@ -174,6 +174,8 @@ wintergrab data commit DIR INPUT [--key FIELD] [-m MESSAGE] [--force]   # save t
 wintergrab data log DIR                                                  # list the versions
 wintergrab data analyze INPUT --field FIELD [--add FEATURES] [--model PROVIDER:NAME [--categories A,B]] [-o OUT]
 wintergrab data graph [KIND=]INPUT... [--kind KIND] [--relation FIELD=RELATION:KIND] [--only] [-o GRAPH]
+wintergrab data places INPUT [--country C] [--in PLACE] [--near LAT,LON --within KM] [--remote]
+                       [--by PART [--stats FIELD] [--top N] [--json]] [--add PARTS] [--field PART=NAME] [-o OUT]
 wintergrab data diff OLD NEW [--key FIELD] [--ignore FIELD] [-o CHANGES] [--json] [--exit-code]
 ```
 
@@ -190,8 +192,10 @@ did not dare merge. `commit` saves a dataset as the next version in a
 versions directory and prints what changed; `diff` compares two files or two
 versions (`DIR@v2`, `DIR@previous`, `DIR@latest`), prints the counts and the
 fields that changed, writes the details with `-o`, and with `--exit-code`
-exits with status 1 when they differ. See [data.md](data.md) and
-[entities.md](entities.md).
+exits with status 1 when they differ. `places` reads where each record is,
+normalized, keeps those in a country, region or city or near a point, and
+with `--by` prints them grouped by place. See [data.md](data.md),
+[entities.md](entities.md) and [places.md](places.md).
 
 ## `wintergrab inspect`: profile a website
 

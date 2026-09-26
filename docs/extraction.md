@@ -97,7 +97,7 @@ reliable ones come first:
 | `embedded-json` | state embedded by JavaScript apps (`__NEXT_DATA__`, `window.__STATE__`), by key name |
 | `label` | values next to a label with the field's name: `<dt>Weight</dt><dd>1.2 kg</dd>`, spec tables, `SKU: AB-12` |
 | `records` | the fields of a detected repeating record (listing pages) |
-| `dom` | layout conventions: the `<h1>`, elements classed `price`/`stock`/`rating`, `<time datetime>`, `mailto:` and `tel:` links, the canonical link, an add-to-cart button |
+| `dom` | layout conventions: the `<h1>`, elements classed `price`/`stock`/`rating`, `<time datetime>`, `mailto:` and `tel:` links, map links and embeds and `data-lat`/`data-lng` (a place's point: [places](places.md#coordinates)), the canonical link, an add-to-cart button |
 | `pattern` | the value's shape in the visible text: prices with a currency sign, e-mails, phone numbers, `4.5 out of 5`, `(123 reviews)` |
 | `model` | an [extraction model](#extraction-models), only for what is still missing |
 

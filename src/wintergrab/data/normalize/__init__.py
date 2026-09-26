@@ -16,12 +16,15 @@ from .contact import Phone, normalize_email, normalize_phone, normalize_url_valu
 from .dates import parse_date, parse_datetime, parse_duration
 from .geo import (
     Address,
+    coordinates_in_url,
     normalize_country,
     normalize_language,
     normalize_region,
     parse_address,
     parse_coordinates,
+    place_meanings,
     postal_code,
+    read_address,
 )
 from .money import Money, currency_minor_units, detect_currency, parse_money, parse_money_range
 from .numbers import as_int_or_float, find_number, iter_numbers, parse_integer, parse_number, parse_percent
@@ -50,6 +53,7 @@ __all__ = [
     "as_int_or_float",
     "clean_text",
     "convert",
+    "coordinates_in_url",
     "currency_minor_units",
     "detect_currency",
     "find_number",
@@ -80,6 +84,8 @@ __all__ = [
     "parse_phone",
     "parse_quantity",
     "parse_rating",
+    "place_meanings",
     "postal_code",
+    "read_address",
     "unit_info",
 ]

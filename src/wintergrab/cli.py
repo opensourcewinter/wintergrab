@@ -112,6 +112,8 @@ EPILOG_DATA = """examples:
   wintergrab data entities products.jsonl --field brand --kind brand --annotate products.resolved.jsonl
   wintergrab data graph job=jobs.jsonl company=companies.jsonl -o graph.graphml   # the things they name, linked
   wintergrab data analyze articles.jsonl --field body -o analyzed.jsonl   # language, keywords, length
+  wintergrab data places jobs.jsonl --country US --by region --stats salary  # where they are, grouped
+  wintergrab data places shops.jsonl --near 52.52,13.405 --within 10 -o near-berlin.jsonl
   wintergrab data commit prices/ today.jsonl --key url -m "daily run"   # save a version
   wintergrab data diff prices/@previous prices/@latest                    # what changed since the last one
   wintergrab data diff yesterday.jsonl today.jsonl --key sku -o changes.jsonl
@@ -1656,6 +1658,138 @@ def cmd_data_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data_places(args: argparse.Namespace) -> int:
+    import re
+    from collections import Counter
+
+    from .data.io import read_records
+    from .data.normalize import normalize_country, parse_coordinates, place_meanings
+    from .data.places import DEFAULT_PARTS, PLACE_FIELDS, PLACE_PARTS, distance_km, group_records, places_of
+
+    fields: dict[str, str] = {}
+    for spec in args.field or ():
+        part, _, name = spec.partition("=")
+        if part not in PLACE_FIELDS or not name:
+            print(f"error: --field {spec}: PART=NAME, with PART one of {', '.join(PLACE_FIELDS)}", file=sys.stderr)
+            return 2
+        fields[part] = name
+    add = [a.strip() for a in args.add.split(",") if a.strip()] if args.add else list(DEFAULT_PARTS)
+    unknown = [a for a in add if a not in PLACE_PARTS]
+    if unknown:
+        print(f"error: --add: unknown part(s) {', '.join(unknown)}; known: {', '.join(PLACE_PARTS)}", file=sys.stderr)
+        return 2
+    if args.country and normalize_country(args.country) is None:
+        print(f"error: --country {args.country}: not a country", file=sys.stderr)
+        return 2
+    wanted: list[tuple[str, str]] = []  # (part, value)
+    for text in args.within_place or ():
+        meanings = place_meanings(text.strip())
+        if len(text.strip()) == 2 and normalize_country(text):
+            wanted.append(("country", normalize_country(text) or ""))
+        elif len(meanings) == 1:
+            wanted.append(("region" if "-" in meanings[0] else "country", meanings[0]))
+        elif meanings:
+            print(f"error: --in {text}: it could be {' or '.join(meanings)}; write one of those", file=sys.stderr)
+            return 2
+        elif re.fullmatch(r"[A-Za-z]{2}-[A-Za-z0-9]{1,3}", text.strip()):
+            wanted.append(("region", text.strip().upper()))
+        else:
+            wanted.append(("city", " ".join(text.casefold().split())))
+    center, within = None, float(args.within or 0)
+    if args.near or args.within is not None:
+        center = parse_coordinates(args.near) if args.near else None
+        if center is None or within <= 0:
+            print(
+                "error: --near LAT,LON and --within KM go together (a point, and a distance above 0)", file=sys.stderr
+            )
+            return 2
+
+    records = list(read_records(args.input, limit=args.limit))
+    places, settled = places_of(records, country=args.country, fields=fields)
+    kept_records, kept_places = [], []
+    no_point = 0
+    for record, place in zip(records, places, strict=True):
+        if wanted and not any(
+            (place.key("city")[0] if part == "city" and place.city else getattr(place, part)) == value
+            for part, value in wanted
+        ):
+            continue
+        if args.remote and not place.remote:
+            continue
+        if center is not None:
+            distance = distance_km(place, center)
+            if distance is None:
+                no_point += 1
+                continue
+            if distance > within:
+                continue
+            record[args.prefix + "distance_km"] = distance
+        values = place.to_dict()
+        for part in add:
+            key = args.prefix + part
+            if values[part] is not None or record.get(key) in (None, "", [], {}):
+                record[key] = values[part]
+        kept_records.append(record)
+        kept_places.append(place)
+
+    if args.verbose >= 0:
+        known = sum(1 for p in places if p.known)
+        countries = len({p.country for p in places if p.country})
+        remote = sum(1 for p in places if p.remote)
+        line = f"{len(records):,} record(s): {known:,} with a place"
+        if countries:
+            line += f" ({countries:,} countr{'y' if countries == 1 else 'ies'})"
+        if remote:
+            line += f", {remote:,} remote"
+        if len(kept_records) != len(records):
+            line += f"; {len(kept_records):,} kept"
+        print(line, file=sys.stderr)
+        unsure = Counter(p.unsure for p in places if p.unsure)
+        if unsure:
+            codes = ", ".join(f"{code!r} ({n:,} record(s))" for code, n in unsure.most_common(5))
+            print(f"not read: {codes}: each could name several places; --country COUNTRY reads them in that country",
+                  file=sys.stderr)  # fmt: skip
+        if settled:
+            count = sum(1 for p in places if p.sources.get("country") == "other records")
+            print(f"{count:,} record(s) naming a code of several places were read in {settled}, the country the "
+                  "other records name most (--country to choose)", file=sys.stderr)  # fmt: skip
+        if no_point:
+            print(f"{no_point:,} record(s) left out by --near: they state no coordinates", file=sys.stderr)
+
+    if args.by:
+        groups = group_records(kept_records, args.by, stats=args.stats or (), places=kept_places)
+        if args.json:
+            print(json.dumps([g.to_dict() for g in groups], ensure_ascii=False, indent=2))
+        else:
+            _print_groups(groups, args.by, args.stats or (), args.top)
+        if args.output:
+            _write_records(kept_records, args.output)
+        return 0
+    _write_records(kept_records, args.output)
+    return 0
+
+
+def _print_groups(groups: list[Any], by: str, stats: Sequence[str], top: int) -> None:
+    """A table of groups: label, records, share, and the median of each stats field."""
+    rows = []
+    for group in groups[:top]:
+        row = [group.label, f"{group.count:,}", f"{group.share:.0%}"]
+        for name in stats:
+            found = [(label, s) for label, s in group.stats.items() if label == name or label.startswith(f"{name} (")]
+            row.append(
+                "; ".join(f"{s['median']:,}{' ' + s['currency'] if s.get('currency') else ''}" for _, s in found)
+            )
+        rows.append(row)
+    header = [by, "records", "share", *(f"{name} (median)" for name in stats)]
+    widths = [max(len(str(r[i])) for r in [header, *rows]) for i in range(len(header))]
+    for row in [header, *rows]:
+        cells = [str(cell).ljust(widths[0]) if i == 0 else str(cell).rjust(widths[i]) for i, cell in enumerate(row)]
+        print("  ".join(cells).rstrip())
+    if len(groups) > top:
+        rest = sum(g.count for g in groups[top:])
+        print(f"... and {len(groups) - top:,} more group(s) of {rest:,} record(s) (--top N, --json)")
+
+
 def cmd_data_graph(args: argparse.Namespace) -> int:
     from .data.graph import RELATIONS, KnowledgeGraph, Relation
     from .data.io import read_records
@@ -2288,6 +2422,51 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("-o", "--output", metavar="FILE", help="write the records with what was found (default stdout)")
     an.add_argument("--limit", type=int, metavar="N", help="only the first N records")
     an.set_defaults(func=cmd_data_analyze)
+    pl = actions.add_parser(
+        "places", help="where records are, normalized; kept by country, region, city or distance; grouped by place"
+    )
+    pl.add_argument("input", metavar="INPUT")
+    pl.add_argument(
+        "--country",
+        metavar="COUNTRY",
+        help="the country the records' addresses are in when they do not say it (settles 'CA', 'WA'...)",
+    )
+    pl.add_argument(
+        "--in",
+        dest="within_place",
+        action="append",
+        metavar="PLACE",
+        help="keep records in a country (DE, Germany), region (US-CA, California) or city (Berlin); repeatable",
+    )
+    pl.add_argument("--near", metavar="LAT,LON", help="keep records within --within km of a point (their coordinates)")
+    pl.add_argument("--within", type=float, metavar="KM", help="(--near) the distance, in kilometres")
+    pl.add_argument("--remote", action="store_true", help="keep records whose place says remote")
+    pl.add_argument(
+        "--by",
+        metavar="PART",
+        help="print the records grouped by country, region, city, postal_code or remote (or another field)",
+    )
+    pl.add_argument("--stats", action="append", metavar="FIELD", help="(--by) sum up a numeric field in each group")
+    pl.add_argument("--top", type=int, default=20, metavar="N", help="(--by) groups to print (20)")
+    pl.add_argument("--json", action="store_true", help="(--by) print the groups as JSON")
+    pl.add_argument(
+        "--add",
+        metavar="PARTS",
+        help="comma-separated parts to add to the records: country, region, city, postal_code, street, "
+        "coordinates, remote (default: country, region, city, postal_code, coordinates)",
+    )
+    pl.add_argument("--prefix", default="", metavar="TEXT", help="put before the added fields' names")
+    pl.add_argument(
+        "--field",
+        action="append",
+        metavar="PART=NAME",
+        help="where a part is in the records, e.g. city=town or address=hq.address (repeatable)",
+    )
+    pl.add_argument(
+        "-o", "--output", metavar="FILE", help="write the records kept, with their place (default stdout, unless --by)"
+    )
+    pl.add_argument("--limit", type=int, metavar="N", help="only the first N records")
+    pl.set_defaults(func=cmd_data_places)
     gr = actions.add_parser(
         "graph", help="a knowledge graph: the things records name, resolved, and how they relate, with sources"
     )

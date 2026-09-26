@@ -7,6 +7,7 @@
     coalesce(title, name, "untitled")
     domain(url) in ("shop.example", "store.example")
     matches(sku, "^[A-Z]{3}-[0-9]+$")
+    distance_km(coordinates, [52.52, 13.405]) <= 25
 
 The syntax is Python's, restricted to literals, field names, arithmetic
 (``+ - * / // % **``), comparisons (``== != < <= > >= in``, ``not in``,
@@ -357,6 +358,31 @@ def _words(value: Any) -> int:
 
 
 #: The functions expressions may call. Every one tolerates ``None`` (see the module docs).
+def _coordinates(value: Any) -> list[float] | None:
+    """``[latitude, longitude]`` of a pair, text, ``{"latitude", "longitude"}``, a GeoJSON point or a map link."""
+    from .places import coordinates_of
+
+    found = coordinates_of(value)
+    return list(found) if found else None
+
+
+def _distance_km(a: Any, b: Any) -> float | None:
+    """Kilometres between two points (anything :func:`_coordinates` reads); ``None`` when one has none."""
+    from .places import distance_km
+
+    return distance_km(a, b)
+
+
+def _in_box(point: Any, south: Any, west: Any, north: Any, east: Any) -> bool | None:
+    """Whether a point is within latitudes ``south``..``north`` and longitudes ``west``..``east``."""
+    from .places import in_box
+
+    for bound in (south, west, north, east):
+        if isinstance(bound, bool) or not isinstance(bound, (int, float)):
+            raise ExpressionError(f"in_box() takes numbers for its bounds, not {bound!r}")
+    return in_box(point, south, west, north, east)
+
+
 FUNCTIONS: dict[str, Callable[..., Any]] = {
     # text
     "len": _len,
@@ -399,6 +425,10 @@ FUNCTIONS: dict[str, Callable[..., Any]] = {
     "date": _date,
     "datetime": _datetime,
     "boolean": _boolean,
+    # places
+    "coordinates": _coordinates,
+    "distance_km": _distance_km,
+    "in_box": _in_box,
     # URLs
     "host": _host,
     "domain": _domain,
