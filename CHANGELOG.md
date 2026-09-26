@@ -849,6 +849,10 @@ an error that says so, not a setting silently ignored
   headless shell) failed with "Download is starting". The file is now the
   answer, as over HTTP: asked for with the browser's cookies, each redirect
   checked against the network policy.
+- When Playwright's own browser is not installed and WINTERGRAB finds one
+  itself, a headless fetch now takes Playwright's headless shell first, as
+  Playwright does, rather than the full browser: both kinds of setup run
+  the same browser. A fetch with a window never takes the headless shell.
 - A run's record (`run.json`) kept credentials as they were given: the
   password in a proxy URL, `Authorization` and `Cookie` headers, settings
   such as `api_token`, and the same in a crawl's command line. They are now

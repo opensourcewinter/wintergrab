@@ -70,8 +70,9 @@ INSTALL_HINT = (
 )
 
 
-def _discover_chromium() -> list[str]:
-    """Chromium/Chrome binaries Playwright (or the system) may already have."""
+def _discover_chromium(headless: bool = True) -> list[str]:
+    """Chromium/Chrome binaries Playwright (or the system) may already have. Headless, Playwright's headless
+    shell comes first, as Playwright itself picks it; with a window, it is left out (it cannot show one)."""
     found: list[str] = []
     env = os.environ.get("WINTERGRAB_BROWSER_PATH")
     if env:
@@ -82,14 +83,19 @@ def _discover_chromium() -> list[str]:
         str(Path.home() / "Library" / "Caches" / "ms-playwright"),
         str(Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright") if os.environ.get("LOCALAPPDATA") else None,
     ]
-    patterns = [
+    shells = [
+        "chromium_headless_shell-*/chrome-*/chrome-headless-shell",
+        "chromium_headless_shell-*/chrome-*/headless_shell",
+        "chromium_headless_shell-*/chrome-*/chrome-headless-shell.exe",
+        "chromium_headless_shell-*/chrome-*/headless_shell.exe",
+    ]
+    browsers = [
         "chromium-*/chrome-linux*/chrome",
         "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
         "chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
         "chromium-*/chrome-win*/chrome.exe",
-        "chromium_headless_shell-*/chrome-*/chrome-headless-shell",
-        "chromium_headless_shell-*/chrome-*/headless_shell",
     ]
+    patterns = [*shells, *browsers] if headless else browsers
     for root in filter(None, roots):
         for pattern in patterns:
             found.extend(sorted(glob.glob(os.path.join(root, pattern)), reverse=True))
@@ -320,7 +326,7 @@ class AsyncBrowserFetcher:
             if env_path:
                 attempts.append({"executable_path": env_path})
             attempts.append({})
-            attempts.extend({"executable_path": p} for p in _discover_chromium())
+            attempts.extend({"executable_path": p} for p in _discover_chromium(self.headless))
         errors: list[str] = []
         for extra in attempts:
             opts = {**base, **extra}
