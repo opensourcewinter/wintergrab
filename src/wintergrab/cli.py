@@ -247,8 +247,10 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             **cache,
         )
         options: dict[str, Any] = {"wait_for": args.wait_for, "wait": args.wait, "scroll": args.scroll}
-        if args.screenshot:
-            options["screenshot"] = args.screenshot
+        if args.screenshot or getattr(args, "vision", False):
+            options["screenshot"] = args.screenshot or True
+        if getattr(args, "layout", False) or getattr(args, "visual_tables", False):
+            options["layout"] = True
         if args.capture:
             options["capture"] = args.capture_filter or True
             options.setdefault("wait_until", "networkidle")
@@ -309,6 +311,11 @@ def cmd_get(args: argparse.Namespace) -> int:
     urls = [ensure_scheme(u) for u in args.urls]
     if args.capture_filter:
         args.capture = True
+    if args.vision and not (args.extract and args.model):
+        print("error: --vision shows the page's screenshot to a model: it needs --extract and --model", file=sys.stderr)
+        return 2
+    if args.layout or args.visual_tables or args.vision:
+        args.browser = True  # what a page looks like needs a browser to draw it
     fields = _fields(args)
     if fields and not args.each:
         args.each = ["html"]  # one record for the whole page
@@ -316,7 +323,9 @@ def cmd_get(args: argparse.Namespace) -> int:
     schema = _load_schema(args.schema) if args.schema else None
     extractor = _extractor(args)
     # Modes that print one JSON document per page instead of page content.
-    json_modes = [m for m in ("structured", "json_data", "tables", "next", "capture") if getattr(args, m)]
+    json_modes = [
+        m for m in ("structured", "json_data", "tables", "visual_tables", "next", "capture") if getattr(args, m)
+    ]
     selecting = bool(args.css or args.xpath)
     records = bool(args.each or args.auto or examples or schema or extractor)
     if json_modes:
@@ -354,6 +363,14 @@ def cmd_get(args: argparse.Namespace) -> int:
                 doc["embedded_json"] = page.embedded_json()
             if args.tables:
                 doc["tables"] = page.tables()
+            if args.visual_tables:
+                from .extraction.visual import layout_tables
+
+                doc["visual_tables"] = (
+                    [{**table.to_dict(), "records": table.records()} for table in layout_tables(page.layout)]
+                    if page.layout is not None
+                    else []
+                )
             if args.next:
                 doc["next_page"] = page.next_page()
             if args.capture:
@@ -2115,7 +2132,9 @@ def _extractor(args: argparse.Namespace) -> Any:
                                 model=_model(args))  # fmt: skip
     from .extraction import Extractor
 
-    return Extractor(args.extract, provenance=args.provenance, model=_model(args))
+    return Extractor(
+        args.extract, provenance=args.provenance, model=_model(args), vision=getattr(args, "vision", False)
+    )
 
 
 def _add_extract_options(p: argparse.ArgumentParser) -> None:
@@ -2174,6 +2193,17 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--scroll", action="store_true", help="(browser) scroll to the bottom (infinite scroll)")
     g.add_argument("--headful", action="store_true", help="(browser) show the browser window")
     g.add_argument("--screenshot", metavar="FILE", help="(browser) save a full-page screenshot")
+    g.add_argument(
+        "--layout",
+        action="store_true",
+        help="(implies --browser) record where the page draws its text: --extract then reads labelled values "
+        "from it (a tile's number under its label, a value beside its label)",
+    )
+    g.add_argument(
+        "--vision",
+        action="store_true",
+        help="(--extract, --model; implies --browser) show the model the page's screenshot too",
+    )
     g.add_argument("--capture", action="store_true", help="(browser) record the page's own JSON API calls")
     g.add_argument(
         "--why", metavar="FIELD", help="(--extract) say why FIELD is what it is (or empty) on the page, and how sure"
@@ -2208,6 +2238,11 @@ def build_parser() -> argparse.ArgumentParser:
     smart.add_argument("--structured", action="store_true", help="JSON-LD, microdata, OpenGraph and meta data")
     smart.add_argument("--json-data", action="store_true", help="JSON embedded by JS apps (__NEXT_DATA__, ...)")
     smart.add_argument("--tables", action="store_true", help="every HTML table as records")
+    smart.add_argument(
+        "--visual-tables",
+        action="store_true",
+        help="(implies --browser) the tables the page draws, whatever its HTML: rows aligned in columns",
+    )
     smart.add_argument("--next", action="store_true", help="the URL of the next page (pagination)")
     smart.add_argument("--explain", action="store_true", help="(--extract) show where every value came from")
     _add_cache_options(g)

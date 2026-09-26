@@ -502,6 +502,30 @@
   INPUT --field FIELD [--model PROVIDER:NAME]`, which sums up the
   languages, keywords and sentiments.
 
+### What pages look like (`wintergrab.parser.layout`, `wintergrab.extraction.visual`)
+
+- A browser fetch with `layout=True` (`get --layout`) records where each
+  piece of visible text is drawn: its box, font size and weight, and its
+  element's path, SVG labels included (`response.layout`, at most 5,000
+  per page). `screenshot=True` keeps the full-page PNG in
+  `response.screenshot`.
+- `layout_tables(layout)` (`get --visual-tables`) reads the tables a page
+  draws, whatever its HTML: an element's text in rows with the same columns
+  (pieces of a cell joined; a bold or word-only first row a header).
+  `layout_pairs(layout)` reads labels and their values: beside each other
+  in a row of their own, stacked in a tile (the larger text is the value),
+  or in a two-column table of labels.
+- The extractor's `visual` method (prior 0.75) fills a field from the value
+  of a label named like it when a page has a layout; in a listing, each
+  record reads its own part. On the test dashboard, five fields empty from
+  the HTML are all read.
+- `Extractor(model=..., vision=True)` (`get --vision`) sends the model the
+  page's screenshot. A value in no text is kept with a low confidence (0.36
+  by default) and the note `image-only`, instead of being dropped as
+  `not-on-page`. `ModelRequest.images`; `Image` moved to
+  `wintergrab.extraction.model` (still importable from
+  `wintergrab.models`). docs/visual.md.
+
 ### Places (`wintergrab.data.places`)
 
 - `place_of(record)` reads where a record is from the fields it has: an

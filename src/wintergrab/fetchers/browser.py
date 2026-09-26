@@ -31,6 +31,7 @@ from ..errors import (
     describe,
 )
 from ..netpolicy import NetworkPolicy
+from ..parser.layout import LAYOUT_SCRIPT, MAX_BOXES, Layout
 from ..proxy import ProxyRotator, proxy_for_playwright, proxy_label
 from ..request import Request
 from ..utils import ensure_scheme, maybe_await
@@ -527,8 +528,9 @@ class AsyncBrowserFetcher:
         wait_until: str | None = None,
         scroll: bool | int = False,
         page_action: Callable[[Any], Any] | None = None,
-        screenshot: str | Path | None = None,
+        screenshot: str | Path | bool | None = None,
         capture: bool | str | Callable[[str], bool] | None = None,
+        layout: bool = False,
         request: Request | None = None,
         **_ignored: Any,
     ) -> Response:
@@ -542,7 +544,11 @@ class AsyncBrowserFetcher:
                 ``True`` scrolls up to 10 times; an int sets the limit.
             page_action: ``async def action(page)`` that receives Playwright's
                 async ``Page`` to click, type, etc. before capture.
-            screenshot: Save a full-page PNG screenshot here.
+            screenshot: Take a full-page PNG screenshot: ``True`` keeps it in ``response.screenshot``
+                (for a model that reads images); a path also saves it there.
+            layout: Record where the page's text was drawn in ``response.layout`` (a
+                :class:`~wintergrab.parser.layout.Layout`), for reading tables and labelled values
+                from what the page looks like (:mod:`wintergrab.extraction.visual`).
             capture: Record the page's own API calls (XHR/fetch) in
                 ``response.captured``: ``True`` for JSON responses, a URL glob or
                 substring (``"*/api/*"``, ``"graphql"``), or a function of the URL.
@@ -555,15 +561,15 @@ class AsyncBrowserFetcher:
         req = request or Request(url)
         layer = self._cache_layer
         offline = layer is not None and layer.cache.mode == "offline"
-        # Captures and screenshots need a live page, so they bypass the cache -
+        # Captures, screenshots and layouts need a live page, so they bypass the cache -
         # except offline, where the network is never used.
-        use_cache = layer is not None and (offline or (not capture and not screenshot))
+        use_cache = layer is not None and (offline or (not capture and not screenshot and not layout))
         if use_cache:
             assert layer is not None
             cached, _, _ = layer.before(req, self.adaptive_storage)
             if cached is not None:
-                if capture or screenshot:
-                    log.warning("offline: %s served from cache without captures/screenshot", url)
+                if capture or screenshot or layout:
+                    log.warning("offline: %s served from cache without captures, screenshot or layout", url)
                 return cached
         if self.network_policy is not None:
             await self.network_policy.check(url, proxied=self._proxied(proxy))
@@ -588,6 +594,7 @@ class AsyncBrowserFetcher:
                         page_action,
                         screenshot,
                         _capture_matcher(capture),
+                        layout,
                     )
             except (asyncio.CancelledError, NetworkPolicyError):
                 raise
@@ -702,8 +709,9 @@ class AsyncBrowserFetcher:
         wait_until: str | None,
         scroll: bool | int,
         page_action: Callable[[Any], Any] | None,
-        screenshot: str | Path | None,
+        screenshot: str | Path | bool | None,
         capture: Callable[[str, str], bool] | None = None,
+        layout: bool = False,
     ) -> Response:
         timeout_ms = (timeout or self.timeout) * 1000
         context_key, context = await self._acquire_context(proxy)
@@ -792,9 +800,15 @@ class AsyncBrowserFetcher:
                 encoding = "utf-8"
                 if ctype:
                     raw_headers["content-type"] = ctype.split(";")[0] + "; charset=utf-8"
+            png = None
             if screenshot:
-                Path(screenshot).parent.mkdir(parents=True, exist_ok=True)
-                await page.screenshot(path=str(screenshot), full_page=True)
+                png = await page.screenshot(full_page=True)
+                if not isinstance(screenshot, bool):
+                    Path(screenshot).parent.mkdir(parents=True, exist_ok=True)
+                    Path(screenshot).write_bytes(png)
+            drawn = None
+            if layout and encoding is not None:  # an HTML page, not a PDF or an image
+                drawn = Layout.from_dict(await page.evaluate(LAYOUT_SCRIPT, MAX_BOXES))
             jar = await context.cookies(page.url)
             cookies = {c["name"]: c["value"] for c in jar}
             history = [r.url for r in last_nav[:-1]]
@@ -813,6 +827,8 @@ class AsyncBrowserFetcher:
                 adaptive_storage=self.adaptive_storage,
             )
             response.captured = sorted(captured, key=lambda c: c.order)
+            response.screenshot = png
+            response.layout = drawn
             response.cookie_jar = [dict(c) for c in jar]
             response.blocked_resources = dict(blocked)
             response.ip = address

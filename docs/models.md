@@ -33,7 +33,8 @@ than 50% confidence (`model_threshold`). The request holds:
 
 - the fields wanted, with their types and descriptions;
 - what was already found, as context;
-- the page as Markdown.
+- the page as Markdown;
+- with `vision=True` (`--vision`), the page's screenshot.
 
 The answer is not taken on trust. It is read with each field's type,
 validated, and compared with what other strategies found. It is also
@@ -42,7 +43,10 @@ checked against the page:
 - a value that appears on the page keeps its confidence;
 - a number written another way on the page loses a little;
 - a value that appears nowhere on the page is kept aside, with the note
-  `not-on-page`. It becomes an alternative, never the answer.
+  `not-on-page`. It becomes an alternative, never the answer;
+- except when the model was shown the screenshot: a value in no text may be
+  drawn there (a chart). It is kept with a low confidence and the note
+  `image-only` (see [visual](visual.md#screenshots-for-models-that-read-images)).
 
 Models can invent values; the page cannot.
 
@@ -79,7 +83,8 @@ report says how many tokens that took. See [generated scrapers](generate.md).
 - **Keys** come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`)
   or `load_model(..., api_key=...)`. They are never written into run
   records, logs or the dashboard.
-- **What is sent**: the page's text, and images if you give them. It goes
+- **What is sent**: the page's text, and images if you give them (its
+  screenshot with `--vision`). It goes
   to the API you name. For pages you may not send to a third party, run a
   model locally (`ollama:NAME`, or your own server with `--model-url`).
 - **Cost**: a crawl asks the model at most once per page, and only for

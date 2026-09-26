@@ -24,7 +24,6 @@ json_output=) -> str``). Plugins add theirs with ``registry.model_provider(name,
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -32,12 +31,11 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from . import __version__
 from .errors import ConfigurationError, ModelError
-from .extraction.model import ModelRequest, parse_answer
+from .extraction.model import Image, ModelRequest, parse_answer
 
 __all__ = [
     "PROVIDERS",
@@ -57,18 +55,6 @@ _SYSTEM = (
     "You extract data from web pages. You answer with JSON only, and use only what the page states: "
     "null for anything it does not."
 )
-
-
-@dataclass(frozen=True)
-class Image:
-    """An image for a model that reads images (a screenshot, a chart): its bytes and media type."""
-
-    data: bytes
-    media_type: str = "image/png"
-
-    @property
-    def base64(self) -> str:
-        return base64.b64encode(self.data).decode("ascii")
 
 
 class ModelProvider:
@@ -129,7 +115,7 @@ class ModelProvider:
 
     def __call__(self, request: ModelRequest) -> dict[str, Any]:
         """An extraction model (see :class:`~wintergrab.extraction.Extractor`): the fields asked for."""
-        answer = self.complete(request.prompt(), system=_SYSTEM, json_output=True)
+        answer = self.complete(request.prompt(), system=_SYSTEM, images=request.images, json_output=True)
         values = parse_answer(answer)
         if not values and answer.strip():
             log.warning("%s gave no JSON object: %.120r", self.name, answer)

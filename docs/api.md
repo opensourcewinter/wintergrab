@@ -12,7 +12,7 @@ checks that it is up to date.
   - `export_cookies(self, url: str | None = None, *, proxy: str | None = None) -> list[dict[str, Any]]`: Cookies of the browser session (optionally only those sent to ``url``).
   - `get(self, url: str, **kwargs: Any) -> Response`
   - `get_many(self, urls: Iterable[str], *, concurrency: int | None = None, return_exceptions: bool = True, **kwargs: Any) -> list[Response | FetchError]`: Render many pages concurrently (bounded by ``max_pages``).
-  - `request(self, method: str, url: str, *, proxy: str | None = None, headers: Mapping[str, str] | None = None, timeout: float | None = None, retries: int | None = None, wait_for: str | None = None, wait: float = 0.0, wait_until: str | None = None, scroll: bool | int = False, page_action: Callable[[Any], Any] | None = None, screenshot: str | Path | None = None, capture: bool | str | Callable[[str], bool] | None = None, request: Request | None = None, **_ignored: Any) -> Response`: Open ``url`` in a new tab and return the rendered page.
+  - `request(self, method: str, url: str, *, proxy: str | None = None, headers: Mapping[str, str] | None = None, timeout: float | None = None, retries: int | None = None, wait_for: str | None = None, wait: float = 0.0, wait_until: str | None = None, scroll: bool | int = False, page_action: Callable[[Any], Any] | None = None, screenshot: str | Path | bool | None = None, capture: bool | str | Callable[[str], bool] | None = None, layout: bool = False, request: Request | None = None, **_ignored: Any) -> Response`: Open ``url`` in a new tab and return the rendered page.
   - `start(self)`: Launch the browser (done automatically on the first request).
 - **`AsyncFetcher(*, max_connections: int = 64, **kwargs: Any)`** (class). Asynchronous version of :class:`Fetcher` for fetching many pages at once.
   - `aclose(self)`
@@ -321,7 +321,7 @@ checks that it is up to date.
   - `provenance(self) -> dict[str, Any]`: Where each value came from: the page, when, which extractor, and per-field evidence.
   - `to_dict(self, *, provenance: bool | None = None, confidence: bool = True) -> dict[str, Any]`
 - **`ExtractionModel(*args, **kwargs)`** (class). Anything that turns a :class:`ModelRequest` into ``{field: value}`` (plain or ``async``).
-- **`Extractor(schema: Schema | Mapping[str, Any] | str | Path, *, strategies: Sequence[type[Strategy] | Strategy] | None = None, model: Any = None, model_threshold: float = 0.5, min_confidence: float = 0.3, priors: Mapping[str, float] | None = None, provenance: bool = False, country: str | None = None, currency: str | None = None, dayfirst: bool | None = None, decimal: str | None = None)`** (class). Extract typed records from pages with the strategy hierarchy.
+- **`Extractor(schema: Schema | Mapping[str, Any] | str | Path, *, strategies: Sequence[type[Strategy] | Strategy] | None = None, model: Any = None, model_threshold: float = 0.5, vision: bool = False, min_confidence: float = 0.3, priors: Mapping[str, float] | None = None, provenance: bool = False, country: str | None = None, currency: str | None = None, dayfirst: bool | None = None, decimal: str | None = None)`** (class). Extract typed records from pages with the strategy hierarchy.
   - `aextract(self, page: Any, *, url: str | None = None) -> ExtractedRecord`: :meth:`extract` with an asynchronous model (works with a plain one too).
   - `calibrate(self, examples: Iterable[tuple[Any, Mapping[str, Any]]], *, min_samples: int = 5) -> dict[str, float]`: Measure how often each method is right on pages whose correct values you know.
   - `candidates(self, page: Any, *, url: str | None = None) -> dict[str, list[Candidate]]`: Every candidate each strategy found, per field (for debugging an extraction).
@@ -365,6 +365,7 @@ checks that it is up to date.
   - `save(self)`: Keep what was learned (baselines, matched elements) for the next run; done every 50 pages, when a baseline is learned, and on :meth:`close`.
   - `status(self) -> str`: The versions, each watched field's health, and the last repairs.
   - `why(self, name: str, page: Any | None = None) -> str`: Why ``name`` is what it is (or empty) on ``page``: what each strategy saw and the likely causes (:meth:`Extractor.why`), then the extractor's own story: the element most like the one the selectors used to match, how often they matched, and repairs made or waiting.
+- **`LabelledPair(label: str, value: str, how: str, close: bool = False, boxes: tuple[Box, ...] = ())`** (class). A label and its value, read from where they are drawn.
 - **`LabelledValues()`** (class). Values next to a label named like the field: ``<dt>Weight</dt><dd>1.2 kg</dd>``, ``SKU: AB-12``, spec tables.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`LearnedField(name: str, status: str = 'not found', selector: str | None = None, found_by: str | None = None, pages: int = 0, reproduced: int = 0, extra: int = 0, tried: int = 0, note: str = '')`** (class). What :func:`generate_schema` did for one field.
@@ -373,7 +374,7 @@ checks that it is up to date.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`ModelField(name: str, type: str, description: str = '', required: bool = False, many: bool = False, enum: tuple[Any, ...] = ())`** (class). A field the model is asked for.
   - `classmethod of(cls, f: SchemaField) -> ModelField`
-- **`ModelRequest(fields: list[ModelField], text: str, url: str | None = None, schema_name: str = 'record', known: dict[str, Any] = ...)`** (class). What an extraction model gets: the fields wanted and the page's content (Markdown).
+- **`ModelRequest(fields: list[ModelField], text: str, url: str | None = None, schema_name: str = 'record', known: dict[str, Any] = ..., images: list[Image] = ...)`** (class). What an extraction model gets: the fields wanted and the page's content (Markdown), and a screenshot of the page when the extractor was asked to send one (``Extractor(vision=True)``).
   - `prompt(self) -> str`: A ready-made instruction for chat models (use it or build your own from the attributes).
 - **`PageContext(source: Any, *, url: str | None = None, fetched_at: float | None = None, scope: Selector | None = None, parent: PageContext | None = None)`** (class). A page (a :class:`~wintergrab.Response`, a :class:`~wintergrab.Selector` or HTML) ready for extraction.
   - `iter_nodes(self, kind: str) -> Iterator[tuple[str, dict[str, Any]]]`: ``(path, node)`` for every typed object in the page's JSON-LD (``kind="json-ld"``) or microdata.
@@ -399,9 +400,16 @@ checks that it is up to date.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`StructuredData(node: tuple[str, dict[str, Any]] | None = None, kind: str | None = None)`** (class). JSON-LD and microdata (schema.org): what the site publishes for machines.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
+- **`VisualLayout()`** (class). Values beside, under or over a label named like the field, where the page draws them (a page fetched in a browser with ``layout=True``; see the module docs).
+  - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
+- **`VisualTable(header: list[str] | None, rows: list[list[str]], path: str, top: float, left: float, bottom: float, right: float, boxes: list[Box] = ...)`** (class). A table read from a layout.
+  - `records(self) -> list[dict[str, str]]`: The rows as records, keyed by the header (``column_1``...
+  - `to_dict(self) -> dict[str, Any]`
 - **`field_kind(f: SchemaField) -> str`**. What a field holds, for the heuristic strategies (see :func:`_kind`).
 - **`generate_schema(pages: Iterable[Any], schema: Schema | Mapping[str, Any] | str | Path = 'product', *, model: Any = None, min_confidence: float = 0.7, max_tries: int = 12) -> GeneratedSchema`**. Learn selectors for ``schema``'s fields from sample pages of one site (see the module docs).
 - **`grounding(raw: Any, page_text: str, page_numbers: set[str] | None = None) -> str`**. How firmly a model's value is supported by the page.
+- **`layout_pairs(layout: Layout) -> list[LabelledPair]`**. The labelled values drawn on the page (see the module docs).
+- **`layout_tables(layout: Layout, *, min_rows: int = 3, min_columns: int = 2) -> list[VisualTable]`**. The tables drawn on the page (see the module docs), in the order they are drawn.
 - **`register_strategy(strategy: type[Strategy], *, before: str | None = None)`**. Add a strategy extractors use by default: last, or before the one whose ``method`` is ``before``.
 - **`schema_types(node: Any) -> list[str]`**. The schema.org type names of a JSON-LD/microdata node (``"https://schema.org/Product"`` -> ``"Product"``).
 - **`value_key(value: Any) -> Any`**. What two values must share to count as the same (``$299.99`` = ``299.99``; case and spacing ignored).
@@ -412,6 +420,19 @@ checks that it is up to date.
 - **`schema_named(value: str | Path) -> Schema`**. A schema file, or, when no such file exists, the template of that name (``"product"``).
 - **`template(name: str) -> Schema`**. The extraction schema of template ``name`` (see the module docs).
 - **`template_names() -> list[str]`**. The templates there are.
+
+## `wintergrab.parser.layout`: Rendered layouts
+
+- **`LAYOUT_SCRIPT`**: a str
+- **`MAX_BOXES`** = `5000`
+- **`Box(text: str, x: float, y: float, width: float, height: float, lines: int = 1, size: float = 0.0, weight: int = 400, tag: str = '', path: str = '')`** (class). A piece of visible text and where it was drawn (CSS pixels, from the page's top left).
+  - `to_dict(self) -> dict[str, Any]`
+- **`Layout(boxes: list[Box] = ..., width: float = 0.0, height: float = 0.0, truncated: bool = False)`** (class). A page's rendered layout: its text boxes in document order, and the page's size.
+  - `find(self, text: str) -> list[Box]`: The boxes whose text is ``text`` (ignoring case and surrounding spaces).
+  - `classmethod from_dict(cls, data: Mapping[str, Any]) -> Layout`: A layout from :meth:`to_dict` (or what :data:`LAYOUT_SCRIPT` returns).
+  - `to_dict(self) -> dict[str, Any]`
+  - `within(self, path: str) -> Layout`: The boxes inside the element at ``path`` (a record's card).
+- **`element_path(element: Any) -> str`**. The CSS path of a parsed element (lxml) from ``body``, written as :data:`LAYOUT_SCRIPT` writes paths: a tag, with ``:nth-of-type(n)`` when its parent has other children of that tag.
 
 ## `wintergrab.data`: Schemas, normalizing, validating, pipelines, quality
 

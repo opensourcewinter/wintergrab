@@ -41,6 +41,10 @@ from .strategies import (
     field_kind,
     register_strategy,
 )
+from .visual import LabelledPair, VisualLayout, VisualTable, layout_pairs, layout_tables
+
+# Where the page draws a label and its value: after what the page's markup says, before layout conventions.
+register_strategy(VisualLayout, before="dom")
 
 __all__ = [
     "DEFAULT_PRIORS",
@@ -57,6 +61,7 @@ __all__ = [
     "FieldValue",
     "GeneratedSchema",
     "HealingExtractor",
+    "LabelledPair",
     "LabelledValues",
     "LearnedField",
     "MetaTags",
@@ -71,9 +76,13 @@ __all__ = [
     "Selectors",
     "Strategy",
     "StructuredData",
+    "VisualLayout",
+    "VisualTable",
     "field_kind",
     "generate_schema",
     "grounding",
+    "layout_pairs",
+    "layout_tables",
     "register_strategy",
     "schema_types",
     "value_key",

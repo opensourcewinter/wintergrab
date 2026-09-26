@@ -155,6 +155,10 @@ class Response:
         self.ip: str | None = None
         #: Browser sub-requests blocked while rendering, by reason (``"type:image"``, ``"list"``, ``"policy"``...).
         self.blocked_resources: dict[str, int] = {}
+        #: A browser fetch's full-page PNG screenshot (``screenshot=True``).
+        self.screenshot: bytes | None = None
+        #: Where a browser fetch's text was drawn (``layout=True``): a :class:`~wintergrab.parser.layout.Layout`.
+        self.layout: Any = None
 
     # ------------------------------------------------------------------ #
     # body

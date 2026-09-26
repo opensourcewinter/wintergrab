@@ -26,6 +26,7 @@ MODULES = [
     ("wintergrab.spider", "Crawling"),
     ("wintergrab.extraction", "Typed records from pages"),
     ("wintergrab.extraction.templates", "Ready-made schemas"),
+    ("wintergrab.parser.layout", "Rendered layouts"),
     ("wintergrab.data", "Schemas, normalizing, validating, pipelines, quality"),
     ("wintergrab.data.io", "Reading records"),
     ("wintergrab.data.places", "Where records are"),

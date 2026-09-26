@@ -19,6 +19,7 @@ page cannot.
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections.abc import Awaitable, Mapping
@@ -31,7 +32,19 @@ from ..data.similarity import normalize_for_hash
 if TYPE_CHECKING:
     from ..data.schema import SchemaField
 
-__all__ = ["ExtractionModel", "ModelField", "ModelRequest", "grounding"]
+__all__ = ["ExtractionModel", "Image", "ModelField", "ModelRequest", "grounding"]
+
+
+@dataclass(frozen=True)
+class Image:
+    """An image for a model that reads images (a screenshot, a chart): its bytes and media type."""
+
+    data: bytes
+    media_type: str = "image/png"
+
+    @property
+    def base64(self) -> str:
+        return base64.b64encode(self.data).decode("ascii")
 
 
 @dataclass(frozen=True)
@@ -52,7 +65,8 @@ class ModelField:
 
 @dataclass
 class ModelRequest:
-    """What an extraction model gets: the fields wanted and the page's content (Markdown)."""
+    """What an extraction model gets: the fields wanted and the page's content (Markdown), and a
+    screenshot of the page when the extractor was asked to send one (``Extractor(vision=True)``)."""
 
     fields: list[ModelField]
     text: str
@@ -60,6 +74,8 @@ class ModelRequest:
     schema_name: str = "record"
     #: Values other strategies already found (context for the model; it need not return them).
     known: dict[str, Any] = field(default_factory=dict)
+    #: Images of the page (its screenshot), for models that read images.
+    images: list[Image] = field(default_factory=list)
 
     def prompt(self) -> str:
         """A ready-made instruction for chat models (use it or build your own from the attributes)."""
@@ -76,6 +92,12 @@ class ModelRequest:
             f"Extract these fields of the {self.schema_name} described by the page below.\n"
             + "\n".join(wanted)
             + known
+            + (
+                "\nA screenshot of the page is attached: values drawn in it (in a chart, an image, a canvas) "
+                "count as stated.\n"
+                if self.images
+                else ""
+            )
             + "\nAnswer with one JSON object mapping field names to values copied from the page. "
             "Use null for a field the page does not state. Do not guess or compute values.\n"
             + (f"\nPage URL: {self.url}\n" if self.url else "")

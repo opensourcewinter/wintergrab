@@ -39,7 +39,9 @@ _HTTP_VERSIONS = {1: "HTTP/1.0", 2: "HTTP/1.1", 3: "HTTP/2", 30: "HTTP/3"}
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 # Per-request options that only make sense for browser fetchers.
-BROWSER_ONLY_OPTIONS = frozenset({"wait_for", "wait", "wait_until", "scroll", "page_action", "screenshot", "capture"})
+BROWSER_ONLY_OPTIONS = frozenset(
+    {"wait_for", "wait", "wait_until", "scroll", "page_action", "screenshot", "capture", "layout"}
+)
 
 
 class _HTTPBase:

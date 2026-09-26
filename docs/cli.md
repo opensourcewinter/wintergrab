@@ -79,6 +79,9 @@ Options:
 | `-b/--browser` | Use a headless browser. |
 | `--wait-for SEL`, `--wait SEC`, `--scroll`, `--headful`, `--screenshot FILE` | Browser options. |
 | `--block-trackers` | (browser) Also block ads, analytics and tracker requests. |
+| `--layout` | (browser) Record where the page draws its text: `--extract` then reads labelled values from it (a tile's number under its label). See [visual](visual.md). |
+| `--visual-tables` | (browser) The tables the page draws, whatever its HTML, as JSON with their records. |
+| `--vision` | (`--extract`, `--model`; browser) Show the model the page's screenshot too; what it reads only there is marked `image-only`. |
 | `--public-only` | Refuse private, loopback and cloud-metadata addresses ([SSRF protection](fetching.md#network-policy-ssrf-protection)). |
 
 The exit code is 1 if any URL failed or returned a 4xx/5xx status.

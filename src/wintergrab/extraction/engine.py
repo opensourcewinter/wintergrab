@@ -44,7 +44,7 @@ from ..data.schema import NormalizeContext, Schema, SchemaField
 from ..data.similarity import content_hash, normalize_for_hash
 from ..errors import ConfigurationError
 from ..parser import Selector
-from .model import ModelField, ModelRequest, call_model, grounding, model_name, parse_answer
+from .model import Image, ModelField, ModelRequest, call_model, grounding, model_name, parse_answer
 from .page import PageContext, schema_types
 from .schemaorg import target_types
 from .strategies import STRATEGIES, Candidate, DomHeuristics, RecordFields, Strategy, StructuredData, field_kind
@@ -66,6 +66,7 @@ DEFAULT_PRIORS: dict[str, float] = {
     "meta": 0.8,
     "embedded-json": 0.8,  # the app's own state, but it often holds several records
     "label": 0.8,  # "Weight: 1.2 kg" - the page says what the value is
+    "visual": 0.75,  # a label drawn beside or over the value (a browser's layout: wintergrab.extraction.visual)
     "records": 0.75,  # a field of a detected repeating record
     "dom": 0.7,  # layout conventions (the h1, an element classed "price")
     "pattern": 0.6,  # the value's shape alone
@@ -91,6 +92,9 @@ _GUESSES = frozenset(
     }
 )
 _GROUNDING_FACTOR = {"exact": 1.0, "number": 0.9, "none": 0.3}
+# A value the page's text does not hold, from a model that was shown the page's screenshot: it may be drawn there
+# (a chart, an image of text), or made up, and nothing tells which. Kept, unsure (0.36 with the default prior).
+_IMAGE_ONLY_FACTOR = 0.6
 
 
 def _number_key(value: Any) -> str:
@@ -320,6 +324,10 @@ class Extractor:
         strategies: Strategy classes or instances, in priority order (default: :data:`~wintergrab.extraction.STRATEGIES`).
         model: An extraction model (see :mod:`~wintergrab.extraction.model`), asked only for fields
             the other strategies did not find with at least ``model_threshold`` confidence.
+        vision: Send the model the page's screenshot too (a browser fetch with ``screenshot=True``), for
+            values drawn rather than written: in charts, images, canvases. What the model reads only
+            there is kept with a low confidence and the note ``"image-only"``: nothing in the page's
+            text confirms it.
         min_confidence: Values below this confidence are left out of the record (they stay in
             the field's ``alternatives``, and its ``validation`` is ``"low-confidence"``): a guess
             is not data. 0 keeps everything.
@@ -336,6 +344,7 @@ class Extractor:
         strategies: Sequence[type[Strategy] | Strategy] | None = None,
         model: Any = None,
         model_threshold: float = 0.5,
+        vision: bool = False,
         min_confidence: float = 0.3,
         priors: Mapping[str, float] | None = None,
         provenance: bool = False,
@@ -352,6 +361,7 @@ class Extractor:
         self.strategies: list[Strategy] = [s() if isinstance(s, type) else s for s in (strategies or STRATEGIES)]
         self.model = model
         self.model_threshold = model_threshold
+        self.vision = vision
         self.min_confidence = min_confidence
         self.priors = {**DEFAULT_PRIORS, **dict(priors or {})}
         self.provenance = provenance
@@ -438,7 +448,11 @@ class Extractor:
             for name, d in decisions.items()
             if d.winner is not None and d.confidence >= self.model_threshold
         }
-        return ModelRequest([ModelField.of(f) for f in wanted], ctx.main_text, ctx.url, self.schema.name, known)
+        request = ModelRequest([ModelField.of(f) for f in wanted], ctx.main_text, ctx.url, self.schema.name, known)
+        screenshot = ctx.response.screenshot if ctx.response is not None else None
+        if self.vision and screenshot and ctx.scope is None:  # the whole page's picture, for the whole page's record
+            request.images.append(Image(screenshot))
+        return request
 
     def _apply_model(
         self, ctx: PageContext, wanted: list[SchemaField], decisions: dict[str, _Decision], answer: Any
@@ -446,16 +460,23 @@ class Extractor:
         values = parse_answer(answer)
         name = model_name(self.model)
         nctx = self._context(ctx)
+        shown = bool(self.vision and ctx.scope is None and ctx.response is not None and ctx.response.screenshot)
         for f in wanted:
             value = values.get(f.name)
             if value in (None, "", []):
                 continue
             support = grounding(value, ctx.text)
-            detail = "not found on the page" if support == "none" else f"grounding: {support}"
-            candidate = Candidate(value, "model", f"model:{name}", _GROUNDING_FACTOR[support], detail)
+            factor = _GROUNDING_FACTOR[support]
+            detail = f"grounding: {support}"
+            if support == "none":
+                factor = _IMAGE_ONLY_FACTOR if shown else factor
+                detail = (
+                    "not in the page's text: only in its screenshot, if anywhere" if shown else "not found on the page"
+                )
+            candidate = Candidate(value, "model", f"model:{name}", factor, detail)
             decision = self._score(f, [*decisions[f.name].candidates, candidate], nctx)
             if support == "none" and decision.winner is not None and candidate in decision.winner.members:
-                decision.extra_notes.append("not-on-page")
+                decision.extra_notes.append("image-only" if shown else "not-on-page")
             decisions[f.name] = decision
 
     # -- records ------------------------------------------------------------------ #

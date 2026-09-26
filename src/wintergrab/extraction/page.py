@@ -9,6 +9,7 @@ from typing import Any
 
 from ..fetchers.response import Response
 from ..parser import Selector
+from ..parser.layout import Layout, element_path
 from ..parser.text import text_content
 
 __all__ = ["PageContext", "schema_types"]
@@ -80,6 +81,15 @@ class PageContext:
     def root(self) -> Selector:
         """Where selectors are evaluated: the record's element, or the whole page."""
         return self.scope if self.scope is not None else self.selector
+
+    @cached_property
+    def layout(self) -> Layout | None:
+        """Where the page's text was drawn (a browser fetch with ``layout=True``): the record's part of it
+        for a record of a listing; ``None`` when not recorded."""
+        layout = self.response.layout if self.response is not None else None
+        if layout is None or self.scope is None or self.scope.root is None:
+            return layout
+        return layout.within(element_path(self.scope.root))
 
     # -- structured data ---------------------------------------------------- #
     @cached_property

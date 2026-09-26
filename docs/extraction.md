@@ -96,6 +96,7 @@ reliable ones come first:
 | `selector` | the field's own `selectors` (CSS or XPath, `::text`, `::attr()`) |
 | `embedded-json` | state embedded by JavaScript apps (`__NEXT_DATA__`, `window.__STATE__`), by key name |
 | `label` | values next to a label with the field's name: `<dt>Weight</dt><dd>1.2 kg</dd>`, spec tables, `SKU: AB-12` |
+| `visual` | where a browser drew a label and its value: beside it, or a tile's number over or under it (pages fetched with `layout=True`; [visual](visual.md)) |
 | `records` | the fields of a detected repeating record (listing pages) |
 | `dom` | layout conventions: the `<h1>`, elements classed `price`/`stock`/`rating`, `<time datetime>`, `mailto:` and `tel:` links, map links and embeds and `data-lat`/`data-lng` (a place's point: [places](places.md#coordinates)), the canonical link, an add-to-cart button |
 | `pattern` | the value's shape in the visible text: prices with a currency sign, e-mails, phone numbers, `4.5 out of 5`, `(123 reviews)` |
@@ -251,7 +252,9 @@ compared with what other strategies found, and **grounded**: a value that
 appears on the page keeps its confidence, a number that appears in another
 format loses 10%, and a value that appears nowhere keeps 30% of it and the
 note `not-on-page`, which usually puts it below `min_confidence`. Models can
-invent values; the page cannot.
+invent values; the page cannot. With `vision=True` the model is shown the
+page's screenshot too; a value that is only there (a chart's figure) keeps
+60% and the note `image-only` instead ([visual](visual.md#screenshots-for-models-that-read-images)).
 
 A model that raises is logged and ignored. With an `async` model use
 `await extractor.aextract(page)`.
