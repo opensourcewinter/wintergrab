@@ -155,6 +155,16 @@ def test_dom_price_heuristics_and_long_texts() -> None:
     assert Extractor(schema).extract(own).data["price"] == {"amount": 10, "currency": "USD"}
 
 
+def test_ratings_written_in_class_names() -> None:
+    schema = {"name": "product", "fields": {"name": "string", "rating": {"type": "rating", "best": 5}}}
+    books = '<h1>A Light in the Attic</h1><p class="star-rating Three"></p>'
+    record = Extractor(schema).extract(books)
+    assert record.data["rating"] == 3 and record.fields["rating"].source == "dom:class"
+    assert Extractor(schema).extract('<h1>X</h1><div class="stars stars-4-5"></div>').data["rating"] == 4.5
+    # digits in layout classes are not ratings
+    assert Extractor(schema).extract('<h1>X</h1><div class="col-md-4 rating"></div>').data.get("rating") is None
+
+
 def test_selectors_and_embedded_json() -> None:
     schema = {"name": "item", "fields": {
         "title": {"type": "string", "selectors": [".t::text"]},

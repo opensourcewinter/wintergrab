@@ -235,6 +235,36 @@
   6.9 ms per page for a site profile's full analysis, 2.3 ms after the
   first 500 pages (topology included).
 
+### Goals (`wintergrab.goals`)
+
+- `parse_goal("Find all laptops under $1000 on shop.example with name, price
+  and rating")` reads a request in plain words: the kind of record
+  (products, articles, jobs, events, companies, places such as restaurants,
+  people, reviews, recipes), the fields and their synonyms ("stock status",
+  "phone number", "contact details"), sites, sections ("all laptops", "the
+  Phones category"), limits, watching for changes, and conditions (prices,
+  ratings, dates such as "in the last 30 days" or "in 2025", stock, places)
+  as data-layer expressions. What it does not understand it notes. A model
+  can read requests instead (`parser=`), checked the same way.
+- `plan_goal(goal)` surveys each site (`wintergrab.intel.survey_site()`:
+  robots.txt, sitemaps, a sample of pages preferring those that look like
+  the goal's) and learns which pages hold the records (classification, or a
+  record with the goal's fields; card grids are listings), their URL
+  patterns, the listings leading to them, whether they need a browser, and
+  how well the fields come out. It chooses between the sitemaps' pages and
+  following links (from the sections the goal names), and estimates pages,
+  requests, browser pages, download, time, records, CPU and storage, with
+  what each rests on. Plans are JSON: save, edit, run later.
+- `plan.run(output)` collects the records with one spider: extraction,
+  conditions and de-duplication as a data pipeline, adaptive fetching when
+  some pages need JavaScript, the goal's limit, history when watching.
+- `wintergrab goal "..."` shows how the request was understood and the plan,
+  asks before big crawls (`--yes`), and writes the records; `--plan-only`,
+  `--save-plan`, `--plan`, `--explain`, `--json`.
+- `wintergrab inspect` now runs on `survey_site()`.
+- Extraction: ratings written in class names (`class="star-rating Three"`,
+  `stars-4-5`) are read.
+
 ### Adaptive fetching (`wintergrab.fetchers.strategy`)
 
 - `Spider.adaptive_fetch = True` (or a file) fetches pages over HTTP first

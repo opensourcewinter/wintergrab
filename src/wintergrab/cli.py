@@ -16,14 +16,12 @@ import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from . import __version__
 from .errors import ConfigurationError, FetchError, WintergrabError, describe
 from .fetchers import AsyncBrowserFetcher, AsyncFetcher, Response
 from .parser import Selector
 from .proxy import ProxyRotator
-from .request import Request
 from .spider import Spider
 from .spider.exporters import dumps, to_dict
 from .utils import configure_logging, ensure_scheme, host_of
@@ -68,6 +66,17 @@ EPILOG_INSPECT = """examples:
   wintergrab inspect https://shop.example --pages 100 -o shop.profile.json
   wintergrab inspect https://shop.example --depth 4 --show 20   # more of the section tree
   wintergrab inspect https://app.example --browser        # render pages, record their XHR/fetch calls
+"""
+
+EPILOG_GOAL = """examples:
+  wintergrab goal "Find all laptops under $1000 on shop.example with name, price and rating"
+  wintergrab goal "jobs posted in the last 30 days with title, company and salary" --site jobs.example
+  wintergrab goal "articles from news.example published in 2025" --plan-only --save-plan news.plan.json
+  wintergrab goal --plan news.plan.json --yes -o articles.jsonl   # run a saved (maybe edited) plan
+
+The request is read by rules (entities, fields, conditions such as "under $1000",
+"rated 4 or more", "in the last 30 days", "in stock"); the plan shows how it was
+understood, what will be fetched, and what it will cost, before anything big runs.
 """
 
 EPILOG_HISTORY = """examples:
@@ -494,109 +503,23 @@ class QuickSpider(Spider):
             yield response.follow(link)
 
 
-class InspectSpider(QuickSpider):
-    """The spider behind ``wintergrab inspect``: wander a few pages, record the site's API calls."""
-
-    name = "inspect"
-    capture_api = False
-
-    def _capturing(self, outputs: Any) -> Any:
-        for output in outputs:
-            if isinstance(output, Request) and self.capture_api:
-                output.options["capture"] = True
-            yield output
-
-    def start_requests(self) -> Any:
-        yield from self._capturing(Request(url, dont_filter=False) for url in self.start_urls)
-
-    def parse(self, response: Response) -> Any:
-        yield from self._capturing(super().parse(response))
-
-
-def _sitemap_sample(
-    profiler: Any, origin: str, robots_text: str | None, sample: int, **fetch_options: Any
-) -> list[str]:
-    """Read the site's sitemaps (a bounded number) into the profile; return up to ``sample`` page URLs
-    spread across them, to profile more than the pages linked from the start page."""
-    from .fetchers import Fetcher
-    from .sitemaps import parse_sitemap, robots_sitemaps
-
-    queue = robots_sitemaps(robots_text, origin + "/robots.txt") if robots_text else []
-    queue = queue or [origin + "/sitemap.xml"]
-    seen: set[str] = set()
-    indexes = sitemaps = 0
-    entries: list[Any] = []
-    with Fetcher(**fetch_options) as fetcher:
-        while queue and len(seen) < 10 and len(entries) < 50_000:
-            url = queue.pop(0)
-            if url in seen:
-                continue
-            seen.add(url)
-            try:
-                response = fetcher.get(url)
-            except WintergrabError:
-                continue
-            if not response.ok:
-                continue
-            _, found = parse_sitemap(response.body, response.url)
-            if not found:
-                continue
-            sitemaps += 1
-            children = [e.loc for e in found if e.kind == "sitemap"]
-            if children:
-                indexes += 1
-                queue.extend(children)
-            entries.extend(e for e in found if e.kind == "url")
-    if sitemaps:
-        profiler.add_sitemaps(sitemaps, indexes, entries)
-    host = host_of(origin)
-    pages = [e.loc for e in entries if host_of(e.loc) == host]
-    step = max(1, len(pages) // sample) if sample else 0
-    return pages[::step][:sample] if step else []
-
-
 def cmd_inspect(args: argparse.Namespace) -> int:
-    from .fetchers import Fetcher
-    from .intel.profile import SiteProfiler
+    from .intel.survey import survey_site
 
-    start = ensure_scheme(args.url)
-    parts = urlsplit(start)
-    origin = f"{parts.scheme}://{parts.netloc}"
-    profiler = SiteProfiler()
-    robots_text: str | None = None
     try:
-        with Fetcher(timeout=args.timeout) as fetcher:
-            robots = fetcher.get(origin + "/robots.txt")
-        robots_text = robots.text if robots.status == 200 else None
-        profiler.add_robots(robots_text, found=robots_text is not None)
-    except WintergrabError as exc:
-        print(f"note: could not read robots.txt ({exc})", file=sys.stderr)
-    samples: list[str] = []
-    if not args.no_sitemaps:
-        samples = _sitemap_sample(profiler, origin, robots_text, max(0, args.pages // 3), timeout=args.timeout)
-    spider = InspectSpider(
-        start_urls=list(dict.fromkeys([start, *samples])),
-        allowed_domains=[host_of(start)],
-        max_pages=args.pages,
-        profile=profiler,
-        obey_robots_txt=not args.no_robots,
-        use_browser=args.browser,
-        capture_api=args.browser,
-        timeout=args.timeout,
-        output=None,
-        keep_items=False,
-        progress=False,
-        log_level="DEBUG" if args.verbose > 0 else "WARNING",
-    )
-    try:
-        result = spider.run(resume=False)
+        survey = survey_site(
+            args.url,
+            pages=args.pages,
+            sitemaps=not args.no_sitemaps,
+            obey_robots=not args.no_robots,
+            browser=args.browser,
+            timeout=args.timeout,
+            log_level="DEBUG" if args.verbose > 0 else "WARNING",
+        )
     except WintergrabError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    profile = result.profile
-    if profile is None:
-        print("error: no profile could be built", file=sys.stderr)
-        return 1
+    profile = survey.profile
     data = json.dumps(profile.to_dict(), indent=2, ensure_ascii=False, default=str)
     if args.output:
         Path(args.output).write_text(data, encoding="utf-8")
@@ -606,6 +529,76 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         print(profile.describe(args.show, depth=args.depth))
         if args.output:
             print(f"saved the full profile to {args.output}", file=sys.stderr)
+    return 0
+
+
+def cmd_goal(args: argparse.Namespace) -> int:
+    from .goals import GoalPlan, parse_goal, plan_goal
+
+    level = "DEBUG" if args.verbose > 0 else "WARNING"
+    try:
+        if args.plan:
+            plan = GoalPlan.load(args.plan)
+            if args.verbose >= 0:
+                print(f"plan {args.plan} (made {plan.created})", file=sys.stderr)
+        else:
+            if not args.text:
+                print('error: say what to collect, e.g. wintergrab goal "products with name and price on shop.example"')
+                return 2
+            goal = parse_goal(" ".join(args.text), sites=args.site or [])
+            if args.verbose >= 0:
+                print("Understood: " + goal.describe().replace("\n", "\n            "), file=sys.stderr)
+            if not goal.sites:
+                print("error: which site? Name it in the request (shop.example) or add --site URL", file=sys.stderr)
+                return 2
+            if args.verbose >= 0:
+                print(
+                    f"Surveying {', '.join(goal.sites)}: robots.txt, sitemaps, {args.sample} pages...", file=sys.stderr
+                )
+            plan = plan_goal(goal, sample=args.sample, browser=args.browser, timeout=args.timeout, log_level=level)
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if args.save_plan:
+        plan.save(args.save_plan)
+        print(f"saved the plan to {args.save_plan}", file=sys.stderr)
+    if args.json:
+        print(json.dumps(plan.to_dict(), indent=2, ensure_ascii=False, default=str))
+        return 0
+    # the plan on stdout when it is all there is; on stderr when the records may go to stdout
+    shown = sys.stdout if args.plan_only else sys.stderr
+    if args.plan_only or args.verbose >= 0:
+        print(plan.describe(), file=shown)
+        if args.explain:
+            print("\nWhat the estimates rest on:\n" + plan.explain(), file=shown)
+    if args.plan_only:
+        return 0
+    estimate = plan.estimate
+    if not any(site.allowed for site in plan.sites):
+        print("robots.txt keeps crawlers out: nothing to collect", file=sys.stderr)
+        return 1
+    big = estimate.requests > args.confirm_over or estimate.browser_pages > 50
+    if big and not args.yes:
+        if sys.stdin.isatty():
+            answer = input(f"Run it? About {estimate.requests:,} requests. [y/N] ")
+            if answer.strip().lower() not in ("y", "yes"):
+                return 0
+        else:
+            print(f"the plan makes about {estimate.requests:,} requests: add --yes to run it", file=sys.stderr)
+            return 0
+    output = args.output or "-"
+    result = plan.run(
+        output,
+        max_pages=args.max_pages,
+        keep_items=output == "-",
+        log_level="DEBUG" if args.verbose > 0 else ("WARNING" if args.verbose < 0 else "INFO"),
+        progress=False if output == "-" else None,
+    )
+    if args.verbose >= 0:
+        print(result.summary(), file=sys.stderr)
+        if plan.goal.monitor:
+            again = f"wintergrab goal --plan {args.save_plan or args.plan or 'PLAN.json'} --yes -o {args.output or 'OUT.jsonl'}"
+            print(f"to watch for changes ({plan.goal.monitor}), run this again on a schedule: {again}", file=sys.stderr)
     return 0
 
 
@@ -1596,6 +1589,33 @@ def build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--show", type=int, default=8, metavar="N", help="entries per list (8)")
     ins.add_argument("--depth", type=int, default=2, metavar="N", help="levels of the section tree (2)")
     ins.set_defaults(func=cmd_inspect)
+
+    gp = sub.add_parser(
+        "goal",
+        help="say what data you want: wintergrab plans the crawl, shows it, and collects it",
+        description="Read a request in plain words, survey the site, show the plan and its cost, and run it.",
+        epilog=EPILOG_GOAL,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    gp.add_argument(
+        "text", nargs="*", metavar="REQUEST", help='what to collect, e.g. "products under $50 on shop.example"'
+    )
+    gp.add_argument("--site", action="append", metavar="URL", help="a site to look at (repeatable)")
+    gp.add_argument("--plan", metavar="FILE", help="run a saved plan instead of reading a request")
+    gp.add_argument("--plan-only", action="store_true", help="show the plan, collect nothing")
+    gp.add_argument("--save-plan", metavar="FILE", help="save the plan as JSON (to edit it, or run it later)")
+    gp.add_argument("--explain", action="store_true", help="also say what each estimate rests on")
+    gp.add_argument("-y", "--yes", action="store_true", help="run big plans without asking")
+    gp.add_argument(
+        "--confirm-over", type=int, default=200, metavar="N", help="ask before plans of more than N requests (200)"
+    )
+    gp.add_argument("--sample", type=int, default=30, metavar="N", help="pages to survey per site (30)")
+    gp.add_argument("--max-pages", type=int, metavar="N", help="stop after N pages")
+    gp.add_argument("--browser", "-b", action="store_true", help="survey with a browser (slower)")
+    gp.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (default 20)")
+    gp.add_argument("-o", "--output", metavar="FILE", help="save the records (.jsonl, .csv, .json); default stdout")
+    gp.add_argument("--json", action="store_true", help="print the plan as JSON (and collect nothing)")
+    gp.set_defaults(func=cmd_goal)
 
     h = sub.add_parser(
         "history",

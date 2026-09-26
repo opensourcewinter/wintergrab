@@ -194,6 +194,23 @@ dead ends and duplicate routes. `--show` sets how many entries each list
 shows (8). `--browser` renders the pages and records their XHR/fetch calls.
 See [intelligence.md](intelligence.md#site-profiles).
 
+## `wintergrab goal`: say what data you want
+
+```bash
+wintergrab goal "REQUEST" [--site URL] [--sample N] [--plan-only] [--save-plan FILE] [--explain] [--json]
+                          [-y] [--confirm-over N] [--max-pages N] [--browser] [-o FILE]
+wintergrab goal --plan FILE [-y] [-o FILE]
+```
+
+Reads the request ("Find all laptops under $1000 on shop.example with name,
+price and rating"), surveys each site (robots.txt, sitemaps, `--sample`
+pages), prints how it understood the request and the plan with its
+estimates, and collects the records: JSON Lines on stdout, or `-o FILE`.
+Plans of more than `--confirm-over` requests (200) ask first, or need `--yes`
+without a terminal. `--plan-only` shows the plan and stops; `--save-plan`
+keeps it as JSON to edit and run later with `--plan`; `--explain` says what
+each estimate rests on. See [goals.md](goals.md).
+
 ## `wintergrab history`: what changed between crawls
 
 ```bash

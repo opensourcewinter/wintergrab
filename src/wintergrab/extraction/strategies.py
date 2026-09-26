@@ -628,6 +628,10 @@ class DomHeuristics(Strategy):
                 if text and len(text) <= 60 and parse_rating(text, best=f.best if f.best_given else None):
                     out.append((text, "dom:[class*=rating]"))
                     break
+            else:  # the class may say it: <p class="star-rating Three">, <div class="stars stars-4-5">
+                value = _class_rating(match.attr("class") or "")
+                if value is not None:
+                    out.append((value, "dom:class"))
         return out
 
     def _review_count(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
@@ -753,6 +757,22 @@ _SKU_TEXT = re.compile(
     r"\s*[:#]?\s*([A-Z0-9][A-Z0-9\-_/.]{2,30})",
     re.I,
 )
+# A rating written in class names: a number word ("star-rating Three"), or digits after "rating"/"stars"
+# ("rating-4", "stars-4-5" for 4.5). Other digits in classes ("col-md-4") are layout, not ratings.
+_CLASS_RATING_WORD = re.compile(r"(?<![\w-])(zero|one|two|three|four|five)(?![\w-])", re.I)
+_CLASS_RATING_DIGITS = re.compile(r"(?<![\w-])(?:rating|stars?|rated)[-_]([0-5])(?:[-_]([05]))?(?![\w-])", re.I)
+
+
+def _class_rating(classes: str) -> str | None:
+    word = _CLASS_RATING_WORD.search(classes)
+    if word:
+        return word.group(1).lower()
+    digits = _CLASS_RATING_DIGITS.search(classes)
+    if digits:
+        return digits.group(1) + (f".{digits.group(2)}" if digits.group(2) else "")
+    return None
+
+
 _RATING_TEXT = re.compile(r"\b\d(?:[.,]\d{1,2})?\s*(?:/|out of|von|sur|de|su)\s*(?:5|10|100)\b", re.I)
 _AVAILABILITY_TEXT = re.compile(
     r"\b(?:in stock|out of stock|sold out|pre-?order|back-?order|only \d+ left(?: in stock)?|currently unavailable|"

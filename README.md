@@ -46,6 +46,11 @@ thousands of pages), the same API scales up.
 - **Browser superpowers.** Capture the JSON API calls a page makes while it
   renders. Clear a login or JS check once in the browser, then continue over
   fast HTTP with the same cookies.
+- **Say what you want.** `wintergrab goal "Find all laptops under $1000 on
+  shop.example with name, price and rating"` reads the request, surveys the
+  site (robots.txt, sitemaps, a sample of pages), shows a plan with what it
+  will cost, and collects clean, typed records. Pages that need JavaScript go
+  to a browser, the others stay on fast HTTP.
 - **A small CLI.** `wintergrab get` and `wintergrab crawl` cover the common
   jobs with no code at all, including `--auto`, `--learn` and `--offline`.
 
@@ -231,7 +236,8 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Entities](https://github.com/opensourcewinter/wintergrab/blob/main/docs/entities.md) | Which names are the same company, brand, product, person or place |
 | [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |
 | [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies, site profiles and topology (`wintergrab inspect`), with the evidence |
-| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `data` and `shell` reference |
+| [Goals](https://github.com/opensourcewinter/wintergrab/blob/main/docs/goals.md) | Say what data you want; wintergrab plans the crawl, shows its cost, and collects the records (`wintergrab goal`) |
+| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `history`, `data` and `shell` reference |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly
