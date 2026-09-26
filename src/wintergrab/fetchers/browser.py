@@ -496,7 +496,9 @@ class AsyncBrowserFetcher:
                 ``response.captured``: ``True`` for JSON responses, a URL glob or
                 substring (``"*/api/*"``, ``"graphql"``), or a function of the URL.
                 Often the cleanest way to scrape a JavaScript site: take the data
-                the page itself downloads.
+                the page itself downloads. A page's calls do not hold up its
+                ``load`` event: the page is given up to 10 seconds more for its
+                network to go quiet (and read then, quiet or not).
         """
         if method.upper() != "GET":
             raise ValueError("Browser fetchers only support GET requests")
@@ -776,6 +778,13 @@ class AsyncBrowserFetcher:
                     raise
             if wait:
                 await page.wait_for_timeout(wait * 1000)
+            if capture is not None:
+                # fetch() calls do not hold up the load event: let the page's calls finish, without failing
+                # on a page whose network never goes quiet (polling, beacons)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 10_000))
+                except Exception:
+                    pass
             if grabbing:
                 await asyncio.wait(grabbing, timeout=10)
             main = last_nav[-1] if last_nav else nav

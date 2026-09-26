@@ -12,13 +12,27 @@
   sample of pages) with its profile, as ``wintergrab inspect`` prints it.
 * :func:`~wintergrab.intel.content.analyze_text`: a text's language, keywords and size, with no model;
   :func:`~wintergrab.intel.content.classify_text`: its topic, category, sentiment and entities, with one.
+* :func:`~wintergrab.intel.sources.data_sources`: where a page's data is (HTML, tables, JSON-LD, embedded
+  JSON, the API calls it makes), with the records each holds, GraphQL operations and pagination.
 """
 
 from __future__ import annotations
 
 from .classify import PAGE_TYPES, PageClassifier, PageFeatures, PageType, classify_page, classify_url
 from .content import LANGUAGES, TextAnalysis, TextLabels, analyze_text, classify_text, detect_language
-from .profile import Endpoint, SiteProfile, SiteProfiler, TemplateCluster
+from .profile import Endpoint, SiteProfile, SiteProfiler, TemplateCluster, script_endpoints
+from .sources import (
+    ApiCall,
+    Collection,
+    DataSources,
+    HtmlRecords,
+    Pagination,
+    Source,
+    api_calls,
+    data_sources,
+    json_collections,
+    pagination_of,
+)
 from .survey import SitemapRead, SiteSurvey, read_sitemaps, survey_site
 from .tech import TechDetector, Technology, detect_technologies
 from .techrules import RULES, TechRule
@@ -28,14 +42,20 @@ __all__ = [
     "LANGUAGES",
     "PAGE_TYPES",
     "RULES",
+    "ApiCall",
+    "Collection",
+    "DataSources",
     "Endpoint",
+    "HtmlRecords",
     "PageClassifier",
     "PageFeatures",
     "PageType",
+    "Pagination",
     "SiteProfile",
     "SiteProfiler",
     "SiteSurvey",
     "SitemapRead",
+    "Source",
     "TechDetector",
     "TechRule",
     "Technology",
@@ -46,11 +66,16 @@ __all__ = [
     "TopologyBuilder",
     "TopologyNode",
     "analyze_text",
+    "api_calls",
     "classify_page",
     "classify_text",
     "classify_url",
+    "data_sources",
     "detect_language",
     "detect_technologies",
+    "json_collections",
+    "pagination_of",
     "read_sitemaps",
+    "script_endpoints",
     "survey_site",
 ]

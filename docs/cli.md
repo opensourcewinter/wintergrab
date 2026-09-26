@@ -59,6 +59,9 @@ wintergrab get https://example.com -o page.html
 wintergrab get https://quotes.toscrape.com/js/ --browser --wait-for .quote --css ".quote .text::text"
 wintergrab get https://example.com --browser --scroll --screenshot page.png
 
+# Where the page's data is: HTML, JSON-LD, embedded JSON, the API calls it makes
+wintergrab get https://shop.example/catalog --browser --sources
+
 # Do things on the page first: load everything, open every tab
 wintergrab get https://shop.example/ --do "dismiss #cookies button" --do "click .load-more until-gone" \
     --do "tabs .tabs a"
@@ -87,6 +90,7 @@ Options:
 | `--layout` | (browser) Record where the page draws its text: `--extract` then reads labelled values from it (a tile's number under its label). See [visual](visual.md). |
 | `--visual-tables` | (browser) The tables the page draws, whatever its HTML, as JSON with their records. |
 | `--vision` | (`--extract`, `--model`; browser) Show the model the page's screenshot too; what it reads only there is marked `image-only`. |
+| `--sources` | Where the page's data is: HTML records, tables, JSON-LD, embedded JSON and, with `--browser`, the API calls it makes, with the records each holds, GraphQL operations and pagination ([sources](sources.md)). `-f json` for a document per page. |
 | `--public-only` | Refuse private, loopback and cloud-metadata addresses ([SSRF protection](fetching.md#network-policy-ssrf-protection)). |
 
 The exit code is 1 if any URL failed or returned a 4xx/5xx status.

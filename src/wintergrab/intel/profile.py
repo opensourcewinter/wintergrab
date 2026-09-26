@@ -31,7 +31,7 @@ import re
 import statistics
 from collections import Counter
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -45,7 +45,7 @@ from .classify import classify_page
 from .tech import detect_technologies
 from .topology import Topology, TopologyBuilder
 
-__all__ = ["Endpoint", "SiteProfile", "SiteProfiler", "TemplateCluster"]
+__all__ = ["Endpoint", "SiteProfile", "SiteProfiler", "TemplateCluster", "script_endpoints"]
 
 _CALL = re.compile(
     r"""(?:\bfetch|\baxios(?:\.(?P<verb>get|post|put|patch|delete|request))?|\$\.(?P<jquery>ajax|get|post|getJSON)"""
@@ -89,9 +89,13 @@ class Endpoint:
         source: ``"script"`` (a call or an API path in an inline script or a ``data-`` attribute),
             ``"link"`` (a JSON alternate link), ``"captured"`` (recorded by a browser) or
             ``"platform"`` (the detected platform's convention, not requested).
-        pages: How many pages mention it.
+        pages: How many pages mention it (or called it, for captured endpoints).
         note: What it is, for platform endpoints.
         status, content_type: For captured endpoints.
+        operations: For captured GraphQL endpoints: the operations called (``"query Reviews"``).
+        records: For captured endpoints: the largest list of records an answer held
+            (see :mod:`wintergrab.intel.sources`), ``"3 at items[]"``.
+        paging: For captured endpoints: how their pages go (``"page"``, ``"cursor after"``), when an answer told.
     """
 
     url: str
@@ -101,6 +105,9 @@ class Endpoint:
     note: str | None = None
     status: int | None = None
     content_type: str | None = None
+    operations: list[str] = field(default_factory=list)
+    records: str | None = None
+    paging: str | None = None
 
 
 @dataclass
@@ -186,7 +193,13 @@ class SiteProfile:
                 method = f"{endpoint.method} " if endpoint.method else ""
                 detail = endpoint.note or (f"{endpoint.pages} page(s)" if endpoint.source != "captured" else "")
                 status = f", {endpoint.status}" if endpoint.status else ""
-                lines.append(f"  {method}{endpoint.url}  ({endpoint.source}{status}{', ' if detail else ''}{detail})")
+                answers = [", ".join(endpoint.operations)] if endpoint.operations else []
+                answers += [f"records: {endpoint.records}"] if endpoint.records else []
+                answers += [f"pages by {endpoint.paging}"] if endpoint.paging else []
+                held = f"; {'; '.join(answers)}" if answers else ""
+                lines.append(
+                    f"  {method}{endpoint.url}  ({endpoint.source}{status}{', ' if detail else ''}{detail}{held})"
+                )
         if self.sitemaps:
             s = self.sitemaps
             lastmod = f", {s['lastmod_share']:.0%} with lastmod" if s.get("pages") else ""
@@ -269,6 +282,36 @@ def _clean_endpoint(base: str, raw: str) -> str | None:
     return urlunsplit((parts.scheme, parts.netloc, path, query, ""))
 
 
+def script_endpoints(selector: Any, url: str) -> list[tuple[str | None, str]]:
+    """The API endpoints a page's inline scripts and ``data-`` attributes name, as ``(method, endpoint)``:
+    calls (``fetch("/api/...")``, axios, jQuery, ``xhr.open``) and API-looking paths (``/api/``, ``/graphql``),
+    query values left out (``https://shop.example/api/products?page=``). The method is ``None`` when the code
+    does not say it. They are named, not requested."""
+    found: set[tuple[str | None, str]] = set()
+    for script in selector.css("script:not([src])"):
+        code = script.root.text if script.root is not None else None
+        if not code or len(code) > 2_000_000:
+            continue
+        for match in _CALL.finditer(code):
+            endpoint = _clean_endpoint(url, match.group("url"))
+            if endpoint:
+                # the method, when the call says it: axios.post(...), $.getJSON(...), xhr.open("POST", ...)
+                verb = (match.group("method") or match.group("verb") or match.group("jquery") or "").lower()
+                found.add((_VERBS.get(verb), endpoint))
+        for match in _API_PATH.finditer(code):
+            endpoint = _clean_endpoint(url, match.group("url"))
+            if endpoint:
+                found.add((None, endpoint))
+    for attr in _DATA_URL_ATTRS:
+        for element in selector.css(f"[{attr}]"):
+            endpoint = _clean_endpoint(url, element.attr(attr) or "")
+            if endpoint:
+                found.add((None, endpoint))
+    # an endpoint named with its method and without it is one endpoint
+    named = {endpoint for method, endpoint in found if method}
+    return sorted(((m, e) for m, e in found if m or e not in named), key=lambda pair: (pair[1], pair[0] or ""))
+
+
 class SiteProfiler:
     """Builds a :class:`SiteProfile` from the pages of a site (see the module docs).
 
@@ -319,14 +362,9 @@ class SiteProfiler:
             self._domains[registrable_domain(host)] += 1
         if status in (403, 429):
             self._crawl["blocked_pages"] += 1
-        for captured in getattr(response, "captured", None) or ():
-            self._endpoint(
-                captured.url,
-                getattr(captured, "method", None),
-                "captured",
-                status=captured.status,
-                content_type=(captured.headers or {}).get("content-type", "").split(";")[0] or None,
-            )
+        captured = list(getattr(response, "captured", None) or ())
+        if captured:
+            self._captured(captured)
         if not (200 <= status < 300):
             return
         if not getattr(response, "is_html", False):
@@ -408,33 +446,39 @@ class SiteProfiler:
             elif link not in self._external:
                 self._external.add(link)
                 self._external_domains[registrable_domain(host)] += 1
-        found: set[tuple[str | None, str]] = set()
-        for script in ctx.selector.css("script:not([src])"):
-            code = script.root.text if script.root is not None else None
-            if not code or len(code) > 2_000_000:
-                continue
-            for match in _CALL.finditer(code):
-                endpoint = _clean_endpoint(url, match.group("url"))
-                if endpoint:
-                    # the method, when the call says it: axios.post(...), $.getJSON(...), xhr.open("POST", ...)
-                    verb = (match.group("method") or match.group("verb") or match.group("jquery") or "").lower()
-                    found.add((_VERBS.get(verb), endpoint))
-            for match in _API_PATH.finditer(code):
-                endpoint = _clean_endpoint(url, match.group("url"))
-                if endpoint:
-                    found.add((None, endpoint))
-        for attr in _DATA_URL_ATTRS:
-            for element in ctx.selector.css(f"[{attr}]"):
-                endpoint = _clean_endpoint(url, element.attr(attr) or "")
-                if endpoint:
-                    found.add((None, endpoint))
         for element in ctx.selector.css("link[rel=alternate][type*=json], link[rel='https://api.w.org/']"):
             endpoint = _clean_endpoint(url, element.attr("href") or "")
             if endpoint:
                 self._endpoint(endpoint, "GET", "link")
-        for method, endpoint in found:
+        for method, endpoint in script_endpoints(ctx.selector, url):
             self._endpoint(endpoint, method, "script")
         return internal
+
+    def _captured(self, captured: list[Any]) -> None:
+        """A page's recorded API calls: each endpoint once per page, with what its answers held."""
+        from .sources import api_calls
+
+        seen: set[tuple[str | None, str]] = set()
+        for call in api_calls(captured):
+            key = (call.method, _clean_endpoint(call.url, call.url) or call.url)
+            if key not in seen:
+                seen.add(key)
+                self._endpoint(
+                    key[1], call.method, "captured", status=call.status, content_type=call.content_type or None
+                )
+            endpoint = self._endpoints[key]
+            if call.graphql and call.graphql not in endpoint.operations:
+                endpoint.operations.append(call.graphql)
+            if call.collections and not call.mutation:
+                biggest = call.collections[0]
+                known = int(endpoint.records.split(" ", 1)[0]) if endpoint.records else 0
+                if biggest.count > known:
+                    endpoint.records = f"{biggest.count} at {biggest.path}"
+            if call.pagination is not None and endpoint.paging is None and not call.mutation:
+                parameter = call.pagination.parameter
+                endpoint.paging = call.pagination.kind + (
+                    f" {parameter}" if parameter and parameter != call.pagination.kind else ""
+                )
 
     def _endpoint(self, url: str, method: str | None, source: str, **extra: Any) -> None:
         if source == "captured":

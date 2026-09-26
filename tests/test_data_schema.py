@@ -385,3 +385,6 @@ def test_infer_schema_details() -> None:
     assert one_value["k"].type == "string"  # a constant is not an enum
     assert infer_schema([]).fields == []
     assert json.loads(json.dumps(infer_schema(_sample()).to_dict()))["fields"]["price"]["type"] == "money"
+    # a path or a file name holds a number and a letter, but is no quantity: "/img/3m-tape.png" is no 3 m
+    paths = infer_schema([{"img": v, "size": s} for v, s in (("/i/0a.jpg", "12.5cm"), ("/img/3m-tape.png", "1.2 kg"))])
+    assert (paths["img"].type, paths["size"].type) == ("string", "quantity")

@@ -1,0 +1,37 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Winter catalog</title>
+<meta name="description" content="Parkas and boots for the cold months">
+<meta property="og:title" content="Winter catalog"><meta property="og:type" content="website">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Organization", "name": "North Shop", "url": "https://north.example/"}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "ItemList", "itemListElement": [
+  {"@type": "ListItem", "position": 1, "url": "/p/1", "name": "Parka 1"},
+  {"@type": "ListItem", "position": 2, "url": "/p/2", "name": "Parka 2"},
+  {"@type": "ListItem", "position": 3, "url": "/p/3", "name": "Parka 3"}]}</script>
+<script id="__NEXT_DATA__" type="application/json">{"props": {"pageProps": {"products": [
+  {"id": 1, "name": "Parka 1", "price": 120.0, "currency": "EUR", "url": "https://north.example/p/1", "rating": 4.5, "stock": 3},
+  {"id": 2, "name": "Parka 2", "price": 140.0, "currency": "EUR", "url": "https://north.example/p/2", "rating": 4.1, "stock": 0},
+  {"id": 3, "name": "Parka 3", "price": 99.5, "currency": "EUR", "url": "https://north.example/p/3", "rating": 3.9, "stock": 12},
+  {"id": 4, "name": "Boots 4", "price": 89.0, "currency": "EUR", "url": "https://north.example/p/4", "rating": 4.8, "stock": 7},
+  {"id": 5, "name": "Boots 5", "price": 79.0, "currency": "EUR", "url": "https://north.example/p/5", "rating": 4.0, "stock": 1},
+  {"id": 6, "name": "Boots 6", "price": 69.0, "currency": "EUR", "url": "https://north.example/p/6", "rating": 3.5, "stock": 9}]}}}</script>
+</head><body>
+<h1>Winter catalog</h1>
+<div class="grid">
+  <article class="card"><h2><a href="/p/1">Parka 1</a></h2><span class="price">€120.00</span></article>
+  <article class="card"><h2><a href="/p/2">Parka 2</a></h2><span class="price">€140.00</span></article>
+  <article class="card"><h2><a href="/p/3">Parka 3</a></h2><span class="price">€99.50</span></article>
+  <article class="card"><h2><a href="/p/4">Boots 4</a></h2><span class="price">€89.00</span></article>
+  <article class="card"><h2><a href="/p/5">Boots 5</a></h2><span class="price">€79.00</span></article>
+  <article class="card"><h2><a href="/p/6">Boots 6</a></h2><span class="price">€69.00</span></article>
+</div>
+<table><thead><tr><th>Size</th><th>Chest</th></tr></thead>
+<tbody><tr><td>S</td><td>96 cm</td></tr><tr><td>M</td><td>104 cm</td></tr><tr><td>L</td><td>112 cm</td></tr></tbody></table>
+<ul id="reviews"></ul>
+<script>
+  const graphql = (body) => fetch('/graphql', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)}).then(r => r.json());
+  fetch('/api/products?page=1&limit=3').then(r => r.json()).then(() => fetch('/api/products?page=2&limit=3'));
+  graphql({operationName: 'Reviews', variables: {first: 2, after: null},
+           query: 'query Reviews($first: Int, $after: String) { reviews(first: $first, after: $after) { edges { node { id author stars text } cursor } pageInfo { hasNextPage endCursor } } }'})
+    .then(d => { document.getElementById('reviews').innerHTML = d.data.reviews.edges.map(e => '<li>' + e.node.text + '</li>').join(''); });
+  graphql({operationName: 'TrackView', variables: {id: '1'}, query: 'mutation TrackView($id: ID!) { trackView(id: $id) { ok } }'});
+</script>
+</body></html>

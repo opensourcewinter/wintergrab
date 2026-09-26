@@ -551,6 +551,36 @@ an error that says so, not a setting silently ignored
   `wintergrab.extraction.model` (still importable from
   `wintergrab.models`). docs/visual.md.
 
+### Where a page's data is (`wintergrab.intel.sources`)
+
+- `get URL --sources` (`data_sources(response)`) lists every source a page
+  holds records in: repeated HTML elements, tables, JSON-LD and microdata
+  by type, meta fields, the JSON an app embeds, and with `--browser` the
+  API calls the page made as it rendered, with the lists of records each
+  holds (their paths, counts, fields and types), and the richest of them.
+  Over HTTP, the endpoints the page's scripts name are listed, unrequested.
+  An API's answer is a source too. `-f json` for a document per page.
+- `json_collections(data)` finds the lists of records in any JSON: GraphQL
+  connections read through (`edges[].node`), records of records together
+  (`products[].variants[]`), maps of records keyed by id by `__typename`
+  (`__APOLLO_STATE__{Product}`); lists of pointers left out.
+  `Collection.schema()` starts a data schema from them.
+- `pagination_of(url, answer)` says how an API's pages go: by page, offset,
+  cursor or next URL, from parameters, GraphQL variables and the answer's
+  keys (totals, `hasNextPage`, `endCursor`, `links.next`, `_links.next`,
+  Django REST framework's `count`); the next page's value and whether this
+  one is the last. `api_calls(captured)` groups a page's calls by URL
+  pattern and GraphQL operation (batched and persisted queries included;
+  mutations are never sources), and reads calls with a number stepping up
+  as pages or offsets.
+- `wintergrab inspect --browser` says what each API answered: GraphQL
+  operations, its largest list of records, and how its pages go.
+- A capturing browser fetch gives the page up to 10 seconds more for its
+  network to go quiet: calls still on their way at the `load` event were
+  missed. (`inspect --browser` missed them at random.)
+- Type inference no longer reads a path or file name as a quantity
+  (`/img/3m-tape.png` is no length). docs/sources.md.
+
 ### Browser actions (`wintergrab.fetchers.actions`)
 
 - `browser.get(url, actions=[...])` does steps on the page before it is

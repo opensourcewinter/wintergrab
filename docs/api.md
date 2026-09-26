@@ -784,13 +784,33 @@ checks that it is up to date.
 - **`LANGUAGES`**: a tuple
 - **`PAGE_TYPES`**: a tuple
 - **`RULES`**: a tuple
-- **`Endpoint(url: str, method: str | None, source: str, pages: int = 1, note: str | None = None, status: int | None = None, content_type: str | None = None)`** (class). An API endpoint seen in (or conventional for) the site's pages.
+- **`ApiCall(method: str, url: str, template: str, status: int, content_type: str, calls: int = 1, graphql: str | None = None, collections: list[Collection] = ..., pagination: Pagination | None = None, seen: list[Any] = ...)`** (class). An API a page called as it rendered (recorded by a browser fetch with ``capture=True``).
+  - `describe(self) -> str`
+  - `details(self) -> str`: How its pages go, and how many times the page called it (``""`` when there is nothing to say).
+  - `head(self) -> str`: The call and what it answers: ``GET shop.example/api/products?page: 3 record(s) at items[] (...)``.
+  - `to_dict(self) -> dict[str, Any]`
+- **`Collection(path: str, count: int, fields: list[str], types: dict[str, str], records: list[Mapping[str, Any]])`** (class). A list of records in a JSON document.
+  - `describe(self, fields: int = 6) -> str`
+  - `schema(self, name: str = 'records') -> Schema`: A data schema for these records (:func:`~wintergrab.data.inference.infer_schema`): a start to review.
+  - `to_dict(self) -> dict[str, Any]`
+- **`DataSources(url: str, html: list[HtmlRecords] = ..., tables: list[dict[str, Any]] = ..., json_ld: dict[str, int] = ..., microdata: dict[str, int] = ..., meta: list[str] = ..., embedded: dict[str, list[Collection]] = ..., api: list[ApiCall] = ..., recorded: bool = False, endpoints: list[tuple[str | None, str]] = ..., document: list[Collection] | None = None, pagination: Pagination | None = None, _json_ld_collections: list[tuple[str, Collection]] = ...)`** (class). Where a page's data is (see the module docs).
+  - `describe(self) -> str`
+  - `richest(self) -> Source | None`: The place holding the most values (records x fields): often the one to read.
+  - `sources(self) -> list[Source]`: Every place holding at least two records, those holding the most values (records x fields) first.
+  - `to_dict(self) -> dict[str, Any]`
+- **`Endpoint(url: str, method: str | None, source: str, pages: int = 1, note: str | None = None, status: int | None = None, content_type: str | None = None, operations: list[str] = ..., records: str | None = None, paging: str | None = None)`** (class). An API endpoint seen in (or conventional for) the site's pages.
+- **`HtmlRecords(selector: str, count: int, fields: list[str])`** (class). Records drawn in a page's HTML: repeated elements (cards, rows) with the same fields.
+  - `describe(self) -> str`
+  - `to_dict(self) -> dict[str, Any]`
 - **`PageClassifier()`** (class). Rule-based page classification (see the module docs).
   - `add_rule(self, page_type: str, name: str, rule: Rule)`: Add evidence: ``rule(features)`` returns a weight (or ``(weight, evidence text)``) when it applies.
   - `classify(self, page: Any, *, url: str | None = None, status: int | None = None) -> PageType`
   - `scores(self, features: PageFeatures) -> tuple[dict[str, float], dict[str, list[str]]]`
 - **`PageFeatures(page: PageContext, status: int | None = None)`** (class). Cheap facts about a page that classification rules look at (each computed once).
 - **`PageType(type: str, confidence: float, evidence: list[str] = ..., scores: dict[str, float] = ...)`** (class). The kind of a page, with the evidence for it.
+  - `to_dict(self) -> dict[str, Any]`
+- **`Pagination(kind: str, parameter: str | None = None, value: Any = None, size: int | None = None, next: Any = None, next_url: str | None = None, total: int | None = None, pages: int | None = None, more: bool | None = None)`** (class). How an API's pages go, as far as one call and its answer tell.
+  - `describe(self) -> str`
   - `to_dict(self) -> dict[str, Any]`
 - **`SiteProfile(domains: list[str], pages: int, statuses: dict[int, int], error_rate: float, average_latency: float | None, bytes: int, technologies: list[dict[str, Any]], languages: dict[str, int], regions: list[str], page_types: dict[str, int], templates: list[TemplateCluster], structured_data: dict[str, int], internal_links: int, external_links: int, external_domains: dict[str, int], endpoints: list[Endpoint], crawlability: dict[str, Any], sitemaps: dict[str, Any] | None = None, change_frequency: float | None = None, topology: Topology | None = None)`** (class). What :class:`SiteProfiler` learned about a site (see the module docs).
   - `describe(self, limit: int = 8, *, depth: int = 2) -> str`: The profile as a short report: ``limit`` entries per list, ``depth`` levels of sections.
@@ -802,6 +822,7 @@ checks that it is up to date.
   - `profile(self, *, complete: bool = False) -> SiteProfile`: The profile so far.
 - **`SiteSurvey(url: str, profile: SiteProfile, robots_text: str | None = None, robots_found: bool = False, sitemaps: SitemapRead = ..., pages: list[Response] = ..., stats: dict[str, Any] = ...)`** (class). What :func:`survey_site` found (see the module docs).
 - **`SitemapRead(roots: list[str] = ..., sitemaps: int = 0, indexes: int = 0, entries: list[SitemapEntry] = ..., truncated: bool = False)`** (class). What :func:`read_sitemaps` found.
+- **`Source(kind: ForwardRef('str'), where: ForwardRef('str'), records: ForwardRef('int'), fields: ForwardRef('int'))`** (class). One place holding records (see :meth:`DataSources.richest`).
 - **`TechDetector(rules: Iterable[TechRule] = (..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ...), extra: Iterable[TechRule] = ())`** (class). Technology detection with a set of fingerprints (the built-in ones plus ``extra``).
   - `detect(self, page: Any, *, url: str | None = None, headers: Mapping[str, str] | None = None, cookies: Iterable[str] = (), html: str | None = None) -> list[Technology]`: Technologies seen on ``page`` (a :class:`~wintergrab.Response`, a Selector or HTML), best first.
 - **`TechRule(name: str, category: str, headers: dict[str, str] = ..., cookies: tuple[str, ...] = (), meta: dict[str, str] = ..., scripts: tuple[str, ...] = (), html: tuple[str, ...] = (), url: tuple[str, ...] = (), implies: tuple[str, ...] = (), website: str = '')`** (class). TechRule(name: 'str', category: 'str', headers: 'dict[str, str]' = <factory>, cookies: 'tuple[str, ...]' = (), meta: 'dict[str, str]' = <factory>, scripts: 'tuple[str, ...]' = (), html: 'tuple[str, ...]' = (), url: 'tuple[str, ...]' = (), implies: 'tuple[str, ...]' = (), website: 'str' = '')
@@ -826,12 +847,17 @@ checks that it is up to date.
   - `to_dict(self) -> dict[str, Any]`
   - `walk(self) -> Iterator[TopologyNode]`: This node and every node under it, depth first.
 - **`analyze_text(text: str, *, keywords: int = 8) -> TextAnalysis`**. The language, size and keywords of ``text`` (see the module docs).
+- **`api_calls(captured: Iterable[Any]) -> list[ApiCall]`**. The calls a browser recorded (``response.captured``), grouped by method, URL pattern and GraphQL operation, in the order they were first made.
 - **`classify_page(page: Any, *, url: str | None = None, status: int | None = None) -> PageType`**. The type of a page (a :class:`~wintergrab.Response`, a :class:`~wintergrab.Selector` or HTML).
 - **`classify_text(text: str, model: Any, *, categories: Sequence[str] | None = None, entities: bool = True, max_chars: int = 12000) -> TextLabels`**. A topic, a category (one of ``categories``), a sentiment and the entities of ``text``, from ``model`` (a :class:`~wintergrab.models.ModelProvider`), checked (see the module docs).
 - **`classify_url(url: str) -> PageType`**. A guess from the URL alone (before fetching): cheap, and less sure than :func:`classify_page`.
+- **`data_sources(response: Any, *, recorded: bool | None = None) -> DataSources`**. Where ``response``'s data is (see the module docs).
 - **`detect_language(text: str) -> tuple[str | None, float, str | None]`**. ``(language, confidence, runner_up)`` of ``text`` (see the module docs); ``(None, 0.0, None)`` when it cannot be told.
 - **`detect_technologies(page: Any, **kwargs: Any) -> list[Technology]`**. :meth:`TechDetector.detect` with the built-in fingerprints.
+- **`json_collections(data: Any, *, min_records: int = 2) -> list[Collection]`**. The lists of records in a JSON document, those holding the most values (records x fields) first.
+- **`pagination_of(url: str, answer: Any = None, *, request: Mapping[str, Any] | None = None, records: int | None = None) -> Pagination | None`**. How the pages of the API ``url`` go, from its query parameters (or ``request``: a GraphQL call's variables, a JSON request body) and its ``answer``, or ``None`` when neither says.
 - **`read_sitemaps(origin: str, robots_text: str | None = None, *, max_sitemaps: int = 10, max_entries: int = 50000, **fetch_options: Any) -> SitemapRead`**. The pages a site's sitemaps list: those named in robots.txt, or ``/sitemap.xml``, following sitemap indexes, up to ``max_sitemaps`` sitemaps and ``max_entries`` pages.
+- **`script_endpoints(selector: Any, url: str) -> list[tuple[str | None, str]]`**. The API endpoints a page's inline scripts and ``data-`` attributes name, as ``(method, endpoint)``: calls (``fetch("/api/...")``, axios, jQuery, ``xhr.open``) and API-looking paths (``/api/``, ``/graphql``), query values left out (``https://shop.example/api/products?page=``).
 - **`survey_site(url: str, *, pages: int = 30, sitemaps: bool = True, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, keep_pages: bool = False, prefer: Callable[[str], bool | float] | None = None, extra_urls: Iterable[str] = (), log_level: str | None = 'WARNING', **spider_settings: Any) -> SiteSurvey`**. Read ``url``'s site: robots.txt, sitemaps, and ``pages`` pages, into a :class:`SiteSurvey`.
 
 ## `wintergrab.history`: What changed between crawls

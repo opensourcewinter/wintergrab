@@ -45,8 +45,9 @@ thousands of pages), the same API scales up.
   under half their memory. On real sites, the site and your politeness
   settings usually set the pace, not the crawler.
 - **Browser superpowers.** Capture the JSON API calls a page makes while it
-  renders. Clear a login or JS check once in the browser, then continue over
-  fast HTTP with the same cookies.
+  renders, and see where each page's data is (`get --sources`: HTML, JSON-LD,
+  embedded JSON, APIs with their pagination). Sign in once in the browser,
+  then continue over fast HTTP with the same cookies.
 - **Say what you want.** `wintergrab goal "Find all laptops under $1000 on
   shop.example with name, price and rating"` reads the request, surveys the
   site (robots.txt, sitemaps, a sample of pages), shows a plan with what it
@@ -270,6 +271,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Entities](https://github.com/opensourcewinter/wintergrab/blob/main/docs/entities.md) | Which names are the same company, brand, product, person or place |
 | [What pages look like](https://github.com/opensourcewinter/wintergrab/blob/main/docs/visual.md) | Tables and labelled values read from where a browser draws them (div grids, dashboard tiles), and screenshots for models that read images (`--layout`, `--visual-tables`, `--vision`) |
 | [Benchmarks](https://github.com/opensourcewinter/wintergrab/blob/main/docs/benchmarks.md) | `wintergrab benchmark`: crawl throughput and latency, CPU, memory, parsing, extraction, validation, deduplication and browser overhead, measured on your machine |
+| [Where a page's data is](https://github.com/opensourcewinter/wintergrab/blob/main/docs/sources.md) | Every source a page holds records in: HTML, tables, JSON-LD, embedded JSON and the API calls it makes, with the records each holds, GraphQL operations and pagination (`get --sources`) |
 | [Places](https://github.com/opensourcewinter/wintergrab/blob/main/docs/places.md) | Where records are: addresses and listings' locations read into countries, regions, cities, postal codes and coordinates; kept by place or distance, grouped by place (`wintergrab data places`) |
 | [Knowledge graphs](https://github.com/opensourcewinter/wintergrab/blob/main/docs/graph.md) | The things records name, resolved, and typed edges between them with their sources; JSON, GraphML, Neo4j CSV (`wintergrab data graph`) |
 | [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |

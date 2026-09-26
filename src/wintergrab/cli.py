@@ -274,7 +274,7 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             options["actions"] = args.steps
             if args.downloads:
                 options["downloads"] = args.downloads
-        if args.capture:
+        if args.capture or getattr(args, "sources", False):  # --sources: the page's API calls are sources too
             options["capture"] = args.capture_filter or True
             options.setdefault("wait_until", "networkidle")
         if getattr(args, "auto_browser", False):
@@ -378,7 +378,7 @@ def cmd_get(args: argparse.Namespace) -> int:
     records = bool(args.each or args.auto or examples or schema or extractor)
     if json_modes:
         args.format = args.format or ("jsonl" if len(urls) > 1 else "json")
-    default_fmt = "jsonl" if records else ("text" if selecting else "md")
+    default_fmt = "jsonl" if records else ("text" if selecting or args.sources else "md")
     fmt = _format_for(args, default_fmt)
     if fmt == "csv" and not records:
         raise SystemExit("error: CSV output needs --each/--field")
@@ -405,6 +405,15 @@ def cmd_get(args: argparse.Namespace) -> int:
         if page.status >= 400:
             failures += 1
         multi = len(urls) > 1
+        if args.sources:
+            from .intel.sources import data_sources
+
+            inventory = data_sources(page, recorded=bool(args.browser or args.capture))
+            if fmt in ("json", "jsonl"):
+                rows.append(inventory.to_dict())
+            else:
+                chunks.append(inventory.describe() + "\n")
+            continue
         if json_modes:
             doc: dict[str, Any] = {"url": page.url}
             if args.structured:
@@ -511,7 +520,7 @@ def cmd_get(args: argparse.Namespace) -> int:
     if extractor is not None and hasattr(extractor, "close"):
         extractor.close()  # a healing extractor keeps what it learned
     if records or json_modes or fmt in ("json", "jsonl", "csv"):
-        _write_rows(rows, fmt, args.output, single=bool(json_modes))
+        _write_rows(rows, fmt, args.output, single=bool(json_modes) or args.sources)  # one page: one document
         if args.output:
             print(f"wrote {len(rows)} record(s) to {args.output}", file=sys.stderr)
     else:
@@ -2484,6 +2493,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="(implies --browser) the tables the page draws, whatever its HTML: rows aligned in columns",
     )
     smart.add_argument("--next", action="store_true", help="the URL of the next page (pagination)")
+    smart.add_argument(
+        "--sources",
+        action="store_true",
+        help="where the page's data is: HTML records, tables, JSON-LD, embedded JSON and (with --browser) the API "
+        "calls it makes, with the records each holds, GraphQL operations and pagination (see docs/sources.md)",
+    )
     smart.add_argument("--explain", action="store_true", help="(--extract) show where every value came from")
     _add_cache_options(g)
     g.set_defaults(func=cmd_get)

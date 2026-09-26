@@ -156,10 +156,16 @@ page.captured_json("products")                                    # parsed bodie
 wintergrab get https://spa.example --capture-filter "*graphql*"
 ```
 
+A page's calls do not hold up its `load` event: a capturing fetch gives the
+page up to 10 seconds more for its network to go quiet. `get --browser
+--sources` sums up what the calls answered, the lists of records in each,
+their GraphQL operations and how their pages go
+([where a page's data is](sources.md)).
+
 ## Handing a browser session to fast HTTP
 
-Log in, accept a consent wall or clear a JavaScript check once in a real
-browser, then carry on over fast HTTP:
+Log in or accept a consent dialog once in a real browser, then carry on over
+fast HTTP:
 
 ```python
 with wg.BrowserFetcher(headless=False) as browser:

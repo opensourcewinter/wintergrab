@@ -104,8 +104,18 @@ def _is_rating(v: Any) -> bool:
     return isinstance(v, str) and len(v) <= 40 and bool(_RATING_TEXT.search(v)) and parse_rating(v) is not None
 
 
+# A path, a URL or a file name: "/img/3m-tape.png" holds "3m", but is no length.
+_PATHLIKE = re.compile(r"^(?:/|[a-z][a-z0-9+.-]*://)|\.[a-z][a-z0-9]{1,4}$", re.I)
+
+
 def _is_quantity(v: Any) -> bool:
-    return isinstance(v, str) and len(v) <= 40 and parse_quantity(v) is not None and not _is_money(v)
+    return (
+        isinstance(v, str)
+        and len(v) <= 40
+        and not _PATHLIKE.search(v.strip())
+        and parse_quantity(v) is not None
+        and not _is_money(v)
+    )
 
 
 def _is_phone(v: Any) -> bool:
