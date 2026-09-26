@@ -12,6 +12,9 @@ parse      parsing a listing page and reading its 20 cards with CSS: pages/s
 extract    the ``product`` template's extraction of product pages: pages/s
 data       normalizing and validating product records with a schema: records/s
 dedupe     canonical URLs (URLs/s) and near-duplicate fingerprints of pages (pages/s)
+outputs    records written to each output a crawl can write (JSON Lines, CSV, JSON, SQLite, and
+           Parquet and Excel when installed) and read back: records/s, and the file's size; with
+           ``stores``, database tables and S3 objects too
 browser    (``--browser``) product pages rendered in Chromium, one after another, against the
            same pages over HTTP: pages/s, and how many times slower
 =========  ======================================================================================
@@ -43,7 +46,7 @@ from typing import Any
 __all__ = ["SCENARIOS", "run_benchmark", "serve_shop"]
 
 #: Every scenario, in the order they run; ``browser`` only when asked for.
-SCENARIOS = ("startup", "crawl", "parse", "extract", "data", "dedupe", "browser")
+SCENARIOS = ("startup", "crawl", "parse", "extract", "data", "dedupe", "outputs", "browser")
 CARDS = 20
 _WORDS = str.split(
     "arctic frosted polar winter snowy glacial alpine crisp nordic icy boreal misty silver cozy woolen "
@@ -381,12 +384,60 @@ def _scenario_browser(url: str, rounds: int, **_: Any) -> dict[str, Any]:
             "peak_rss_mb": _peak_rss_mb()}  # fmt: skip
 
 
+def _scenario_outputs(rounds: int, stores: Sequence[str] = (), **_: Any) -> dict[str, Any]:
+    import importlib.util
+    import tempfile
+    from pathlib import Path
+
+    from .data.io import read_records
+    from .errors import describe as describe_error
+    from .redact import redact_url
+    from .spider.exporters import open_exporter
+
+    rnd = random.Random(11)
+    count = max(rounds * 25, 500)
+    records = [
+        {"name": _name(i), "price": round(rnd.uniform(5, 999), 2), "currency": rnd.choice(["USD", "EUR"]),
+         "rating": round(rnd.uniform(1, 5), 1), "in_stock": rnd.random() < 0.8, "tags": rnd.sample(_WORDS, 3),
+         "offer": {"seller": rnd.choice(_WORDS), "shipping": rnd.randint(0, 20)}, "url": f"https://shop.example/p/{i}"}
+        for i in range(count)
+    ]  # fmt: skip
+    formats = [".jsonl", ".csv", ".json", ".sqlite"]
+    formats += [f for f, module in ((".parquet", "pyarrow"), (".xlsx", "openpyxl")) if importlib.util.find_spec(module)]
+    results: dict[str, Any] = {}
+    with tempfile.TemporaryDirectory(prefix="wintergrab-bench-") as directory:
+        targets = [(f, str(Path(directory) / f"items{f}")) for f in formats] + [(redact_url(s), s) for s in stores]
+        for label, target in targets:
+
+            def write(target: str = target) -> int:
+                exporter = open_exporter(target)  # as a fresh crawl writes it
+                for record in records:
+                    exporter.write(record)
+                exporter.close()
+                return count
+
+            def read(target: str = target) -> int:
+                return sum(1 for _ in read_records(target))
+
+            try:
+                written, cpu = _rate(write)
+                read_back, _reading_cpu = _rate(read)
+            except Exception as exc:
+                results[label] = {"error": describe_error(exc)}
+                continue
+            size = os.path.getsize(target) if os.path.isfile(target) else None
+            results[label] = {"write_per_s": written, "read_per_s": read_back, "cpu_s": cpu,
+                              "mb": round(size / 1_000_000, 2) if size is not None else None}  # fmt: skip
+    return {"records": count, "outputs": results, "peak_rss_mb": _peak_rss_mb()}
+
+
 _RUNNERS: dict[str, Callable[..., dict[str, Any]]] = {
     "crawl": _scenario_crawl,
     "parse": _scenario_parse,
     "extract": _scenario_extract,
     "data": _scenario_data,
     "dedupe": _scenario_dedupe,
+    "outputs": _scenario_outputs,
     "browser": _scenario_browser,
 }
 
@@ -421,13 +472,16 @@ def run_benchmark(
     concurrency: int = 32,
     rounds: int = 200,
     startup_runs: int = 5,
+    stores: Sequence[str] = (),
     on_result: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run the scenarios (see the module docs) and return ``{"environment": {...}, "results": {name: {...}}}``.
 
     ``pages`` and ``items`` size the shop the crawl reads (``pages + items`` pages); ``latency`` (seconds)
     delays each of its responses, as a network would; ``rounds`` is how many pages (or tens of records)
-    the other scenarios read. ``on_result`` is called with each scenario's result as it finishes.
+    the other scenarios read. ``stores``: database and S3 outputs (``postgresql://...?table=bench``) the
+    ``outputs`` scenario measures too, each written as a fresh crawl writes it (its rows replaced).
+    ``on_result`` is called with each scenario's result as it finishes.
     """
     from . import __version__
 
@@ -462,7 +516,9 @@ def run_benchmark(
                     if not url.startswith("http"):
                         raise RuntimeError("the benchmark's shop did not start")
                     report["environment"]["url"] = url
-                result = _in_process_of_its_own(name, report["environment"].get("url", ""), concurrency, rounds)
+                result = _in_process_of_its_own(
+                    name, report["environment"].get("url", ""), concurrency, rounds, stores if name == "outputs" else ()
+                )
             report["results"][name] = result
             if on_result is not None:
                 on_result(name, result)
@@ -473,9 +529,13 @@ def run_benchmark(
     return report
 
 
-def _in_process_of_its_own(name: str, url: str, concurrency: int, rounds: int) -> dict[str, Any]:
+def _in_process_of_its_own(
+    name: str, url: str, concurrency: int, rounds: int, stores: Sequence[str] = ()
+) -> dict[str, Any]:
     command = [sys.executable, "-m", "wintergrab.bench", "scenario", name, "--url", url,
                "--concurrency", str(concurrency), "--rounds", str(rounds)]  # fmt: skip
+    for store in stores:
+        command += ["--store", store]
     done = subprocess.run(command, capture_output=True, text=True, timeout=3600)
     lines = [line for line in done.stdout.splitlines() if line.startswith("RESULT ")]
     if done.returncode != 0 or not lines:
@@ -520,6 +580,14 @@ def describe(report: dict[str, Any]) -> str:
         elif name == "dedupe":
             rows += [(name, "URLs/s", f"{r['urls_per_s']:,} (made canonical: {r['urls']:,} URLs, {r['unique_urls']:,} pages)"),
                      (name, "pages/s", f"{r['simhash_pages_per_s']:,} (near-duplicate fingerprints)")]  # fmt: skip
+        elif name == "outputs":
+            for label, o in r["outputs"].items():
+                if "error" in o:
+                    rows.append((name, label, "failed: " + o["error"]))
+                    continue
+                size = f" ({o['mb']} MB)" if o["mb"] is not None else ""
+                rows.append((name, label, f"{o['write_per_s']:,} records/s written, {o['read_per_s']:,} read"
+                                          f"{size}: {r['records']:,} records"))  # fmt: skip
         elif name == "browser":
             rows.append((name, "pages/s", f"{r['pages_per_s']:,} ({r['times_slower']}x slower than HTTP from this "
                                           f"machine: {r['http_pages_per_s']:,} pages/s, one page at a time)"))  # fmt: skip
@@ -546,11 +614,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     scenario.add_argument("--url", default="")
     scenario.add_argument("--concurrency", type=int, default=32)
     scenario.add_argument("--rounds", type=int, default=200)
+    scenario.add_argument("--store", action="append", default=[])
     args = parser.parse_args(argv)
     if args.action == "serve":
         serve_shop(args.pages, args.items, latency=args.latency, port=args.port)
         return 0
-    result = _RUNNERS[args.name](url=args.url, concurrency=args.concurrency, rounds=args.rounds)
+    result = _RUNNERS[args.name](url=args.url, concurrency=args.concurrency, rounds=args.rounds, stores=args.store)
     print("RESULT " + json.dumps(result), flush=True)
     return 0
 

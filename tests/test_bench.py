@@ -49,6 +49,15 @@ def test_every_scenario_is_measured() -> None:
         run_benchmark(scenarios=("warp",))
 
 
+def test_the_outputs_scenario() -> None:
+    report = run_benchmark(scenarios=("outputs",), rounds=4)
+    outputs = report["results"]["outputs"]
+    assert outputs["records"] == 500 and {".jsonl", ".csv", ".json", ".sqlite"} <= set(outputs["outputs"])
+    for label, measured in outputs["outputs"].items():
+        assert measured["write_per_s"] > 0 and measured["read_per_s"] > 0 and measured["mb"] > 0, label
+    assert "outputs  .jsonl" in describe(report) and "records/s written" in describe(report)
+
+
 def test_the_benchmark_command(capsys, tmp_path) -> None:
     out = tmp_path / "bench.json"
     code = main(["benchmark", "--quick", "--scenario", "parse", "--scenario", "dedupe", "--json", "-o", str(out)])

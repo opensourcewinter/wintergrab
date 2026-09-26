@@ -889,6 +889,10 @@ an error that says so, not a setting silently ignored
   imported only when used.
 - A CI job tests the database outputs against PostgreSQL 16, MongoDB 7,
   MySQL 8.4 and MariaDB 11 servers.
+- `wintergrab benchmark --scenario outputs` measures records written to and
+  read from each output a crawl can write (and databases and S3 objects
+  named with `--store`), through the same code; `wintergrab doctor` says
+  which storage extras are installed.
 - A PostgreSQL run without `unique_key` after one with it failed on the
   first repeated key, the earlier run's unique index still in place. The
   index now goes with the key.

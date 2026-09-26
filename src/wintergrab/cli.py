@@ -72,9 +72,10 @@ pages that hold one. --follow limits the crawl to the links that lead to them.
 """
 
 EPILOG_BENCHMARK = """examples:
-  wintergrab benchmark                          # everything but the browser, about 10 seconds
+  wintergrab benchmark                          # everything but the browser, about 12 seconds
   wintergrab benchmark --browser                # and pages rendered in Chromium
   wintergrab benchmark --scenario crawl --pages 1000 --items 10000 --concurrency 64
+  wintergrab benchmark --scenario outputs --store "postgresql://crawler@db/shop?table=bench"   # and a database
   wintergrab benchmark --latency 50 --json -o bench.json   # as over a network: 50 ms per response
 
 Everything runs on this machine: a synthetic shop served from 127.0.0.1, and each scenario in a
@@ -1536,6 +1537,7 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
         concurrency=args.concurrency,
         rounds=args.rounds,
         startup_runs=1 if args.quick else 5,
+        stores=args.store or (),
         on_result=progress,
     )
     if args.output:
@@ -1585,6 +1587,16 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     check("pyyaml", v is not None, v or "not installed (YAML schemas and pipelines)", 'pip install "wintergrab[yaml]"')
     v = version("pypdf")
     check("pypdf", v is not None, v or "not installed (reading PDFs)", 'pip install "wintergrab[pdf]"')
+    for dist, what, extra in (
+        ("pyarrow", "Parquet files", "parquet"),
+        ("openpyxl", "Excel files", "xlsx"),
+        ("psycopg", "PostgreSQL output", "postgres"),
+        ("pymysql", "MySQL and MariaDB output", "mysql"),
+        ("pymongo", "MongoDB output", "mongodb"),
+        ("s3fs", "S3 output", "s3"),
+    ):
+        v = version(dist)
+        check(dist, v is not None, v or f"not installed ({what})", f'pip install "wintergrab[{extra}]"')
     check("adaptive db", True, str(default_storage_path()))
     width = max(len(r[1]) for r in rows)
     for status, name, detail in rows:
@@ -3020,7 +3032,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     bm = sub.add_parser(
         "benchmark",
-        help="measure how fast wintergrab runs on this machine: crawl, parse, extract, validate, deduplicate",
+        help="measure how fast wintergrab runs on this machine: crawl, parse, extract, validate, deduplicate, "
+        "write outputs",
         description="Measure wintergrab on this machine, against a synthetic shop served from 127.0.0.1: "
         "crawl throughput and latency, CPU and memory, parsing, extraction, validation, URL deduplication, "
         "start-up time, and with --browser, rendering.",
@@ -3030,7 +3043,7 @@ def build_parser() -> argparse.ArgumentParser:
     bm.add_argument(
         "--scenario",
         action="append",
-        choices=["startup", "crawl", "parse", "extract", "data", "dedupe", "browser"],
+        choices=["startup", "crawl", "parse", "extract", "data", "dedupe", "outputs", "browser"],
         help="only this one (repeatable; default all but browser)",
     )
     bm.add_argument("--browser", action="store_true", help="also render pages in Chromium (needs the browser extra)")
@@ -3039,6 +3052,13 @@ def build_parser() -> argparse.ArgumentParser:
     bm.add_argument("--latency", type=float, default=0.0, metavar="MS", help="delay each response, as a network would")
     bm.add_argument("--concurrency", type=int, default=32, metavar="N", help="the crawl's requests in flight (32)")
     bm.add_argument("--rounds", type=int, default=200, metavar="N", help="pages read by parse and extract (200)")
+    bm.add_argument(
+        "--store",
+        action="append",
+        metavar="URL",
+        help="(outputs) also measure this database table or S3 object (postgresql://...?table=bench): its rows are "
+        "replaced, as a fresh crawl replaces them (repeatable)",
+    )
     bm.add_argument("--quick", action="store_true", help="a small shop and few rounds: a check in a few seconds")
     bm.add_argument("--json", action="store_true", help="print the report as JSON")
     bm.add_argument("-o", "--output", metavar="FILE", help="also save the report here as JSON")

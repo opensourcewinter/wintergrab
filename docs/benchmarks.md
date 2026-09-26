@@ -42,11 +42,38 @@ fresh Python process, so its CPU time and peak memory are its own.
 | `extract` | the `product` template on product pages: structured data, then the heuristics | pages/s |
 | `data` | a pipeline normalizing and validating product records (prices in three formats, ratings, dates, weights) | records/s |
 | `dedupe` | making 10,000 URLs canonical (each page in five spellings: host case, port, parameter order, tracking parameters, fragment), with an empty cache; SimHash fingerprints of pages | URLs/s, pages/s |
+| `outputs` | 5,000 product records (numbers, booleans, a list, an object) written to each output a crawl can write, through the same code a crawl uses, and read back: JSON Lines, CSV, JSON, SQLite, and Parquet and Excel when installed. `--store URL` adds a database table or an S3 object | records/s written and read, the file's size |
 | `browser` | `--browser`: 5 to 30 product pages rendered in Chromium one after another, and the same pages over HTTP | pages/s, and how many times slower |
 
 Rates are the median of three runs of the scenario's work. The crawl runs
 once, with AutoThrottle off: it measures what the crawler can do, not what
 a site should get.
+
+## Outputs
+
+```bash
+wintergrab benchmark --scenario outputs --store "postgresql://crawler@127.0.0.1/shop?table=bench" \
+    --store "mongodb://127.0.0.1/shop?collection=bench" --store "mysql://crawler@127.0.0.1/shop?table=bench"
+```
+
+```
+outputs  .jsonl       654,546.8 records/s written, 496,004.4 read (1.02 MB): 5,000 records
+outputs  .csv         132,517.7 records/s written, 336,888.8 read (0.75 MB): 5,000 records
+outputs  .json        617,266.3 records/s written, 420,496.1 read (1.02 MB): 5,000 records
+outputs  .sqlite      49,657.3 records/s written, 181,340.6 read (0.75 MB): 5,000 records
+outputs  .parquet     55,593.3 records/s written, 127,802.9 read (0.14 MB): 5,000 records
+outputs  .xlsx        9,599.6 records/s written, 8,916.8 read (0.29 MB): 5,000 records
+outputs  postgresql   17,279.6 records/s written, 111,410.9 read: 5,000 records
+outputs  mongodb      25,557.3 records/s written, 121,128.3 read: 5,000 records
+outputs  mysql        20,954.2 records/s written, 64,856.5 read: 5,000 records
+```
+
+(The same 4-vCPU machine, its URLs shortened here: PostgreSQL 16, MongoDB 7
+and MariaDB 10.11 on the machine itself, so no network time is counted.)
+Every output writes far more records a second than a crawl finds, Excel
+included. A table or collection named with `--store` is written as a fresh
+crawl writes it: its rows are replaced, so name one kept for it. S3 objects
+can be measured the same way; the upload is timed with the rest.
 
 ## Options
 
