@@ -1,10 +1,13 @@
-"""Several sessions in one spider, plus automatic escalation when blocked.
+"""Several sessions in one spider: HTTP for most pages, a browser for the page that needs JavaScript.
 
-* ``fast``: plain HTTP that looks like Chrome - used for most pages.
-* ``browser``: a headless browser - used for JavaScript pages, and as the
-  fallback when a page looks like a bot wall (``fallback_session``).
+* ``fast``: plain HTTP with a browser's TLS and headers - used for most pages.
+* ``browser``: a headless browser - used for the page that builds its content
+  with JavaScript, chosen per request with ``session="browser"``.
 
-    python examples/08_sessions_and_fallback.py
+A page that is blocked is not sent to the browser to get past the block: it is
+reported, and the spider slows down for that site (docs/responsible-access.md).
+
+    python examples/08_sessions.py
 """
 
 from wintergrab import AsyncBrowserFetcher, AsyncFetcher, Request, Spider
@@ -14,7 +17,6 @@ class MixedSpider(Spider):
     name = "mixed"
     start_urls = ["https://quotes.toscrape.com/"]
     js_url = "https://quotes.toscrape.com/js/"
-    fallback_session = "browser"  # retry blocked pages in the browser
     concurrency = 6
 
     def configure_sessions(self, sessions):

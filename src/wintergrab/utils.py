@@ -185,3 +185,16 @@ def human_bytes(n: float) -> str:
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} TB"
+
+
+def replace_file(source: str | os.PathLike[str], target: str | os.PathLike[str], *, attempts: int = 20) -> None:
+    """``os.replace(source, target)``, tried again for a moment while another process reads
+    ``target`` (Windows refuses to replace a file that is open)."""
+    for attempt in range(attempts):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05)

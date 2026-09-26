@@ -155,6 +155,14 @@ class ProxyRotator:
             self._states[url].uses += 1
             return url
 
+    def reuse(self, proxy: str) -> str:
+        """``proxy`` once more (a retry of a page the site answered through it), counted as a use."""
+        with self._lock:
+            state = self._states.get(proxy)
+            if state is not None:
+                state.uses += 1
+        return proxy
+
     def report_success(self, proxy: str | None) -> None:
         if proxy is None:
             return

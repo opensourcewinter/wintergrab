@@ -1,0 +1,13 @@
+# An example plugin (docs/plugins.md): pip install -e examples/plugin, then wintergrab plugins
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wintergrab-lines"
+version = "0.1.0"
+description = "A .lines output for wintergrab (one item per line), and a command to count them"
+dependencies = ["wintergrab"]
+
+[project.entry-points."wintergrab.plugins"]
+lines = "wintergrab_lines:plugin"

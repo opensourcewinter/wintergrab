@@ -115,6 +115,13 @@ class ProgressDisplay:
         ):
             if stats.get(key):
                 parts.append(f"{int(stats[key]):,} {label}")
+        optimizer = engine.optimizer
+        if optimizer is not None:
+            expected = optimizer.forecast()["items"]
+            if expected >= 1:
+                parts.append(f"~{expected:,.0f} more items expected")
+            if optimizer.skipped:
+                parts.append(f"{optimizer.skipped:,} skipped")
         elapsed = time.monotonic() - engine._started
         if spider.max_pages and rate > 0:
             remaining = max(0, spider.max_pages - pages) / rate

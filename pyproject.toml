@@ -33,14 +33,49 @@ dependencies = [
     "lxml>=5.0",
     "cssselect>=1.2",
     "curl_cffi>=0.10",
+    "tomli>=1.1; python_version < '3.11'",
+    "tzdata; sys_platform == 'win32'",  # time zones for schedules (Windows has no database of its own)
 ]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.45"]
 speed = ["uvloop>=0.19; sys_platform != 'win32'", "orjson>=3.9"]
-all = ["playwright>=1.45", "uvloop>=0.19; sys_platform != 'win32'", "orjson>=3.9"]
+yaml = ["pyyaml>=6.0"]
+parquet = ["pyarrow>=14"]
+xlsx = ["openpyxl>=3.1"]
+duckdb = ["duckdb>=1.2"]
+postgres = ["psycopg[binary]>=3.1"]
+mongodb = ["pymongo>=4.6"]
+mysql = ["pymysql[rsa]>=1.1"]
+s3 = ["s3fs>=2024.2"]
+pdf = ["pypdf>=4"]
+all = [
+    "playwright>=1.45",
+    "uvloop>=0.19; sys_platform != 'win32'",
+    "orjson>=3.9",
+    "pyyaml>=6.0",
+    "pyarrow>=14",
+    "openpyxl>=3.1",
+    "duckdb>=1.2",
+    "psycopg[binary]>=3.1",
+    "pymongo>=4.6",
+    "pymysql[rsa]>=1.1",
+    "s3fs>=2024.2",
+    "pypdf>=4",
+]
 dev = [
     "playwright>=1.45",
+    "pyyaml>=6.0",
+    "pyarrow>=14",
+    "openpyxl>=3.1",
+    "duckdb>=1.2",
+    "psycopg[binary]>=3.1",
+    "pymongo>=4.6",
+    "pymysql[rsa]>=1.1",
+    "s3fs>=2024.2",
+    "moto[server]>=5",
+    "pypdf>=4",
+    "jsonschema>=4.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
@@ -96,6 +131,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011", "SIM117", "RUF001"]
+# Normalizers and extraction heuristics recognise look-alike characters (curly quotes, primes,
+# dashes, "×", full-width colons) on purpose.
+"src/wintergrab/data/normalize/*" = ["RUF001", "RUF002", "RUF003"]
+"src/wintergrab/extraction/strategies.py" = ["RUF001", "RUF002", "RUF003"]
 "examples/*" = ["T201"]
 
 [tool.mypy]

@@ -8,7 +8,9 @@ from .blocking import has_challenge_markers, looks_blocked
 from .browser import AsyncBrowserFetcher, BrowserFetcher, CapturedResponse
 from .cache import CacheMiss, HTTPCache
 from .http import DEFAULT_RETRY_STATUSES, AsyncFetcher, Fetcher
+from .resources import ResourceFilter
 from .response import Headers, Response
+from .strategy import FetchStrategy, needs_javascript
 
 __all__ = [
     "DEFAULT_RETRY_STATUSES",
@@ -17,9 +19,11 @@ __all__ = [
     "BrowserFetcher",
     "CacheMiss",
     "CapturedResponse",
+    "FetchStrategy",
     "Fetcher",
     "HTTPCache",
     "Headers",
+    "ResourceFilter",
     "Response",
     "aget",
     "apost",
@@ -27,6 +31,7 @@ __all__ = [
     "get",
     "has_challenge_markers",
     "looks_blocked",
+    "needs_javascript",
     "post",
     "render",
 ]
@@ -49,10 +54,10 @@ _CLIENT_OPTIONS = {
     "cache",
     "cache_mode",
     "cache_ttl",
+    "network_policy",
 }
 _BROWSER_CLIENT_OPTIONS = {
     "headless",
-    "stealth",
     "executable_path",
     "channel",
     "proxy",
@@ -77,6 +82,8 @@ _BROWSER_CLIENT_OPTIONS = {
     "cache",
     "cache_mode",
     "cache_ttl",
+    "resource_filter",
+    "network_policy",
 }
 
 
@@ -127,9 +134,9 @@ def render(url: str, **kwargs: Any) -> Response:
 
         page = wintergrab.render("https://example.com", wait_for=".results")
 
-    Accepts :class:`BrowserFetcher` options (``headless``, ``stealth``,
-    ``proxy``, ``block_resources``...) and per-page options (``wait_for``,
-    ``wait``, ``scroll``, ``page_action``, ``screenshot``).
+    Accepts :class:`BrowserFetcher` options (``headless``, ``proxy``,
+    ``block_resources``...) and per-page options (``wait_for``, ``wait``,
+    ``scroll``, ``actions``, ``page_action``, ``screenshot``).
     """
     client, per_request = _split(kwargs, _BROWSER_CLIENT_OPTIONS)
     with BrowserFetcher(**client) as browser:

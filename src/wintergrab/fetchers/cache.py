@@ -22,31 +22,26 @@ import sqlite3
 import threading
 import time
 import zlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..errors import FetchError
+from ..errors import CacheMiss
 from .response import Headers, Response
 
 if TYPE_CHECKING:
     from ..adaptive.storage import AdaptiveStorage
     from ..request import Request
 
+__all__ = ["CACHE_MODES", "CacheLayer", "CacheMiss", "CachedResponse", "HTTPCache"]
+
 CACHE_MODES = ("revalidate", "prefer", "offline", "refresh")
 DEFAULT_CACHE_DIR = ".wintergrab-cache"
 CACHEABLE_STATUSES = frozenset({200, 203, 204, 300, 301, 308, 404, 405, 410, 414, 501})
 # Headers a 304 may update on the stored response (RFC 9111 section 4.3.4).
 _REFRESH_HEADERS = ("cache-control", "expires", "etag", "last-modified", "date", "vary", "content-location")
-
-
-class CacheMiss(FetchError):
-    """Raised in ``"offline"`` mode when a request is not in the cache."""
-
-    def __init__(self, url: str) -> None:
-        super().__init__(url, "Not in the HTTP cache (offline mode)", retryable=False)
 
 
 @dataclass
@@ -331,6 +326,29 @@ class HTTPCache:
         if "last-modified" in headers:
             out["If-Modified-Since"] = headers["last-modified"]
         return out
+
+    def entries(self) -> Iterator[CachedResponse]:
+        """Every stored response, oldest first (browser-rendered ones have keys starting ``browser:``)."""
+        with self._lock:
+            if self._conn is None:
+                return
+            rows = self._conn.execute(
+                "SELECT key, url, status, reason, headers, body, compressed, stored_at, http_version, history,"
+                " encoding FROM responses ORDER BY stored_at"
+            ).fetchall()
+        for key, url, status, reason, headers, body, compressed, stored_at, http_version, history, encoding in rows:
+            yield CachedResponse(
+                key=key,
+                url=url,
+                status=status,
+                reason=reason or "",
+                headers=[tuple(pair) for pair in json.loads(headers)],  # type: ignore[misc]
+                body=zlib.decompress(body) if compressed else bytes(body),
+                stored_at=stored_at,
+                http_version=http_version,
+                history=json.loads(history) if history else [],
+                encoding=encoding,
+            )
 
     # ------------------------------------------------------------------ #
     # housekeeping

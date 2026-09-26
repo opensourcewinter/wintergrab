@@ -9,7 +9,8 @@ from dataclasses import dataclass
 import pytest
 
 import wintergrab as wg
-from wintergrab import AsyncFetcher, Request, Spider
+from wintergrab import AsyncFetcher, ProxyRotator, Request, Spider
+from wintergrab.errors import ConfigurationError
 
 
 class ProductSpider(Spider):
@@ -150,6 +151,20 @@ def test_robots_and_offsite(site) -> None:
     rude = Links(obey_robots_txt=False).run()
     assert any("/private/" in i["url"] for i in rude.items)
 
+    class Told(Spider):  # an errback hears of the refusal, and may do without the page
+        log_level = None
+
+        def start_requests(self):
+            yield Request(site.url + "/private/1", errback="refused")
+
+        def refused(self, request, error):
+            yield {"refused": request.url, "why": type(error).__name__, "policy": error.policy}
+            yield Request(site.url + "/links?n=1")
+
+    told = Told().run()
+    assert told.items[0] == {"refused": site.url + "/private/1", "why": "RobotsPolicyError", "policy": "robots"}
+    assert told.stats["robots_blocked"] == 1 and told.stats["pages"] >= 1
+
 
 def test_retries_and_errors(fresh_site) -> None:
     errors: list[str] = []
@@ -169,6 +184,8 @@ def test_retries_and_errors(fresh_site) -> None:
 
         def failed(self, request, error):
             errors.append(f"{request.url} {type(error).__name__}")
+            if request.url.endswith("/unreachable"):
+                assert isinstance(error, wg.FetchError) and error.kind == "connect"
 
         def on_error(self, request, error):
             errors.append(f"on_error {request.url}")
@@ -179,7 +196,7 @@ def test_retries_and_errors(fresh_site) -> None:
     assert result.stats["retries"] >= 4
     assert f"on_error {fresh_site.url}/flaky/b?fail=9" in errors
     assert f"{fresh_site.url}/status/404 HTTPStatusError" in errors
-    assert "http://127.0.0.1:9/unreachable FetchError" in errors
+    assert "http://127.0.0.1:9/unreachable NetworkError" in errors  # a FetchError subclass
 
 
 def test_allowed_statuses_reach_the_callback(site) -> None:
@@ -209,22 +226,43 @@ def test_rate_limit_triggers_backoff(fresh_site) -> None:
     assert result.stats["status/429"] == 2
 
 
-def test_blocked_requests_escalate_to_fallback_session(site) -> None:
+def test_a_blocked_page_is_reported_not_fetched_another_way(site) -> None:
     class Guarded(Spider):
         log_level = None
         start_urls = [site.url + "/guarded"]
-        fallback_session = "solver"
+        retries = 1
 
         def configure_sessions(self, sessions):
             super().configure_sessions(sessions)
-            sessions.add("solver", AsyncFetcher(headers={"X-Solved": "yes"}, retries=0))
+            sessions.add("other", AsyncFetcher(headers={"X-Solved": "yes"}, retries=0))  # would get through
 
         def parse(self, response):
-            yield {"text": response.css("#real::text").get(), "session": response.request.session}
+            yield {"text": response.css("#real::text").get()}
 
     result = Guarded().run()
-    assert result.items == [{"text": "Guarded content", "session": "solver"}]
-    assert result.stats["blocked"] == 1
+    assert result.items == []  # asked twice, the same way, then given up on
+    assert (result.stats["blocked"], result.stats["backoffs"], result.stats.get("status/403")) == (2, 2, 2)
+    assert "likely cause: bot protection" in result.failure_report()  # reported, as likely, not certain
+    # the setting that fetched blocked pages another way is gone, and says so
+    with pytest.raises(ConfigurationError, match="fallback_session was removed: a blocked or rate-limited page"):
+        type("Old", (Spider,), {"fallback_session": "browser"})()
+    with pytest.raises(ConfigurationError, match="fallback_session was removed"):
+        Spider(fallback_session="browser")
+
+
+def test_a_refused_page_is_asked_again_through_the_same_proxy(fresh_site, proxies) -> None:
+    class Limited(Spider):
+        log_level = None
+        obey_robots_txt = False
+        start_urls = [fresh_site.url + "/ratelimited/pin?limit=1&after=0"]
+
+        def parse(self, response):
+            yield {"proxy": response.headers.get("x-via-proxy"), "attempt": response.css("#attempt::text").get()}
+
+    rotator = ProxyRotator([p.url for p in proxies])
+    result = Limited(proxies=rotator).run()
+    assert result.items == [{"proxy": "p1", "attempt": "2"}]  # a 429 through p1: p1 again, after the pause
+    assert [(s["failures"], s["uses"]) for s in rotator.stats()] == [(0, 2), (0, 0)]  # and not held against it
 
 
 def test_requests_can_pick_a_session(site) -> None:
@@ -362,16 +400,16 @@ def test_crawl_result_save(site, tmp_path) -> None:
 
 
 @pytest.mark.browser
-def test_browser_fallback_on_challenge(site) -> None:
-    class Challenge(Spider):
+def test_a_check_that_lets_a_browser_through_by_itself(site) -> None:
+    class Checked(Spider):
         log_level = None
         start_urls = [site.url + "/challenge"]
-        fallback_session = "browser"
+        use_browser = True
 
         def parse(self, response):
             yield {"text": response.css("#real::text").get(), "source": response.source}
 
-    result = Challenge().run()
+    result = Checked().run()
     assert result.items == [{"text": "Real content", "source": "browser"}]
 
 

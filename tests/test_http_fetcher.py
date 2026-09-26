@@ -27,9 +27,12 @@ def test_browser_like_headers_by_default(site) -> None:
 
 
 def test_custom_headers_and_referer(site) -> None:
-    echoed = wg.get(site.url + "/headers", headers={"X-Test": "1"}, referer="google").json()
+    echoed = wg.get(site.url + "/headers", headers={"X-Test": "1"}, referer=site.url + "/quotes/").json()
     assert echoed["X-Test"] == "1"
-    assert echoed["Referer"] == "https://www.google.com/"
+    assert echoed["Referer"] == site.url + "/quotes/"
+    # a Referer is the page that links here, not a pretend click from search results
+    with pytest.raises(wg.errors.ConfigurationError, match="referer is the URL of the page"):
+        wg.Fetcher(referer="google")
 
 
 def test_encodings(site) -> None:
@@ -158,7 +161,8 @@ async def test_async_fetcher_get_many(site) -> None:
 
 
 async def test_async_iter_many_yields_as_completed(site) -> None:
-    urls = [f"{site.url}/item/{i}?delay=0.{3 - i}" for i in range(3)]
+    # 0.3 s between finishes: slow CI runners can start one connection ~0.1 s late.
+    urls = [f"{site.url}/item/{i}?delay={0.3 * (3 - i):.1f}" for i in range(3)]
     async with AsyncFetcher() as fetcher:
         order = [r.url async for r in fetcher.iter_many(urls, concurrency=3)]
     assert order == list(reversed(urls))
@@ -190,3 +194,104 @@ async def test_no_proactor_warning_from_curl_cffi(site, monkeypatch) -> None:
         async with AsyncFetcher() as http:
             assert (await http.get(site.url + "/products/page/1")).status == 200
     assert not [w for w in caught if "Proactor" in str(w.message)]
+
+
+@pytest.fixture(scope="module")
+def big_server():
+    """Bodies larger than a limit: one that says its size, one that does not, and a gzip bomb."""
+    import gzip
+    import threading
+    from collections import Counter
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    bomb = gzip.compress(b"\0" * 30_000_000)  # (29 KB on the wire, 30 MB unpacked)
+    hits: Counter[str] = Counter()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            hits[self.path] += 1
+            try:
+                if self.path == "/big":
+                    self.send_response(200)
+                    self.send_header("Content-Length", "3000000")
+                    self.end_headers()
+                    self.wfile.write(b"x" * 3_000_000)
+                elif self.path == "/streamed":
+                    self.send_response(200)
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    for _ in range(30):
+                        self.wfile.write(b"186a0\r\n" + b"y" * 100_000 + b"\r\n")
+                    self.wfile.write(b"0\r\n\r\n")
+                elif self.path == "/bomb":
+                    self.send_response(200)
+                    self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Content-Length", str(len(bomb)))
+                    self.end_headers()
+                    self.wfile.write(bomb)
+                else:
+                    page = b"<html><body><a href='/big'>a big file</a></body></html>"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(page)))
+                    self.end_headers()
+                    self.wfile.write(page)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # (the client gave up on it: the point)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", hits
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_response_too_large_is_abandoned(big_server) -> None:
+    url, hits = big_server
+    with Fetcher(max_response_bytes=1_000_000, retries=2, backoff=0) as fetcher:
+        assert fetcher.get(url + "/").status == 200
+        for path in ("/big", "/streamed", "/bomb"):  # said, not said, and unpacked past it
+            with pytest.raises(FetchError, match=r"larger than max_response_bytes \(1,000,000 bytes\)") as error:
+                fetcher.get(url + path)
+            assert error.value.kind == "too_large" and not error.value.retryable and hits[path] == 1  # not retried
+    with Fetcher(max_response_bytes=None) as fetcher:
+        assert len(fetcher.get(url + "/big").body) == 3_000_000  # (no limit)
+
+
+def test_a_crawl_gives_up_on_a_page_too_large(big_server) -> None:
+    url, _ = big_server
+
+    class Links(wg.Spider):
+        name = "links"
+        max_response_bytes = 1_000_000
+
+        def parse(self, response):
+            for href in response.css("a::attr(href)").getall():
+                yield response.follow(href)
+
+    result = Links(start_urls=[url + "/"], retries=2, log_level="WARNING").run()
+    assert result.stats["pages"] == 2 and result.stats.get("retries", 0) == 0
+    [failure] = result.failures
+    assert failure.signature == "FetchError:too_large" and "larger than max_response_bytes" in failure.confirmed_cause
+
+
+def test_the_other_methods_and_regular_expressions_on_the_body(site) -> None:
+    with Fetcher(impersonate=None, retries=0) as fetcher:
+        assert fetcher.head(site.url + "/books/").status == 200
+        assert [getattr(fetcher, m)(site.url + "/headers").status for m in ("put", "patch", "delete")] == [501] * 3
+        page = fetcher.get(site.url + "/books/")
+    assert page.content == page.body and page.re(r"<title>(.*?)</title>") == ["All products | Books to Scrape"]
+    assert page.re_first(r"<h9>(.*)</h9>", default="none") == "none" and len(page.find_by_regex(r"[Nn]ext")) == 1
+
+    async def other_methods() -> list[int]:
+        async with AsyncFetcher(impersonate=None, retries=0) as fetcher:
+            return [
+                (await getattr(fetcher, m)(site.url + "/headers")).status for m in ("head", "put", "patch", "delete")
+            ]
+
+    import asyncio
+
+    assert asyncio.run(other_methods()) == [200, 501, 501, 501]

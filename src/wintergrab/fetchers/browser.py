@@ -4,29 +4,44 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import fnmatch
 import glob
 import json as _json
 import logging
 import os
-import platform
 import sys
 import threading
 import time
 import weakref
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import urljoin
 
-from ..errors import BrowserNotAvailable, FetchError, describe
+from ..credentials import Credentials, coerce, for_url, merge_headers
+from ..errors import (
+    BrowserFetchError,
+    BrowserNotAvailable,
+    FetchError,
+    FetchTimeout,
+    NetworkError,
+    NetworkPolicyError,
+    ProxyError,
+    describe,
+)
+from ..netpolicy import NetworkPolicy
+from ..parser.layout import LAYOUT_SCRIPT, MAX_BOXES, Layout
 from ..proxy import ProxyRotator, proxy_for_playwright, proxy_label
 from ..request import Request
 from ..utils import ensure_scheme, maybe_await
+from .actions import Action, parse_actions, run_actions
 from .blocking import has_challenge_markers
 from .cache import CacheLayer, HTTPCache
 from .http import DEFAULT_RETRY_STATUSES, PROXY_FAILURE_STATUSES
+from .resources import DEFAULT_BLOCKED_RESOURCES, ResourceFilter
 from .response import Headers, Response
 
 if TYPE_CHECKING:
@@ -36,8 +51,18 @@ log = logging.getLogger("wintergrab.browser")
 
 T = TypeVar("T")
 
-DEFAULT_BLOCKED_RESOURCES = ("image", "media", "font")
-MAX_IDLE_CONTEXTS = 16  # browser contexts (one per proxy) kept open when idle
+MAX_IDLE_CONTEXTS = 16
+# Chromium net errors that mean "could not connect" (worth retrying).
+_CONNECTION_ERRORS = (
+    "ERR_CONNECTION_REFUSED",
+    "ERR_CONNECTION_RESET",
+    "ERR_CONNECTION_CLOSED",
+    "ERR_CONNECTION_TIMED_OUT",
+    "ERR_ADDRESS_UNREACHABLE",
+    "ERR_INTERNET_DISCONNECTED",
+    "ERR_NETWORK_CHANGED",
+    "ERR_EMPTY_RESPONSE",
+)  # browser contexts (one per proxy) kept open when idle
 
 INSTALL_HINT = (
     "Browser fetching needs Playwright and a Chromium build:\n"
@@ -46,63 +71,10 @@ INSTALL_HINT = (
     "Or point WINTERGRAB_BROWSER_PATH at an existing Chrome/Chromium binary."
 )
 
-# Evasions for the most common automation tells. They make a headless browser
-# look like a normal one to simple checks; they are not a guarantee.
-STEALTH_SCRIPT = r"""
-(() => {
-  const define = (obj, prop, value) => {
-    try { Object.defineProperty(obj, prop, { get: () => value, configurable: true }); } catch (e) {}
-  };
-  define(Navigator.prototype, 'webdriver', undefined);
-  define(Navigator.prototype, 'languages', __LANGUAGES__);
-  define(Navigator.prototype, 'hardwareConcurrency', 8);
-  define(Navigator.prototype, 'deviceMemory', 8);
-  if (navigator.plugins && navigator.plugins.length === 0) {
-    const fake = [
-      { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-      { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-      { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-    ];
-    define(Navigator.prototype, 'plugins', Object.assign(fake, { item: i => fake[i], namedItem: n => fake.find(p => p.name === n) }));
-  }
-  if (!window.chrome) {
-    window.chrome = { runtime: {}, app: { isInstalled: false }, csi: () => ({}), loadTimes: () => ({}) };
-  }
-  if (navigator.permissions && navigator.permissions.query) {
-    const original = navigator.permissions.query.bind(navigator.permissions);
-    navigator.permissions.query = (params) =>
-      params && params.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission, onchange: null })
-        : original(params);
-  }
-  const patchWebGL = (proto) => {
-    if (!proto) return;
-    const getParameter = proto.getParameter;
-    proto.getParameter = function (p) {
-      if (p === 37445) return 'Intel Inc.';
-      if (p === 37446) return 'Intel Iris OpenGL Engine';
-      return getParameter.call(this, p);
-    };
-  };
-  patchWebGL(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
-  patchWebGL(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
-})();
-"""
 
-STEALTH_ARGS = ["--disable-blink-features=AutomationControlled", "--no-default-browser-check", "--no-first-run"]
-
-
-def _platform_token() -> str:
-    system = platform.system()
-    if system == "Windows":
-        return "Windows NT 10.0; Win64; x64"
-    if system == "Darwin":
-        return "Macintosh; Intel Mac OS X 10_15_7"
-    return "X11; Linux x86_64"
-
-
-def _discover_chromium() -> list[str]:
-    """Chromium/Chrome binaries Playwright (or the system) may already have."""
+def _discover_chromium(headless: bool = True) -> list[str]:
+    """Chromium/Chrome binaries Playwright (or the system) may already have. Headless, Playwright's headless
+    shell comes first, as Playwright itself picks it; with a window, it is left out (it cannot show one)."""
     found: list[str] = []
     env = os.environ.get("WINTERGRAB_BROWSER_PATH")
     if env:
@@ -113,14 +85,19 @@ def _discover_chromium() -> list[str]:
         str(Path.home() / "Library" / "Caches" / "ms-playwright"),
         str(Path(os.environ.get("LOCALAPPDATA", "")) / "ms-playwright") if os.environ.get("LOCALAPPDATA") else None,
     ]
-    patterns = [
+    shells = [
+        "chromium_headless_shell-*/chrome-*/chrome-headless-shell",
+        "chromium_headless_shell-*/chrome-*/headless_shell",
+        "chromium_headless_shell-*/chrome-*/chrome-headless-shell.exe",
+        "chromium_headless_shell-*/chrome-*/headless_shell.exe",
+    ]
+    browsers = [
         "chromium-*/chrome-linux*/chrome",
         "chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
         "chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
         "chromium-*/chrome-win*/chrome.exe",
-        "chromium_headless_shell-*/chrome-*/chrome-headless-shell",
-        "chromium_headless_shell-*/chrome-*/headless_shell",
     ]
+    patterns = [*shells, *browsers] if headless else browsers
     for root in filter(None, roots):
         for pattern in patterns:
             found.extend(sorted(glob.glob(os.path.join(root, pattern)), reverse=True))
@@ -136,7 +113,8 @@ def _discover_chromium() -> list[str]:
 
 @dataclass
 class CapturedResponse:
-    """An XHR/fetch response recorded while a page rendered (see ``capture=``)."""
+    """An XHR/fetch response recorded while a page rendered (see ``capture=``). ``order`` is the order the page
+    made its request in (``response.captured`` is sorted by it): answers may come back in any order."""
 
     url: str
     method: str
@@ -173,17 +151,28 @@ def _capture_matcher(capture: bool | str | Callable[[str], bool] | None) -> Call
     return lambda url, ctype: bool(func(url))
 
 
+_CONSOLE_KEPT = 200  # console messages kept per page
+
+
+class _PageError:
+    """An uncaught error in the page's scripts, kept with its console messages."""
+
+    type = "pageerror"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
 class AsyncBrowserFetcher:
     """Fetch pages with a real (headless) Chromium via Playwright.
 
-    Use it for pages that build their content with JavaScript, need clicks or
-    scrolling, or reject plain HTTP clients. One browser is shared by all
-    requests; each request gets its own tab.
+    Use it for pages that build their content with JavaScript, or need clicks
+    or scrolling. One browser is shared by all requests; each request gets its
+    own tab. The browser is Playwright's Chromium as it is: nothing hides that
+    it is automated (see docs/responsible-access.md).
 
     Args:
         headless: Run without a window.
-        stealth: Hide common automation tells (``navigator.webdriver``, the
-            ``HeadlessChrome`` user agent, missing plugins...).
         executable_path: Chrome/Chromium binary to use (also read from
             ``$WINTERGRAB_BROWSER_PATH``).
         channel: Playwright browser channel, e.g. ``"chrome"`` to drive an
@@ -199,6 +188,15 @@ class AsyncBrowserFetcher:
             you open) or Playwright cookie dicts.
         block_resources: Resource types not to download (``"image"``,
             ``"media"``, ``"font"``, ``"stylesheet"``...). Saves bandwidth.
+        resource_filter: Also block ads, analytics and trackers: ``True`` for
+            the built-in lists, a dict of :class:`~wintergrab.fetchers.resources.ResourceFilter`
+            options, or a ``ResourceFilter``. ``response.blocked_resources``
+            counts what was blocked, by reason.
+        network_policy: Refuse requests to forbidden destinations (SSRF
+            protection), e.g. ``"public"``. Every request the page makes is
+            checked; redirect hops of the page itself are checked after the
+            fact (Playwright cannot intercept them), and a page reached
+            through a forbidden hop is discarded.
         timeout: Navigation timeout in seconds.
         wait_until: ``"load"``, ``"domcontentloaded"``, ``"networkidle"`` or ``"commit"``.
         max_pages: How many tabs may be open at once.
@@ -212,13 +210,18 @@ class AsyncBrowserFetcher:
         cache: Cache rendered pages (``True``, a path or an
             :class:`~wintergrab.HTTPCache`); handy with ``cache_mode="prefer"``
             to render each page only once while developing.
+        credentials: Headers and cookies for one site each (:class:`~wintergrab.credentials.Credentials`):
+            sent to that site only. The cookies are the browser's for that domain; the headers go on the
+            requests to it, whether the page or what it loads, and a redirect is followed without them (so that
+            they cannot go along to another site, as Chromium would take them). Those requests are sent from
+            Playwright and their answers handed to the page, whose address Chromium then does not know: it
+            refuses the page's requests to other sites' private addresses (Private Network Access).
     """
 
     def __init__(
         self,
         *,
         headless: bool = True,
-        stealth: bool = True,
         executable_path: str | None = None,
         channel: str | None = None,
         proxy: str | None = None,
@@ -243,13 +246,15 @@ class AsyncBrowserFetcher:
         cache: HTTPCache | str | bool | None = None,
         cache_mode: str | None = None,
         cache_ttl: float | None = None,
+        resource_filter: ResourceFilter | Mapping[str, Any] | bool | None = None,
+        network_policy: NetworkPolicy | str | bool | None = None,
+        credentials: Credentials | Iterable[Credentials] | None = None,
     ) -> None:
         if proxy and proxies:
             raise ValueError("Pass either proxy= or proxies=, not both")
         if user_data_dir and proxies:
             raise ValueError("user_data_dir cannot be combined with rotating proxies")
         self.headless = headless
-        self.stealth = stealth
         self.executable_path = executable_path
         self.channel = channel
         self.proxy = proxy
@@ -261,6 +266,9 @@ class AsyncBrowserFetcher:
         self.extra_headers = dict(extra_headers or {})
         self.cookies = cookies
         self.block_resources = frozenset(block_resources or ())
+        self.resource_filter = ResourceFilter.coerce(resource_filter, block_types=self.block_resources)
+        self.network_policy = NetworkPolicy.coerce(network_policy)
+        self.credentials = coerce(credentials)
         self.timeout = timeout
         self.wait_until = wait_until
         self.max_pages = max(1, max_pages)
@@ -280,16 +288,20 @@ class AsyncBrowserFetcher:
         self._context_users: dict[str, int] = {}
         self._context_lock: asyncio.Lock | None = None
         self._persistent: Any = None
+        self._persistent_closed = False
+        #: How many times the browser was started again, having closed without being asked to (a crash, a kill).
+        self.restarts = 0
         self._lock: asyncio.Lock | None = None
         self._sem: asyncio.Semaphore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._ua: str | None = None
 
     # ------------------------------------------------------------------ #
     # lifecycle
     # ------------------------------------------------------------------ #
     async def start(self) -> None:
-        """Launch the browser (done automatically on the first request)."""
+        """Launch the browser (done automatically on the first request), and launch it again when it closed without
+        being asked to: it crashed, or was killed (by the system, short of memory). The pages open then fail, and
+        those asked for after get the new browser; :attr:`restarts` counts the times."""
         loop = asyncio.get_running_loop()
         if self._loop is not loop:
             self._lock, self._sem, self._loop = asyncio.Lock(), asyncio.Semaphore(self.max_pages), loop
@@ -297,7 +309,11 @@ class AsyncBrowserFetcher:
         assert self._lock is not None
         async with self._lock:
             if self._browser is not None or self._persistent is not None:
-                return
+                if self._alive():
+                    return
+                await self._forget()
+                self.restarts += 1
+                log.warning("the browser closed without being asked to (it crashed, or was killed): starting it again")
             try:
                 from playwright.async_api import async_playwright
             except ImportError:
@@ -313,9 +329,6 @@ class AsyncBrowserFetcher:
     def _launch_options(self) -> dict[str, Any]:
         args = list(self.launch_args)
         opts: dict[str, Any] = {"headless": self.headless, "args": args}
-        if self.stealth:
-            args.extend(a for a in STEALTH_ARGS if a not in args)
-            opts["ignore_default_args"] = ["--enable-automation"]
         if self.proxy:
             opts["proxy"] = proxy_for_playwright(self.proxy)
         return opts
@@ -332,10 +345,8 @@ class AsyncBrowserFetcher:
             env_path = os.environ.get("WINTERGRAB_BROWSER_PATH")
             if env_path:
                 attempts.append({"executable_path": env_path})
-            if self.stealth and self.headless:
-                attempts.append({"channel": "chromium"})  # "new" headless: a full Chrome, no HeadlessChrome tells
             attempts.append({})
-            attempts.extend({"executable_path": p} for p in _discover_chromium())
+            attempts.extend({"executable_path": p} for p in _discover_chromium(self.headless))
         errors: list[str] = []
         for extra in attempts:
             opts = {**base, **extra}
@@ -344,6 +355,8 @@ class AsyncBrowserFetcher:
                     self._persistent = await chromium.launch_persistent_context(
                         self.user_data_dir, **opts, **self._context_options(None)
                     )
+                    self._persistent_closed = False
+                    self._persistent.on("close", self._on_persistent_close)
                     await self._prepare_context(self._persistent)
                 else:
                     self._browser = await chromium.launch(**opts)
@@ -353,18 +366,28 @@ class AsyncBrowserFetcher:
                 errors.append(f"{extra or 'default'}: {describe(exc)}")
         raise BrowserNotAvailable(INSTALL_HINT + "\n\nLaunch attempts:\n  " + "\n  ".join(errors))
 
+    def _on_persistent_close(self, context: Any) -> None:
+        if context is self._persistent:
+            self._persistent_closed = True
+
+    def _alive(self) -> bool:
+        """Whether the browser is still there (a crash or a kill closes it without our asking)."""
+        if self._browser is not None:
+            return bool(self._browser.is_connected())
+        return self._persistent is not None and not self._persistent_closed
+
+    async def _forget(self) -> None:
+        """Let go of a browser that is gone, its contexts, and the Playwright driver that ran it."""
+        self._contexts.clear()
+        self._context_users.clear()
+        for obj in (self._persistent, self._browser, self._pw):
+            if obj is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(obj.stop() if obj is self._pw else obj.close(), 10)
+        self._persistent = self._browser = self._pw = None
+
     def _user_agent(self) -> str | None:
-        if self.user_agent:
-            return self.user_agent
-        if not self.stealth:
-            return None
-        if self._ua is None and self._browser is not None:
-            major = str(self._browser.version).split(".")[0]
-            self._ua = (
-                f"Mozilla/5.0 ({_platform_token()}) AppleWebKit/537.36 (KHTML, like Gecko) "
-                f"Chrome/{major}.0.0.0 Safari/537.36"
-            )
-        return self._ua
+        return self.user_agent or None
 
     def _context_options(self, proxy: str | None) -> dict[str, Any]:
         opts: dict[str, Any] = {
@@ -385,22 +408,17 @@ class AsyncBrowserFetcher:
         return opts
 
     async def _prepare_context(self, context: Any) -> None:
-        if self.stealth:
-            lang = self.locale.split("-")[0]
-            languages = f"['{self.locale}', '{lang}']" if lang != self.locale else f"['{self.locale}']"
-            await context.add_init_script(STEALTH_SCRIPT.replace("__LANGUAGES__", languages))
-        if self.block_resources:
-            blocked = self.block_resources
-
-            async def router(route: Any) -> None:
-                if route.request.resource_type in blocked:
-                    await route.abort()
-                else:
-                    await route.continue_()
-
-            await context.route("**/*", router)
         if self.cookies and not isinstance(self.cookies, Mapping):
             await context.add_cookies([dict(c) for c in self.cookies])
+        scoped = [
+            # (".club.example": the site and the hosts below it; an address, or "localhost", is a host of its own)
+            {"name": name, "value": value, "domain": item.site if _single_host(item.site) else "." + item.site,
+             "path": "/"}
+            for item in self.credentials
+            for name, value in item.cookies.items()
+        ]  # fmt: skip
+        if scoped:
+            await context.add_cookies(scoped)
 
     async def _acquire_context(self, proxy: str | None) -> tuple[str | None, Any]:
         """The browser context for ``proxy`` (created once, even under concurrency)."""
@@ -503,8 +521,11 @@ class AsyncBrowserFetcher:
         wait_until: str | None = None,
         scroll: bool | int = False,
         page_action: Callable[[Any], Any] | None = None,
-        screenshot: str | Path | None = None,
+        screenshot: str | Path | bool | None = None,
         capture: bool | str | Callable[[str], bool] | None = None,
+        layout: bool = False,
+        actions: Any = None,
+        downloads: str | Path | None = None,
         request: Request | None = None,
         **_ignored: Any,
     ) -> Response:
@@ -518,12 +539,23 @@ class AsyncBrowserFetcher:
                 ``True`` scrolls up to 10 times; an int sets the limit.
             page_action: ``async def action(page)`` that receives Playwright's
                 async ``Page`` to click, type, etc. before capture.
-            screenshot: Save a full-page PNG screenshot here.
+            screenshot: Take a full-page PNG screenshot: ``True`` keeps it in ``response.screenshot``
+                (for a model that reads images); a path also saves it there.
+            layout: Record where the page's text was drawn in ``response.layout`` (a
+                :class:`~wintergrab.parser.layout.Layout`), for reading tables and labelled values
+                from what the page looks like (:mod:`wintergrab.extraction.visual`).
+            actions: What to do on the page before it is read: steps such as ``"click .more until-gone"``,
+                ``{"fill": {"#q": "parka"}}``, ``"tabs .tabs a"`` (see :mod:`wintergrab.fetchers.actions`).
+                What each did is in ``response.actions``; ``response.snapshots`` and
+                ``response.downloads`` hold what they kept.
+            downloads: The directory ``download`` steps save files in (a temporary one otherwise).
             capture: Record the page's own API calls (XHR/fetch) in
                 ``response.captured``: ``True`` for JSON responses, a URL glob or
                 substring (``"*/api/*"``, ``"graphql"``), or a function of the URL.
                 Often the cleanest way to scrape a JavaScript site: take the data
-                the page itself downloads.
+                the page itself downloads. A page's calls do not hold up its
+                ``load`` event: the page is given up to 10 seconds more for its
+                network to go quiet (and read then, quiet or not).
         """
         if method.upper() != "GET":
             raise ValueError("Browser fetchers only support GET requests")
@@ -531,23 +563,32 @@ class AsyncBrowserFetcher:
         req = request or Request(url)
         layer = self._cache_layer
         offline = layer is not None and layer.cache.mode == "offline"
-        # Captures and screenshots need a live page, so they bypass the cache -
+        # Captures, screenshots and layouts need a live page, so they bypass the cache -
         # except offline, where the network is never used.
-        use_cache = layer is not None and (offline or (not capture and not screenshot))
+        steps = parse_actions(actions) if actions else []
+        use_cache = layer is not None and (offline or (not capture and not screenshot and not layout and not steps))
         if use_cache:
             assert layer is not None
             cached, _, _ = layer.before(req, self.adaptive_storage)
             if cached is not None:
-                if capture or screenshot:
-                    log.warning("offline: %s served from cache without captures/screenshot", url)
+                if capture or screenshot or layout or steps:
+                    log.warning("offline: %s served from cache without captures, screenshot, layout or actions", url)
                 return cached
+        if self.network_policy is not None:
+            await self.network_policy.check(url, proxied=self._proxied(proxy))
         await self.start()
         assert self._sem is not None
         attempts = 1 + (self.retries if retries is None else max(0, retries))
         last_error: FetchError | None = None
+        chosen, rotated, switch = proxy, False, True
         for attempt in range(attempts):
-            chosen = proxy or (self.proxies.next() if self.proxies is not None else None)
-            rotated = proxy is None and self.proxies is not None
+            if attempt:
+                await self.start()  # (the browser may have closed under the last attempt: a new one then)
+            if switch:  # the first attempt, or the last one's proxy failed: pick one
+                chosen = proxy or (self.proxies.next() if self.proxies is not None else None)
+                rotated = proxy is None and self.proxies is not None
+            elif rotated and self.proxies is not None and chosen is not None:
+                self.proxies.reuse(chosen)
             try:
                 async with self._sem:
                     response = await self._fetch_once(
@@ -562,14 +603,18 @@ class AsyncBrowserFetcher:
                         page_action,
                         screenshot,
                         _capture_matcher(capture),
+                        layout,
+                        steps,
+                        downloads,
                     )
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, NetworkPolicyError):
                 raise
             except Exception as exc:
                 last_error = exc if isinstance(exc, FetchError) else self._wrap(exc, url, chosen)
                 if rotated and self.proxies is not None:
                     self.proxies.report_failure(chosen)
                 if attempt + 1 < attempts and last_error.retryable:
+                    switch = True
                     await asyncio.sleep(min(10.0, 1.0 * 2**attempt))
                     continue
                 raise last_error from exc
@@ -579,6 +624,8 @@ class AsyncBrowserFetcher:
                 else:
                     self.proxies.report_success(chosen)
             if response.status in self.retry_statuses and attempt + 1 < attempts:
+                # The site's own answer (429, 503...) is asked for again the same way, through the same proxy.
+                switch = response.status in PROXY_FAILURE_STATUSES
                 await asyncio.sleep(min(10.0, 1.0 * 2**attempt))
                 continue
             if use_cache and self._cache_layer is not None:
@@ -587,21 +634,109 @@ class AsyncBrowserFetcher:
         assert last_error is not None  # pragma: no cover
         raise last_error  # pragma: no cover
 
+    def _proxied(self, proxy: str | None) -> bool:
+        return bool(proxy or self.proxy or self.proxies)
+
     def _wrap(self, exc: BaseException, url: str, proxy: str | None) -> FetchError:
+        """Turn a Playwright/Chromium error into the matching :class:`FetchError` subclass."""
         text = str(exc)
-        is_timeout = "Timeout" in type(exc).__name__ or "timeout" in text.lower()
-        is_proxy = "ERR_PROXY" in text or "ERR_TUNNEL" in text
-        retryable = "ERR_NAME_NOT_RESOLVED" not in text and "invalid url" not in text.lower()
-        where = f" via {proxy_label(proxy)}" if proxy else ""
-        return FetchError(
-            url,
-            f"{describe(exc)}{where}",
-            cause=exc,
-            proxy=proxy,
-            is_proxy_error=is_proxy,
-            is_timeout=is_timeout,
-            retryable=retryable,
-        )
+        message = f"{describe(exc)}{f' via {proxy_label(proxy)}' if proxy else ''}"
+        common: dict[str, Any] = {"cause": exc, "proxy": proxy}
+        if "Timeout" in type(exc).__name__ or "timeout" in text.lower():
+            return FetchTimeout(url, message, **common)
+        if "ERR_PROXY" in text or "ERR_TUNNEL" in text:
+            return ProxyError(url, message, **common)
+        if "ERR_NAME_NOT_RESOLVED" in text:
+            return NetworkError(url, message, kind="dns", retryable=False, **common)
+        if "ERR_CERT" in text:
+            return NetworkError(url, message, kind="tls", retryable=False, **common)
+        if "ERR_SSL" in text:
+            return NetworkError(url, message, kind="tls", **common)
+        if "ERR_TOO_MANY_REDIRECTS" in text:
+            return NetworkError(url, message, kind="redirects", retryable=False, **common)
+        if "invalid url" in text.lower() or "ERR_INVALID_URL" in text:
+            return NetworkError(url, message, kind="invalid_url", retryable=False, **common)
+        if any(code in text for code in _CONNECTION_ERRORS):
+            return NetworkError(url, message, kind="connect", **common)
+        return BrowserFetchError(url, message, **common)
+
+    def _router(
+        self, page: Any, blocked: Counter[str], proxied: bool, refused: list[str] | None = None
+    ) -> Callable[[Any], Awaitable[None]]:
+        """A route handler applying the resource filter and the network policy to every request of ``page``
+        (the addresses the policy refuses go in ``refused``, the last 20)."""
+        resource_filter, policy = self.resource_filter, self.network_policy
+
+        async def handle(route: Any) -> None:
+            request = route.request
+            url = request.url
+            try:
+                main = request.is_navigation_request() and request.frame == page.main_frame
+            except Exception:  # pragma: no cover - frame detached
+                main = False
+            reason: str | None = None
+            if policy is not None and url.startswith(("http:", "https:")):
+                try:
+                    await policy.check(url, proxied=proxied)
+                except NetworkPolicyError:
+                    reason = "policy"
+                    if refused is not None:
+                        refused[:] = [*refused[-19:], url]
+                except FetchError:
+                    pass  # e.g. a name that does not resolve: let the browser report it
+            if reason is None and resource_filter is not None:
+                reason = resource_filter.reason(url, request.resource_type, page.url, main_document=main)
+                if reason is not None:
+                    resource_filter.stats[reason] += 1
+            try:
+                if reason is not None:
+                    blocked[reason] += 1
+                    await route.abort("blockedbyclient")
+                elif extra := for_url(self.credentials, url) if self._signs else {}:
+                    await self._signed(route, extra)
+                else:
+                    await route.continue_()
+            except Exception:  # pragma: no cover - the page is closing
+                pass
+
+        return handle
+
+    @property
+    def _signs(self) -> bool:
+        """Whether requests are given their site's credential headers (in the route handler)."""
+        return any(item.headers for item in self.credentials)
+
+    async def _signed(self, route: Any, extra: Mapping[str, str]) -> None:
+        """Send a request with its site's credential headers, and give the page the answer as it is: a redirect is
+        the browser's to follow, and it follows it without them (Chromium would carry headers added to a request on
+        to another site; Playwright does not route the hops of a redirect)."""
+        try:
+            answer = await route.fetch(
+                headers=merge_headers(extra, route.request.headers), max_redirects=0, timeout=self.timeout * 1000
+            )
+        except Exception as exc:
+            log.info("could not fetch %s: %s", route.request.url, describe(exc))
+            await route.abort("failed")
+            return
+        await route.fulfill(response=answer)
+
+    async def _check_navigation(self, hops: list[str], main: Any, proxied: bool) -> str | None:
+        """Check the page's redirect hops (Playwright's router only sees the first) and the address
+        the page came from. Raises :class:`NetworkPolicyError`; returns the server IP if known."""
+        policy = self.network_policy
+        for hop in dict.fromkeys(hops):
+            if hop.startswith(("http:", "https:")):
+                await policy.check(hop, proxied=proxied)  # type: ignore[union-attr]
+        address = None
+        if main is not None:
+            try:
+                server = await main.server_addr()
+            except Exception:  # pragma: no cover - not available for every response
+                server = None
+            address = (server or {}).get("ipAddress") or None
+        if policy is not None and hops:
+            policy.check_connected(hops[-1], address, proxied=proxied)
+        return address
 
     async def _fetch_once(
         self,
@@ -614,8 +749,11 @@ class AsyncBrowserFetcher:
         wait_until: str | None,
         scroll: bool | int,
         page_action: Callable[[Any], Any] | None,
-        screenshot: str | Path | None,
+        screenshot: str | Path | bool | None,
         capture: Callable[[str, str], bool] | None = None,
+        layout: bool = False,
+        steps: Sequence[Action] = (),
+        downloads: str | Path | None = None,
     ) -> Response:
         timeout_ms = (timeout or self.timeout) * 1000
         context_key, context = await self._acquire_context(proxy)
@@ -625,7 +763,12 @@ class AsyncBrowserFetcher:
             self._release_context(context_key)
             raise
         started = time.monotonic()
+        blocked: Counter[str] = Counter()
+        refused: list[str] = []
+        proxied = self._proxied(proxy)
         try:
+            if self.resource_filter or self.network_policy is not None or self._signs:
+                await page.route("**/*", self._router(page, blocked, proxied, refused))
             if headers:
                 await page.set_extra_http_headers(dict(headers))
             if isinstance(self.cookies, Mapping) and self.cookies:
@@ -633,6 +776,7 @@ class AsyncBrowserFetcher:
             last_nav: list[Any] = []
             captured: list[CapturedResponse] = []
             grabbing: set[asyncio.Future[None]] = set()
+            requested: dict[Any, int] = {}  # the page's calls, numbered as it makes them (answers come in any order)
 
             async def grab(resp: Any, order: int) -> None:
                 try:
@@ -667,12 +811,39 @@ class AsyncBrowserFetcher:
                         and resp.request.resource_type in ("xhr", "fetch")
                         and capture(resp.url, resp.headers.get("content-type", ""))
                     ):
-                        grabbing.add(asyncio.ensure_future(grab(resp, len(grabbing))))
+                        order = requested.get(resp.request, len(requested) + len(grabbing))
+                        grabbing.add(asyncio.ensure_future(grab(resp, order)))
                 except Exception:  # pragma: no cover - page may be closing
                     pass
 
+            def on_request(request: Any) -> None:
+                try:
+                    if capture is not None and request.resource_type in ("xhr", "fetch"):
+                        requested.setdefault(request, len(requested))
+                except Exception:  # pragma: no cover - page may be closing
+                    pass
+
+            page.on("request", on_request)
             page.on("response", on_response)
-            nav = await page.goto(req.url, wait_until=wait_until or self.wait_until, timeout=timeout_ms)
+            console: list[dict[str, str]] = []
+
+            def on_console(message: Any) -> None:
+                if len(console) < _CONSOLE_KEPT:
+                    try:
+                        console.append({"type": message.type, "text": message.text[:2000]})
+                    except Exception:  # pragma: no cover - page may be closing
+                        pass
+
+            page.on("console", on_console)
+            page.on("pageerror", lambda error: on_console(_PageError(str(error))))
+            try:
+                nav = await page.goto(req.url, wait_until=wait_until or self.wait_until, timeout=timeout_ms)
+            except Exception as exc:
+                if "Download is starting" not in str(exc):
+                    raise
+                # a file the browser downloads rather than shows (an attachment, a PDF with no viewer):
+                # the file is the answer, as over HTTP
+                return await self._download(context, req, timeout_ms, proxied, started)
             if self.wait_for_challenge:
                 await self._wait_out_challenge(page)
             if wait_for:
@@ -681,25 +852,61 @@ class AsyncBrowserFetcher:
                 await self._scroll(page, 10 if scroll is True else int(scroll))
             if page_action is not None:
                 await maybe_await(page_action(page))
+            done = None
+            if steps:
+                refused.clear()
+                try:
+                    done = await run_actions(page, steps, timeout=timeout or self.timeout, downloads=downloads)
+                except BrowserFetchError as exc:
+                    if refused and page.url.startswith("chrome-error:"):  # a step led where the policy refuses
+                        raise NetworkPolicyError(
+                            req.url,
+                            f"browser action {exc.context.get('action')!r} led to {refused[-1]}, which the"
+                            " network policy refuses",
+                            context={"action": exc.context.get("action"), "refused": refused[-1]},
+                        ) from None
+                    raise
             if wait:
                 await page.wait_for_timeout(wait * 1000)
+            if capture is not None:
+                # fetch() calls do not hold up the load event: let the page's calls finish, without failing
+                # on a page whose network never goes quiet (polling, beacons)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 10_000))
+                except Exception:
+                    pass
             if grabbing:
                 await asyncio.wait(grabbing, timeout=10)
             main = last_nav[-1] if last_nav else nav
+            address = None
+            if self.network_policy is not None:
+                address = await self._check_navigation([r.url for r in last_nav] + [page.url], main, proxied)
             status = main.status if main is not None else 200
             raw_headers: dict[str, str] = await main.all_headers() if main is not None else {}
             ctype = raw_headers.get("content-type", "")
             if main is not None and ctype and "html" not in ctype and "xml" not in ctype:
                 body = await main.body()
                 encoding = None
+                if ctype.split(";")[0].strip().lower() == "application/pdf" and not body.lstrip().startswith(b"%PDF-"):
+                    # The browser shows a PDF in its viewer, and hands back the viewer's page: ask for the file
+                    # itself, with the browser's cookies (and no redirect: the address was checked already).
+                    direct = await context.request.get(main.url, max_redirects=0, timeout=timeout_ms)
+                    if direct.ok:
+                        body = await direct.body()
             else:
                 body = (await page.content()).encode("utf-8")
                 encoding = "utf-8"
                 if ctype:
                     raw_headers["content-type"] = ctype.split(";")[0] + "; charset=utf-8"
+            png = None
             if screenshot:
-                Path(screenshot).parent.mkdir(parents=True, exist_ok=True)
-                await page.screenshot(path=str(screenshot), full_page=True)
+                png = await page.screenshot(full_page=True)
+                if not isinstance(screenshot, bool):
+                    Path(screenshot).parent.mkdir(parents=True, exist_ok=True)
+                    Path(screenshot).write_bytes(png)
+            drawn = None
+            if layout and encoding is not None:  # an HTML page, not a PDF or an image
+                drawn = Layout.from_dict(await page.evaluate(LAYOUT_SCRIPT, MAX_BOXES))
             jar = await context.cookies(page.url)
             cookies = {c["name"]: c["value"] for c in jar}
             history = [r.url for r in last_nav[:-1]]
@@ -718,7 +925,14 @@ class AsyncBrowserFetcher:
                 adaptive_storage=self.adaptive_storage,
             )
             response.captured = sorted(captured, key=lambda c: c.order)
+            response.screenshot = png
+            response.layout = drawn
+            response.console = console
+            if done is not None:
+                response.actions, response.snapshots, response.downloads = done.log, done.snapshots, done.downloads
             response.cookie_jar = [dict(c) for c in jar]
+            response.blocked_resources = dict(blocked)
+            response.ip = address
             return response
         finally:
             try:
@@ -726,6 +940,37 @@ class AsyncBrowserFetcher:
             except Exception:
                 pass
             self._release_context(context_key)
+
+    async def _download(self, context: Any, req: Request, timeout_ms: float, proxied: bool, started: float) -> Response:
+        """The file at ``req.url``, asked for directly with the browser's cookies, following redirects itself so
+        that each one is checked like the page's own (the network policy, 10 at most)."""
+        url, history = req.url, []
+        for _ in range(10):
+            if self.network_policy is not None:
+                await self.network_policy.check(url, proxied=proxied)
+            answer = await context.request.get(url, max_redirects=0, timeout=timeout_ms)
+            location = answer.headers.get("location")
+            if 300 <= answer.status < 400 and location:
+                history.append(url)
+                url = urljoin(url, location)
+                continue
+            jar = await context.cookies(url)
+            response = Response(
+                url,
+                status=answer.status,
+                headers=Headers(dict(answer.headers)),
+                body=await answer.body(),
+                request=req,
+                reason=answer.status_text or "",
+                cookies={c["name"]: c["value"] for c in jar},
+                elapsed=time.monotonic() - started,
+                history=history,
+                source="browser",
+                adaptive_storage=self.adaptive_storage,
+            )
+            response.cookie_jar = [dict(c) for c in jar]
+            return response
+        raise NetworkError(req.url, "too many redirects", kind="redirects", retryable=False)
 
     async def _wait_out_challenge(self, page: Any) -> None:
         async def challenged(seen: bool) -> bool:
@@ -864,6 +1109,11 @@ class BrowserFetcher:
         urls = list(urls)
         return self._run(lambda: self._async.get_many(urls, **kwargs))
 
+    @property
+    def restarts(self) -> int:
+        """How many times the browser was started again, having closed without being asked to."""
+        return self._async.restarts
+
     def export_cookies(self, url: str | None = None, *, proxy: str | None = None) -> list[dict[str, Any]]:
         """Cookies of the browser session - see :meth:`AsyncBrowserFetcher.export_cookies`."""
         return self._run(lambda: self._async.export_cookies(url, proxy=proxy))
@@ -895,3 +1145,8 @@ class BrowserFetcher:
             self.close(timeout=10)
         except Exception:
             pass
+
+
+def _single_host(site: str) -> bool:
+    """Whether a site is one host with none below it that cookies could reach: an address, or a one-label name."""
+    return "." not in site or site.replace(".", "").isdigit() or ":" in site

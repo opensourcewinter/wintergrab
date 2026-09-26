@@ -15,16 +15,18 @@ _Entry = tuple[int, int, Request]
 class Scheduler:
     """Holds pending requests, one heap per domain.
 
-    ``pop_ready`` picks the highest-priority request (FIFO among equals)
-    from any domain whose throttle slot is free, so one slow or backed-off
-    site never blocks the others.
+    ``pop_ready`` picks the highest-priority request (FIFO among equals, or
+    LIFO with ``lifo=True`` for depth-first crawls) from any domain whose
+    throttle slot is free, so one slow or backed-off site never blocks the others.
     """
 
-    def __init__(self, *, dedupe: bool = True) -> None:
+    def __init__(self, *, dedupe: bool = True, lifo: bool = False) -> None:
         self.dedupe = dedupe
+        self.lifo = lifo
+        self._step = -1 if lifo else 1
         self._queues: dict[str, list[_Entry]] = {}
         self._seen: set[bytes] = set()
-        self._counter = itertools.count()
+        self._counter = itertools.count(1)
         self._size = 0
         self.duplicates = 0
         self.retry_count = 0  # queued requests that are retries
@@ -48,19 +50,22 @@ class Scheduler:
                 return False
             self._seen.add(fp)
         domain = request.host
-        heapq.heappush(self._queues.setdefault(domain, []), (-request.priority, next(self._counter), request))
+        heapq.heappush(
+            self._queues.setdefault(domain, []), (-request.priority, self._step * next(self._counter), request)
+        )
         self._size += 1
         if request.retries:
             self.retry_count += 1
         return True
 
     def pop_ready(
-        self, throttle: AutoThrottle, now: float, *, retries_only: bool = False
+        self, throttle: AutoThrottle, now: float, *, retries_only: bool = False, min_priority: int | None = None
     ) -> tuple[Request | None, float | None]:
         """Next request that may start now, or ``(None, seconds_until_one_might)``.
 
         With ``retries_only`` only requests that are retries are considered
-        (used to finish off work once ``max_pages`` is reached).
+        (used to finish off work once ``max_pages`` is reached). With
+        ``min_priority`` requests of lower priority are left queued.
         """
         best: _Entry | None = None
         best_domain = ""
@@ -74,6 +79,8 @@ class Scheduler:
                     continue
             else:
                 head = queue[0]
+                if min_priority is not None and -head[0] < min_priority:
+                    continue
             slot = throttle.slot(domain)
             if slot.active >= slot.concurrency:
                 continue  # woken up again when a request finishes

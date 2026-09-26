@@ -1,0 +1,89 @@
+"""Extraction with a strategy hierarchy, per-field provenance and confidence.
+
+::
+
+    from wintergrab.data import Schema
+    from wintergrab.extraction import Extractor
+
+    extractor = Extractor(Schema.load("product.schema.json"))
+    record = extractor.extract(response)      # a Response, a Selector or HTML
+    record.data                               # {"name": ..., "price": 299.99, "currency": "USD", ...}
+    record.fields["price"].method             # "json-ld"
+    record.fields["price"].confidence         # 0.98
+    print(record.explain())                   # where every value came from
+
+See ``docs/extraction.md``; ``HealingExtractor`` (``docs/healing.md``) repairs a schema's selectors
+when a site changes, with a ``ReviewQueue`` for what needs a person; ``generate_schema`` learns
+selectors for a site from its pages.
+"""
+
+from __future__ import annotations
+
+from .engine import DEFAULT_PRIORS, ExtractedRecord, Extractor, FieldValue, value_key
+from .explain import FieldDiagnosis
+from .generate import GeneratedSchema, LearnedField, generate_schema
+from .healing import ExtractorVersion, ExtractorVersions, HealingExtractor, RepairResult
+from .model import ExtractionModel, ModelField, ModelRequest, grounding
+from .page import PageContext, schema_types
+from .review import ReviewItem, ReviewQueue
+from .strategies import (
+    STRATEGIES,
+    Candidate,
+    DomHeuristics,
+    EmbeddedJson,
+    LabelledValues,
+    MetaTags,
+    Patterns,
+    RecordFields,
+    Selectors,
+    Strategy,
+    StructuredData,
+    field_kind,
+    register_strategy,
+)
+from .visual import LabelledPair, VisualLayout, VisualTable, layout_pairs, layout_tables
+
+# Where the page draws a label and its value: after what the page's markup says, before layout conventions.
+register_strategy(VisualLayout, before="dom")
+
+__all__ = [
+    "DEFAULT_PRIORS",
+    "STRATEGIES",
+    "Candidate",
+    "DomHeuristics",
+    "EmbeddedJson",
+    "ExtractedRecord",
+    "ExtractionModel",
+    "Extractor",
+    "ExtractorVersion",
+    "ExtractorVersions",
+    "FieldDiagnosis",
+    "FieldValue",
+    "GeneratedSchema",
+    "HealingExtractor",
+    "LabelledPair",
+    "LabelledValues",
+    "LearnedField",
+    "MetaTags",
+    "ModelField",
+    "ModelRequest",
+    "PageContext",
+    "Patterns",
+    "RecordFields",
+    "RepairResult",
+    "ReviewItem",
+    "ReviewQueue",
+    "Selectors",
+    "Strategy",
+    "StructuredData",
+    "VisualLayout",
+    "VisualTable",
+    "field_kind",
+    "generate_schema",
+    "grounding",
+    "layout_pairs",
+    "layout_tables",
+    "register_strategy",
+    "schema_types",
+    "value_key",
+]

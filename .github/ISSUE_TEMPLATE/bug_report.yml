@@ -1,0 +1,40 @@
+name: Bug report
+description: Something wintergrab does wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, and what went wrong. Paste the command or a short script.
+      placeholder: |
+        wintergrab crawl https://shop.example/ --extract product -o items.jsonl
+        ...and the output
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: page
+    attributes:
+      label: The page, if it matters
+      description: >
+        The URL, or better the HTML of a page that shows the problem (remove anything private).
+        Please leave out credentials, cookies and API keys.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: wintergrab doctor
+      description: The output of `wintergrab --version` and `wintergrab doctor`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04 / macOS 15 / Windows 11

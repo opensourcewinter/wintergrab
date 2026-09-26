@@ -283,7 +283,7 @@ def _microdata_value(el: etree._Element, base_url: str | None) -> str:
     return text_content(el)
 
 
-_OG_PREFIXES = ("og:", "article:", "product:", "book:", "profile:", "music:", "video:", "fb:")
+_OG_PREFIXES = ("og:", "article:", "product:", "book:", "profile:", "music:", "video:", "fb:", "place:")
 _OG_URL_KEYS = frozenset(
     {
         "url",
@@ -299,7 +299,7 @@ _OG_URL_KEYS = frozenset(
     }
 )
 _TWITTER_URL_KEYS = frozenset({"url", "image", "image:src", "player", "player:stream"})
-_META_NAMES = ("description", "keywords", "author", "robots")
+_META_NAMES = ("description", "keywords", "author", "robots", "geo.position", "icbm", "geo.region", "geo.placename")
 
 
 def _meta_tags(root: etree._Element, base_url: str | None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -336,6 +336,13 @@ def _meta_tags(root: etree._Element, base_url: str | None) -> tuple[dict[str, An
     for name in _META_NAMES:
         if name in named:
             meta[name] = named[name]
+    point = meta.get("geo.position") or meta.get("icbm")  # "52.5163;13.3777", "52.5163, 13.3777"
+    if point:
+        from ..data.normalize.geo import parse_coordinates
+
+        found = parse_coordinates(point.replace(";", ","))
+        if found:
+            meta["geo.latitude"], meta["geo.longitude"] = str(found[0]), str(found[1])
 
     canonical = favicon = touch_icon = None
     feeds: list[str] = []
@@ -777,37 +784,45 @@ def next_page_url(root: etree._Element, base_url: str | None = None) -> str | No
             if url:
                 return url
 
-    anchors: dict[etree._Element, str] = {}
-    for a in root.iter("a"):
-        url = _usable_href(a, base_url, page)
-        if url and not _disabled(a):
-            anchors[a] = url
+    def usable(a: etree._Element) -> str | None:
+        return None if _disabled(a) else _usable_href(a, base_url, page)
 
-    for a, url in anchors.items():
-        if "next" in _rel(a):
+    # Pass by pass, resolving URLs only for the candidates: most pages have no "next" link at all.
+    anchors = [a for a in root.iter("a") if _href(a)]
+    for a in anchors:
+        if "next" in _rel(a) and (url := usable(a)):
             return url
-    for a, url in anchors.items():
+    for a in anchors:
         label = " ".join(filter(None, (a.get("aria-label"), a.get("title"))))
-        if label and _NEXT_WORD.search(label):
+        if label and _NEXT_WORD.search(label) and (url := usable(a)):
             return url
-    best: tuple[int, str] | None = None
-    for a, url in anchors.items():
-        rank = _next_text_rank(text_content(a))
-        if rank is not None and (best is None or rank < best[0]):
-            best = (rank, url)
-            if rank == 0:
-                break
-    if best is not None:
-        return best[1]
-    for a, url in anchors.items():
-        if _marked_next(a) or _marked_next(a.getparent()):
+    texts = [text_content(a) for a in anchors]
+    ranked: list[tuple[int, int, etree._Element]] = []
+    for i, (a, text) in enumerate(zip(anchors, texts, strict=True)):
+        rank = _next_text_rank(text)
+        if rank is not None:
+            ranked.append((rank, i, a))
+    for _, _, a in sorted(ranked, key=lambda r: r[:2]):  # best rank first, then page order
+        if url := usable(a):
             return url
-    return _numbered_next(root, anchors)
+    for a in anchors:
+        if (_marked_next(a) or _marked_next(a.getparent())) and (url := usable(a)):
+            return url
+    numbered = [a for a, text in zip(anchors, texts, strict=True) if _page_number(text) is not None]
+    return _numbered_next(root, numbered, usable) if numbered else None
+
+
+def _href(el: etree._Element) -> str | None:
+    """The element's ``href``, unless it goes nowhere (``#top``, ``javascript:``, ``mailto:``...)."""
+    href = (el.get("href") or "").strip()
+    if not href or href.startswith("#") or href.lower().startswith(("javascript:", "mailto:", "tel:", "data:")):
+        return None
+    return href
 
 
 def _usable_href(el: etree._Element, base_url: str | None, page: str | None) -> str | None:
-    href = (el.get("href") or "").strip()
-    if not href or href.startswith("#") or href.lower().startswith(("javascript:", "mailto:", "tel:", "data:")):
+    href = _href(el)
+    if href is None:
         return None
     url = _absolute(href, base_url)
     if page and urldefrag(url)[0] == page:
@@ -876,14 +891,26 @@ def _current_pages(container: etree._Element) -> list[int]:
     return list(dict.fromkeys(aria + marked + plain))
 
 
-def _numbered_next(root: etree._Element, anchors: dict[etree._Element, str]) -> str | None:
-    """In a pagination block, the link numbered one past the current page."""
-    containers = [el for el in root.iter(etree.Element) if _is_pager(el)]
-    containers.sort(key=lambda el: sum(1 for _ in el.iter()))  # innermost (smallest) first
+def _numbered_next(
+    root: etree._Element, numbered: list[etree._Element], usable: Callable[[etree._Element], str | None]
+) -> str | None:
+    """In a pagination block, the link numbered one past the current page. Only the blocks around
+    ``numbered`` (the links whose text is a number) can have one."""
+    containers: list[etree._Element] = []
+    seen: set[etree._Element] = set()
+    for a in numbered:
+        el: etree._Element | None = a
+        while el is not None and el not in seen:
+            seen.add(el)
+            if _is_pager(el):
+                containers.append(el)
+            el = None if el is root else el.getparent()
+    if len(containers) > 1:  # innermost (smallest) first, then in page order
+        order = {el: i for i, el in enumerate(root.iter())}
+        containers.sort(key=lambda el: (sum(1 for _ in el.iter()), order[el]))
     for container in containers:
         for current in _current_pages(container):
             for a in container.iter("a"):
-                url = anchors.get(a)
-                if url and _page_number(text_content(a)) == current + 1:
+                if _page_number(text_content(a)) == current + 1 and (url := usable(a)):
                     return url
     return None

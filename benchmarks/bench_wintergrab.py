@@ -50,9 +50,13 @@ class BenchSpider(Spider):
         return item
 
 
-def make_spider(url: str, concurrency: int, impersonate: str | None, loop: str = "default") -> BenchSpider:
+def make_spider(
+    url: str, concurrency: int, impersonate: str | None, loop: str = "default", optimize: bool = False
+) -> BenchSpider:
     start = url.rstrip("/") + "/page/0"
     overrides: dict[str, Any] = {}
+    if optimize:
+        overrides["optimize"] = True  # the crawl optimizer's cost (it has nothing to save on this site)
     if loop == "asyncio" and hasattr(Spider, "use_uvloop"):
         overrides["use_uvloop"] = False  # wintergrab picks uvloop by default when it is installed
     return BenchSpider(
@@ -74,16 +78,19 @@ def main() -> None:
         default="default",
         help="default = wintergrab's choice (uvloop if installed)",
     )
+    parser.add_argument("--optimize", action="store_true", help="with the crawl optimizer (Spider.optimize)")
     args = parser.parse_args()
     impersonate = None if args.impersonate.lower() in ("none", "") else args.impersonate
 
-    spider = make_spider(args.url, args.concurrency, impersonate, args.loop)
+    spider = make_spider(args.url, args.concurrency, impersonate, args.loop, args.optimize)
     meter = Meter()
     result = spider.run()
     stats = result.stats
     emit(
         meter.result(
-            ("wintergrab" if impersonate else "wintergrab-noimp") + ("-asyncio" if args.loop == "asyncio" else ""),
+            ("wintergrab" if impersonate else "wintergrab-noimp")
+            + ("-asyncio" if args.loop == "asyncio" else "")
+            + ("-optimize" if args.optimize else ""),
             listing_pages=spider.listing_pages,
             items=spider.item_count,
             bad_items=spider.bad_items,

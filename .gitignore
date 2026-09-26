@@ -29,3 +29,6 @@ crawls/
 
 # Default HTTP cache directory
 .wintergrab-cache/
+
+# Runs, recordings and projects' state (wintergrab runs)
+.wintergrab/

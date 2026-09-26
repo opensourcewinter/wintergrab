@@ -24,12 +24,12 @@ def test_renders_javascript(site, browser) -> None:
     assert page.css(".item::text").getall() == ["Item 1", "Item 2", "Item 3"]
 
 
-def test_stealth_hides_automation_tells(site, browser) -> None:
+def test_the_browser_does_not_hide_that_it_is_automated(site, browser) -> None:
     data = json.loads(browser.get(site.url + "/navigator").css("#out::text").get())
-    assert "webdriver" not in data  # undefined, like a normal browser
-    assert "HeadlessChrome" not in data["ua"]
-    assert data["plugins"] > 0
+    assert data["webdriver"] is True  # what a browser driven by a program says of itself
     assert data["languages"][0] == "en-US"
+    with pytest.raises(TypeError, match="stealth"):
+        BrowserFetcher(stealth=True)  # gone: nothing patches a page to pass for a person
 
 
 def test_waits_out_challenge_pages(site, browser) -> None:
@@ -45,6 +45,17 @@ def test_captures_the_whole_page_after_a_challenge_reloads(site, browser) -> Non
         page = browser.get(site.url + route)
         assert page.css("title::text").get() == "Real page", route
         assert len(page.css(".item")) == 400, route
+
+
+def test_a_file_the_browser_downloads_is_the_answer(site, browser) -> None:
+    page = browser.get(site.url + "/attachment.csv")
+    assert (page.status, page.text, page.source) == (200, "sku,name\n1,Parka\n", "browser")
+    moved = browser.get(site.url + "/redirect?to=/attachment.csv")  # its redirects followed, and checked
+    assert moved.url == site.url + "/attachment.csv" and moved.history == [site.url + "/redirect?to=/attachment.csv"]
+    policy = wg.NetworkPolicy(allow_loopback=True, denied_hosts=["localhost"])
+    port = site.url.rsplit(":", 1)[1]
+    with BrowserFetcher(network_policy=policy, retries=0) as guarded, pytest.raises(wg.errors.NetworkPolicyError):
+        guarded.get(site.url + f"/redirect?to=http://localhost:{port}/attachment.csv")
 
 
 def test_non_html_bodies_and_encoding(site, browser) -> None:
@@ -93,33 +104,94 @@ def test_capture_api_calls(site, browser) -> None:
     assert [c.url.endswith("page=2") for c in only_page2.captured] == [True]
 
 
+SIGN_IN = ["fill #user => ada", "click #signin", "wait #member"]  # the site's own form
+
+
 def test_export_cookies_to_http_session(site, browser) -> None:
-    gated = browser.get(site.url + "/jsgate/1")
-    assert gated.css("#gated::text").get() == "Gated 1"
+    page = browser.get(site.url + "/members/login", actions=SIGN_IN)
+    assert page.css("#member::text").get() == "Members page 1 for ada"
     cookies = browser.export_cookies(site.url)
-    assert any(c["name"] == "gate" for c in cookies)
+    assert any(c["name"] == "member" for c in cookies)
     with wg.Fetcher() as http:
-        assert http.get(site.url + "/jsgate/2").status == 403
-        http.add_cookies(cookies)
-        assert http.get(site.url + "/jsgate/2").css("#gated::text").get() == "Gated 2"
+        assert http.get(site.url + "/members/2").status == 401
+        http.add_cookies(cookies)  # signed in once, in the browser; on at HTTP speed
+        assert http.get(site.url + "/members/2").css("#member::text").get() == "Members page 2 for ada"
 
 
 def test_spider_hands_browser_cookies_to_http(fresh_site) -> None:
-    class Gated(wg.Spider):
+    class Members(wg.Spider):
         log_level = None
         obey_robots_txt = False
-        fallback_session = "browser"
         concurrency = 1
 
+        def configure_sessions(self, sessions):
+            super().configure_sessions(sessions)
+            sessions.add("browser", AsyncBrowserFetcher(retries=0))
+
         def start_requests(self):
-            yield wg.Request(fresh_site.url + "/jsgate/1")
+            yield wg.Request(fresh_site.url + "/members/login", session="browser", options={"actions": SIGN_IN})
 
         def parse(self, response):
-            yield {"n": response.css("#gated::text").get(), "source": response.source}
-            if response.url.endswith("/1"):
-                yield from (response.follow(f"/jsgate/{i}") for i in range(2, 5))
+            yield {"page": response.css("#member::text").get(), "source": response.source}
+            if response.source == "browser":
+                yield from (response.follow(f"/members/{i}") for i in range(2, 5))
 
-    result = Gated().run()
-    by_n = {i["n"]: i["source"] for i in result.items}
-    assert by_n == {"Gated 1": "browser", "Gated 2": "http", "Gated 3": "http", "Gated 4": "http"}
+    result = Members().run()
+    by_page = {i["page"]: i["source"] for i in result.items}
+    assert by_page == {f"Members page {i} for ada": "browser" if i == 1 else "http" for i in range(1, 5)}
     assert result.stats["cookie_handoffs"] == 1
+
+
+async def _crash(fetcher: AsyncBrowserFetcher) -> None:
+    """Crash the browser, as a crash or the system killing it for memory would (Chromium's own Browser.crash)."""
+    import asyncio
+    import contextlib
+
+    session = await fetcher._browser.new_browser_cdp_session()
+    with contextlib.suppress(Exception):  # (it dies before it answers)
+        await asyncio.wait_for(session.send("Browser.crash"), 3)
+
+
+def test_a_browser_that_crashes_is_started_again(site) -> None:
+    import asyncio
+
+    async def crawl() -> list[int]:
+        async with AsyncBrowserFetcher(retries=1) as browser:
+            statuses = [(await browser.get(site.url + "/books/")).status]
+            await _crash(browser)
+            statuses.append((await browser.get(site.url + "/js", wait_for=".item")).status)  # a new browser
+            assert browser.restarts == 1
+            loading = asyncio.create_task(browser.get(site.url + "/books/", wait=3))
+            await asyncio.sleep(1.0)
+            await _crash(browser)  # (while a page loads: it fails, and its retry gets a new browser)
+            statuses.append((await loading).status)
+            assert browser.restarts == 2
+            return statuses
+
+    assert asyncio.run(crawl()) == [200, 200, 200]
+
+
+def test_a_crawl_goes_on_when_its_browser_crashes(fresh_site) -> None:
+    from wintergrab import Spider
+
+    class Books(Spider):
+        name = "books"
+        use_browser = True
+        concurrency = 1
+
+        def configure_sessions(self, sessions):
+            super().configure_sessions(sessions)
+            self.browser = sessions.get("browser")
+            self.crashed = False
+
+        async def parse(self, response):
+            if not self.crashed:  # (the first page's browser crashes: the next pages need a new one)
+                self.crashed = True
+                await _crash(self.browser)
+            yield {"url": response.url}
+            for href in response.css("li.next a::attr(href)").getall()[:1]:
+                yield response.follow(href)
+
+    result = Books(start_urls=[fresh_site.url + "/books/"], max_pages=3, log_level="WARNING").run()
+    assert result.stats["status"] == "finished" and len(result.items) == 3
+    assert result.stats["browser_restarts"] == 1

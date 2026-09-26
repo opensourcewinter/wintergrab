@@ -77,6 +77,18 @@ def test_broken_proxy_is_retried_through_another(site, proxies) -> None:
         assert proxies[0].used == 1
 
 
+def test_a_refused_page_is_retried_through_the_same_proxy(fresh_site, proxies) -> None:
+    rotator = ProxyRotator([p.url for p in proxies], max_failures=1)
+    with wg.Fetcher(proxies=rotator, retries=2, backoff=0.01) as fetcher:
+        page = fetcher.get(fresh_site.url + "/ratelimited/same-proxy?limit=1&after=0")
+        # the 429 came through p1: p1 again after the pause, and the site's answer is not held against it
+        assert page.status == 200 and page.headers.get("x-via-proxy") == "p1"
+        assert [(s["uses"], s["failures"], s["available"]) for s in rotator.stats()] == [(2, 0, True), (0, 0, True)]
+        blocked = fetcher.get(fresh_site.url + "/blocked")  # a bot check's 403, through p2 this time
+        assert blocked.status == 403 and blocked.headers.get("x-via-proxy") == "p2"
+        assert rotator.stats()[1]["failures"] == 0 and rotator.stats()[1]["available"]
+
+
 def test_single_proxy_argument(site, proxies) -> None:
     page = wg.get(site.url + "/product/1", proxy=proxies[1].url)
     assert page.headers["X-Via-Proxy"] == "p2"

@@ -1,0 +1,38 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Actions shop</title>
+<style>.hidden{display:none}#cookies{position:fixed;bottom:0;left:0;right:0;background:#eee;padding:10px}</style></head>
+<body>
+<div id="cookies">We use cookies. <button id="accept">Accept</button></div>
+<h1>Winter gear</h1>
+<ul id="items"><li class="item">Parka 1</li><li class="item">Parka 2</li></ul>
+<button class="load-more">Load more</button>
+<details><summary>Shipping</summary><p class="answer">Free over 50 euros.</p></details>
+<details><summary>Returns</summary><p class="answer">Thirty days.</p></details>
+<form id="search" onsubmit="event.preventDefault(); document.getElementById('results').textContent = 'Results for ' + document.getElementById('q').value;">
+  <input id="q" name="q"><select id="sort"><option value="name">Name</option><option value="price">Price</option></select>
+</form>
+<p id="results"></p>
+<div class="tabs"><a href="#" data-tab="specs">Specifications</a> <a href="#" data-tab="reviews">Reviews</a></div>
+<div id="panel">Choose a tab</div>
+<a class="export" href="report.csv" download>Export</a>
+<a id="elsewhere">Our other shop</a> <a id="closed" href="http://127.0.0.1:1/">A closed shop</a>
+<script>
+  let loads = 0;
+  document.getElementById("accept").onclick = () => document.getElementById("cookies").remove();
+  document.querySelector(".load-more").onclick = (event) => {
+    loads += 1;
+    const list = document.getElementById("items");
+    for (let i = 0; i < 2; i++) {
+      const li = document.createElement("li"); li.className = "item"; li.textContent = "Parka " + (list.children.length + 1);
+      list.appendChild(li);
+    }
+    if (loads >= 3) event.target.remove();
+  };
+  document.querySelectorAll(".tabs a").forEach((a) => a.onclick = (event) => {
+    event.preventDefault();
+    document.getElementById("panel").textContent = a.dataset.tab === "specs" ? "Weight: 1.2 kg" : "Four stars from 12 reviews";
+  });
+  document.getElementById("elsewhere").href = "http://localhost:" + location.port + "/report.csv";
+  console.log("shop ready");
+  console.warn("an old API");
+</script>
+</body></html>

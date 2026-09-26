@@ -26,6 +26,8 @@ class RobotsPolicy:
         self.user_agent = user_agent
         self._parsers: dict[str, RobotFileParser | None] = {}
         self._pending: dict[str, asyncio.Future[RobotFileParser | None]] = {}
+        #: Each site's robots.txt as fetched (``None``: it has none).
+        self.texts: dict[str, str | None] = {}
 
     @staticmethod
     def origin(url: str) -> str:
@@ -49,7 +51,10 @@ class RobotsPolicy:
                 parser = RobotFileParser(origin + "/robots.txt")
                 parser.parse(response.text.splitlines())
                 parser.modified()
-            elif response.status >= 500:
+                self.texts[origin] = response.text
+            elif response.status < 500:
+                self.texts[origin] = None
+            else:
                 log.warning("robots.txt for %s returned %s; treating the site as allowed", origin, response.status)
             completed = True
         except Exception as exc:

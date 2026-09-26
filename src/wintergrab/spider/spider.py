@@ -4,20 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import inspect
 import logging
 import re
 import sys
 import threading
+import types
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..credentials import Credentials
+from ..errors import ConfigurationError
+from ..events import EventBus
 from ..fetchers.blocking import looks_blocked
 from ..fetchers.browser import AsyncBrowserFetcher
 from ..fetchers.cache import HTTPCache
 from ..fetchers.http import DEFAULT_RETRY_STATUSES, AsyncFetcher
+from ..fetchers.strategy import needs_javascript
+from ..netpolicy import NetworkPolicy
 from ..proxy import ProxyRotator
 from ..request import Request
 from ..sitemaps import parse_lastmod, parse_sitemap, robots_sitemaps
@@ -27,6 +34,7 @@ if TYPE_CHECKING:
     from ..errors import WintergrabError
     from ..fetchers.response import Response
     from .engine import Engine
+    from .failures import FailureDiagnosis
 
 
 @dataclass
@@ -46,10 +54,40 @@ class CrawlResult:
     stats: dict[str, Any] = field(default_factory=dict)
     status: str = "finished"
     crawl_dir: str | None = None
+    #: What went wrong, grouped and explained (see :mod:`wintergrab.spider.failures`).
+    failures: list[FailureDiagnosis] = field(default_factory=list)
+    #: Final metrics snapshot: rates, latency percentiles, per-domain throttle state, budgets.
+    metrics: dict[str, Any] = field(default_factory=dict)
+    #: With ``history``: what changed since the previous run (a :class:`~wintergrab.history.ChangeReport`).
+    changes: Any = None
+    #: With ``profile``: the site's :class:`~wintergrab.intel.SiteProfile`.
+    profile: Any = None
+    #: With ``adaptive_fetch``: the :class:`~wintergrab.fetchers.strategy.FetchStrategy`, with what it
+    #: learned about each URL pattern.
+    fetch_strategy: Any = None
+    #: With ``optimize``: the :class:`~wintergrab.spider.optimizer.CrawlOptimizer`, with what it learned
+    #: about each URL pattern (``describe()``).
+    optimizer: Any = None
+    #: With ``run_registry`` or ``record``: the run's id in the registry (``"run-7"``; see :mod:`wintergrab.runs`).
+    run_id: str | None = None
 
     @property
     def paused(self) -> bool:
         return self.status == "paused"
+
+    @property
+    def limit_reason(self) -> str | None:
+        """Which limit or budget stopped the crawl (``"max_pages"``, ``"max_bytes"``...), if any."""
+        return self.stats.get("limit_reason")
+
+    def failure_report(self, limit: int = 10) -> str:
+        """The failure diagnoses as readable text."""
+        if not self.failures:
+            return "no failures"
+        parts = [d.describe() for d in self.failures[:limit]]
+        if len(self.failures) > limit:
+            parts.append(f"... and {len(self.failures) - limit} more kinds of failure")
+        return "\n\n".join(parts)
 
     @property
     def finished(self) -> bool:
@@ -66,6 +104,14 @@ class CrawlResult:
             f"<CrawlResult {self.status}: {self.stats.get('pages', 0)} pages, "
             f"{self.stats.get('items', 0)} items, {len(self.items)} kept>"
         )
+
+
+#: Settings that were removed, and why (setting one is an error, not silently ignored).
+_REMOVED_SETTINGS = {
+    "fallback_session": "a blocked or rate-limited page is not fetched again another way to get past the refusal; "
+    "the domain slows down, and the page is reported (docs/responsible-access.md). For pages that need "
+    "JavaScript, set adaptive_fetch = True",
+}
 
 
 class Spider:
@@ -111,6 +157,15 @@ class Spider:
     sitemap_follow: Sequence[str] = ()
     #: Only crawl sitemap entries modified at/after this date (incremental crawls).
     sitemap_since: str | datetime | None = None
+    #: Rewrite URLs before queueing them. ``True`` drops tracking parameters
+    #: (``utm_*``, ``gclid``...), session ids and fragments, resolves ``..`` and
+    #: sorts the query (see :class:`~wintergrab.urls.URLNormalizer`); or pass a
+    #: normalizer, a dict of its options, or any ``url -> url`` callable.
+    url_normalizer: Any = None
+    #: Which discovered links get queued: a :class:`~wintergrab.urls.URLRules`,
+    #: a dict of its options, or ``True`` for the defaults (skip images, media and
+    #: archives; guard against crawler traps). Start URLs are never filtered.
+    url_rules: Any = None
 
     # -- speed ------------------------------------------------------------ #
     #: Maximum requests in flight overall.
@@ -126,17 +181,58 @@ class Spider:
     #: Pass an :class:`AutoThrottle` instance for full control (overrides the above).
     throttle: Any = None
 
-    # -- limits ----------------------------------------------------------- #
+    # -- limits and budgets ------------------------------------------------ #
     max_pages: int | None = None
     max_items: int | None = None
     max_depth: int | None = None
+    #: Budgets (see :mod:`wintergrab.spider.budget`): the crawl stops with status
+    #: ``"limit"`` (resumable with a ``crawl_dir``) when one runs out.
+    max_requests: int | None = None
+    max_bytes: int | None = None
+    #: Seconds of crawling, counted across resumed runs.
+    max_runtime: float | None = None
+    max_browser_pages: int | None = None
+    #: URLs given up on.
+    max_errors: int | None = None
+    #: Stop when more than this fraction of pages failed (after ``error_rate_min_pages`` pages).
+    max_error_rate: float | None = None
+    error_rate_min_pages: int = 50
+    #: Resident memory (bytes), CPU seconds, and bytes written to ``output`` in this run.
+    max_memory: int | None = None
+    max_cpu_seconds: float | None = None
+    max_output_bytes: int | None = None
+    #: Degrade gracefully: once any budget is this much used (e.g. ``0.9``), only
+    #: start requests with a priority of at least ``budget_soft_priority``.
+    budget_soft_limit: float | None = None
+    budget_soft_priority: int = 1
+
+    # -- queue order -------------------------------------------------------- #
+    #: ``"bfs"`` (breadth-first: oldest first among equal priorities) or ``"dfs"`` (depth-first).
+    crawl_order: str = "bfs"
+    #: ``priority_fn(request) -> int``: the priority of every queued request (e.g.
+    #: favour product pages). Higher runs first. Retries keep their priority.
+    priority_fn: Callable[[Request], int] | None = None
+
+    # -- extensions ---------------------------------------------------------- #
+    #: Downloader middlewares (see :mod:`wintergrab.spider.middleware`).
+    middlewares: Sequence[Any] = ()
+    #: Item pipelines run after :meth:`process_item`: objects with ``process_item(item, spider)``
+    #: or plain ``item -> item`` functions. Return ``None`` (or raise ``DropItem``) to drop.
+    pipelines: Sequence[Any] = ()
 
     # -- fetching --------------------------------------------------------- #
     #: Browser to impersonate for HTTP requests (``None`` = plain curl).
     impersonate: str | None = "chrome"
     #: Headers added to every HTTP request.
     default_headers: Mapping[str, str] = {}
+    #: Headers and cookies for sites that are yours to use, each for one site
+    #: (:class:`~wintergrab.credentials.Credentials`): its requests carry them, and no other request does
+    #: (not a link to another site, not a redirect to one, not what a browser page loads from elsewhere).
+    credentials: Sequence[Credentials] = ()
     timeout: float = 30.0
+    #: The largest response body read, decompressed (128 MiB; ``None``: no limit). A larger one, whether it says
+    #: its size or not, is abandoned as it arrives: the page fails (``too_large``) and is not retried.
+    max_response_bytes: int | None = 128 * 1024 * 1024
     verify: bool | str = True
     #: Attempts after a failure / retryable status / block.
     retries: int = 3
@@ -147,19 +243,51 @@ class Spider:
     proxies: Sequence[str] | ProxyRotator | None = None
     #: Make the default session a headless browser instead of plain HTTP.
     use_browser: bool = False
-    #: Session to retry *blocked* requests with (e.g. ``"browser"``).
-    fallback_session: str | None = None
+    #: Fetch pages over HTTP first, and again in a browser when their HTML is not enough
+    #: (:meth:`needs_browser`), learning per URL pattern which pages need one: ``True``, a file
+    #: that keeps what was learned across crawls, or a :class:`~wintergrab.fetchers.strategy.FetchStrategy`.
+    adaptive_fetch: Any = False
+    #: With ``adaptive_fetch``: CSS selectors a usable page has; a page fetched over HTTP where
+    #: one of them finds nothing goes to the browser.
+    render_if_missing: Sequence[str] = ()
+    #: Learn during the crawl which URL patterns give items: fetch those first, skip the patterns
+    #: that give nothing, drop query parameters that change nothing (see
+    #: :mod:`wintergrab.spider.optimizer`): ``True``, a file that keeps what was learned across
+    #: crawls, or a :class:`~wintergrab.spider.optimizer.CrawlOptimizer`.
+    optimize: Any = False
+    #: Keep a record of each run in a workspace (see :mod:`wintergrab.runs`): ``True`` for ``.wintergrab``
+    #: in the current directory, or a directory. The record has the run's settings, status, stats,
+    #: failures and events.
+    run_registry: Any = None
+    #: Also keep every response and item of the run, to replay it without the network
+    #: (:func:`wintergrab.runs.replay`); implies ``run_registry``. The recording is the run's own cache.
+    record: bool = False
+    #: How to run this crawl again, kept with its record (the command line and goal runs set it).
+    run_recipe: dict[str, Any] | None = None
+    #: A label kept with the run's record (a project sets its job's name).
+    run_label: str | None = None
+    #: Where to post the crawl's events as they happen (see :mod:`wintergrab.webhooks`): URLs,
+    #: ``{"url", "events", "secret"...}`` mappings, or :class:`~wintergrab.webhooks.Webhook` objects.
+    webhooks: Sequence[Any] = ()
     #: Copy cookies from browser responses into the HTTP sessions, so a session
-    #: established in the browser (consent wall, login, JS check) carries on over
+    #: established in the browser (a login, a consent dialog) carries on over
     #: fast HTTP for the rest of the crawl.
     share_browser_cookies: bool = True
     #: Respect robots.txt rules and Crawl-delay.
     obey_robots_txt: bool = True
     robots_user_agent: str = "*"
+    #: Where requests may go. ``"public"`` refuses private, loopback and cloud-metadata
+    #: addresses (SSRF protection; also checked on every redirect hop); pass a
+    #: :class:`~wintergrab.netpolicy.NetworkPolicy` for finer control. ``None`` = anywhere.
+    network_policy: Any = None
+    #: Browser sessions: block ads, analytics and trackers too (``True``, a dict of
+    #: :class:`~wintergrab.fetchers.resources.ResourceFilter` options, or a filter).
+    resource_filter: Any = None
     #: Drop requests for URLs already seen.
     dedupe: bool = True
     #: ``"memory"`` (fastest) or ``"disk"``: an SQLite queue + Bloom filter that keeps
-    #: memory flat for crawls of millions of URLs and survives crashes (needs ``crawl_dir``).
+    #: memory flat for crawls of millions of URLs and survives crashes (needs ``crawl_dir``);
+    #: or a ``postgresql://`` URL: a queue several processes share (see :mod:`wintergrab.spider.shared`).
     frontier: str = "memory"
 
     # -- caching ---------------------------------------------------------- #
@@ -172,17 +300,38 @@ class Spider:
     cache_ttl: float | None = None
 
     # -- output & state --------------------------------------------------- #
-    #: Stream items to this file (``.jsonl``, ``.json``, ``.csv`` or ``.sqlite``/``.db``).
+    #: Stream items to this file (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``,
+    #: ``.duckdb``) or database (``postgresql://``, ``mysql://``, ``mongodb://``), or an S3 object (``s3://``).
     output: str | None = None
-    #: Item field that identifies an item (e.g. ``"url"``): duplicates are dropped,
-    #: and SQLite output upserts on it so re-crawls update rows in place.
+    #: Item field that identifies an item (e.g. ``"url"``): duplicates are dropped, and the outputs that can
+    #: (SQLite, DuckDB, PostgreSQL, MySQL, MongoDB) upsert on it, so re-crawls update rows in place.
     unique_key: str | None = None
     #: Directory for pause/resume state. Setting it makes the crawl resumable.
     crawl_dir: str | None = None
     #: Seconds between automatic checkpoints (crash safety).
     checkpoint_interval: float = 60.0
+    #: Record requests given up on in ``crawl_dir/dead_letters.jsonl`` (``True``), in a
+    #: file of your choice (a path) or not at all (``False``).
+    dead_letters: bool | str | None = True
+    #: Queue the dead letters of earlier runs again (and start a fresh file).
+    retry_dead_letters: bool = False
+    #: Write structured events as JSON lines: ``True`` = ``crawl_dir/events.jsonl``, or a path.
+    event_log: bool | str | None = None
     #: Keep items in memory for ``CrawlResult.items``. Turn off for huge crawls.
     keep_items: bool = True
+    #: Record every page's fingerprints and items in this history file (a path, or a
+    #: :class:`~wintergrab.history.PageHistory`): the crawl ends with what changed since the
+    #: last run (``CrawlResult.changes``), and each URL's change rate is tracked.
+    history: Any = None
+    #: Also keep every page's HTML in the history (compressed).
+    history_html: bool = False
+    #: With ``history``: don't fetch pages that have probably not changed since they were last
+    #: seen, judging by how often they changed before. Start URLs are always fetched.
+    skip_fresh: bool = False
+    #: Profile the site while crawling (``result.profile``): technologies, page types, templates,
+    #: API endpoints, crawlability... ``True``, a path to also save it as JSON, or a
+    #: :class:`~wintergrab.intel.SiteProfiler`.
+    profile: Any = False
     #: Log level for the ``wintergrab`` logger (``None`` leaves logging alone).
     log_level: str | None = "INFO"
     #: Seconds between progress log lines.
@@ -193,22 +342,38 @@ class Spider:
     use_uvloop: bool = True
 
     def __init__(self, **overrides: Any) -> None:
+        for key, why in _REMOVED_SETTINGS.items():
+            if key in overrides or getattr(type(self), key, None) is not None:
+                raise ConfigurationError(f"{type(self).__name__}.{key} was removed: {why}", key=key)
         for key, value in overrides.items():
-            if key.startswith("_") or not hasattr(type(self), key) or callable(getattr(type(self), key)):
+            if key.startswith("_") or not _is_setting(type(self), key):
                 raise TypeError(f"{type(self).__name__} has no setting {key!r}")
             setattr(self, key, value)
         if not self.name:
             self.name = type(self).__name__
+        for name, arity in (("priority_fn", 1), ("url_normalizer", 1)):
+            unbound = _unbound_function(self, name, arity)
+            if unbound is not None:
+                setattr(self, name, unbound)
         self.logger = logging.getLogger(f"wintergrab.spider.{self.name}")
+        #: Structured events of this spider's crawls (see :mod:`wintergrab.events`).
+        self.events = EventBus(origin=self.name)
         self._engine: Engine | None = None
         self._pending_command: str | None = None
         self._http_cache: HTTPCache | None = None
+        self._network_policy: NetworkPolicy | bool | None = False  # False = not resolved yet
 
     def http_cache(self) -> HTTPCache | None:
         """The spider's shared :class:`HTTPCache` (``None`` unless :attr:`cache` is set)."""
-        if self._http_cache is None and self.cache:
+        if self._http_cache is None and self.cache is not None and self.cache is not False:  # an empty cache is falsy
             self._http_cache = HTTPCache.coerce(self.cache, mode=self.cache_mode, ttl=self.cache_ttl)
         return self._http_cache
+
+    def get_network_policy(self) -> NetworkPolicy | None:
+        """The spider's shared :class:`~wintergrab.netpolicy.NetworkPolicy` (``None`` = no restriction)."""
+        if self._network_policy is False:
+            self._network_policy = NetworkPolicy.coerce(self.network_policy)
+        return self._network_policy  # type: ignore[return-value]
 
     # ------------------------------------------------------------------ #
     # hooks to override
@@ -263,9 +428,8 @@ class Spider:
         """Register the fetch sessions this spider uses.
 
         The default registers ``"http"`` (an :class:`AsyncFetcher` built from
-        the spider's settings) and, if :attr:`use_browser` or
-        :attr:`fallback_session` asks for it, ``"browser"``. Override to add
-        your own, e.g. several logged-in accounts.
+        the spider's settings) and, if :attr:`use_browser` or :attr:`adaptive_fetch`
+        asks for it, ``"browser"``. Override to add your own.
         """
         sessions.add(
             "http",
@@ -277,10 +441,13 @@ class Spider:
                 retries=0,
                 max_connections=max(16, self.concurrency * 2),
                 cache=self.http_cache(),
+                network_policy=self.get_network_policy(),
+                max_response_bytes=self.max_response_bytes,
+                credentials=self.credentials,
             ),
             default=not self.use_browser,
         )
-        if self.use_browser or self.fallback_session == "browser":
+        if self.use_browser or self.adaptive_fetch:
             sessions.add(
                 "browser",
                 AsyncBrowserFetcher(
@@ -288,6 +455,9 @@ class Spider:
                     retries=0,
                     max_pages=max(1, min(self.concurrency, 8)),
                     cache=self.http_cache(),
+                    resource_filter=self.resource_filter,
+                    network_policy=self.get_network_policy(),
+                    credentials=self.credentials,
                 ),
                 default=self.use_browser,
             )
@@ -303,6 +473,19 @@ class Spider:
         """Decide whether a response is a block/challenge page (retried, and
         slows the domain down). Override for site-specific checks."""
         return looks_blocked(response)
+
+    def needs_browser(self, response: Response) -> str | bool | None:
+        """With :attr:`adaptive_fetch`: whether a page fetched over HTTP needs a browser to show
+        its content. Return why (or ``True``), or a false value.
+
+        By default: a :attr:`render_if_missing` selector finds nothing, or the page looks like a
+        JavaScript app shell (:func:`~wintergrab.fetchers.strategy.needs_javascript`). Override
+        for site-specific checks. Block pages are :meth:`is_blocked`'s business, never this one's.
+        """
+        for css in self.render_if_missing:
+            if not response.css(css):
+                return f"nothing matches {css!r}"
+        return needs_javascript(response)
 
     def on_error(self, request: Request, error: BaseException) -> Any:
         """Called when a request finally fails (after retries) and has no errback."""
@@ -340,7 +523,11 @@ class Spider:
         """
         try:
             asyncio.get_running_loop()
+            in_loop = True
         except RuntimeError:
+            in_loop = False
+        if not in_loop:
+            # Outside the except block: callback tracebacks must not carry this RuntimeError as context.
             return self._run_coroutine(self.arun(resume=resume))
         # Already inside an event loop (e.g. Jupyter): run in a helper thread.
         # Signal handlers only work in the main thread, so turn Ctrl+C
@@ -440,9 +627,55 @@ class Spider:
         """Live stats of the running crawl (empty when not running)."""
         return dict(self._engine.stats) if self._engine is not None else {}
 
+    def metrics(self) -> dict[str, Any]:
+        """Live metrics of the running crawl: rates, latency, per-domain throttle state, budgets (empty when idle)."""
+        return self._engine.snapshot() if self._engine is not None else {}
+
     def fatal(self, error: WintergrabError | Exception) -> None:
         """Abort the crawl with an error (raised from :meth:`run`)."""
         if self._engine is not None:
             self._engine.fail(error)
         else:
             raise error
+
+
+def _unbound_function(spider: Spider, name: str, arity: int) -> Callable[..., Any] | None:
+    """A plain function stored as a class attribute setting (``priority_fn = by_depth``).
+
+    Python turns it into a bound method, so it would receive the spider as an extra
+    first argument. If its signature takes exactly the setting's natural arguments,
+    return the plain function so it is called as written.
+    """
+    if name in vars(spider):
+        return None
+    for klass in type(spider).__mro__:
+        raw = vars(klass).get(name)
+        if raw is None:
+            continue
+        if isinstance(raw, types.FunctionType):
+            try:
+                params = [
+                    p
+                    for p in inspect.signature(raw).parameters.values()
+                    if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) and p.default is p.empty
+                ]
+            except (TypeError, ValueError):
+                return None
+            return raw if len(params) == arity else None
+        return None
+    return None
+
+
+def _is_setting(cls: type, key: str) -> bool:
+    """Whether ``key`` is a setting (overridable per instance) rather than a method.
+
+    A name is a setting when some class of the hierarchy declares it as a plain
+    value. That keeps callable settings (``priority_fn = by_depth``) overridable
+    while methods such as ``parse`` are not.
+    """
+    for klass in cls.__mro__:
+        if key in vars(klass):
+            value = vars(klass)[key]
+            if not (inspect.isroutine(value) or isinstance(value, (property, classmethod, staticmethod))):
+                return True
+    return False

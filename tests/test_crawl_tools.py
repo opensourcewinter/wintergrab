@@ -58,6 +58,11 @@ def test_sitemap_spider_with_rules(site) -> None:
     incremental = FromSitemap(sitemap_since="2026-05-01", sitemap_follow=[r"products"]).run()
     assert [i["name"] for i in incremental.items] == ["Product 5"]
 
+    # URL rules are about pages: they do not stop a sitemap index's .xml.gz sitemaps
+    ruled = FromSitemap(url_rules={"allow": [r"/product/"]}).run()
+    assert sorted(i["name"] for i in ruled.items) == [f"Product {i}" for i in range(1, 6)]
+    assert "rules_filtered" not in ruled.stats
+
 
 def test_sqlite_output_with_upsert(site, tmp_path) -> None:
     db = tmp_path / "items.db"
@@ -127,3 +132,15 @@ def test_progress_line_renders(site) -> None:
     line = stream.getvalue()
     assert "5 pages" in line and "3 items" in line and "2 cached" in line and "1 retries" in line
     assert not ProgressDisplay.supported(io.StringIO())
+
+
+def test_sitemap_entries_changed_since() -> None:
+    from datetime import datetime, timezone
+
+    from wintergrab.sitemaps import SitemapEntry, filter_entries
+
+    entries = [SitemapEntry("https://s.example/new", lastmod="2026-03-02"),
+               SitemapEntry("https://s.example/old", lastmod="2025-12-31"), SitemapEntry("https://s.example/unknown")]  # fmt: skip
+    since = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert [e.loc for e in filter_entries(entries, since)] == ["https://s.example/new"]  # (no lastmod: not known new)
+    assert len(filter_entries(entries, None)) == 3

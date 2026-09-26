@@ -37,15 +37,56 @@ thousands of pages), the same API scales up.
 - **Built for big, long crawls.** An HTTP cache that revalidates with `304`s
   and replays whole crawls offline. A disk-backed queue with a Bloom filter
   that keeps memory flat at millions of URLs and survives `kill -9`. Sitemap
-  crawling, SQLite output with upserts, and a live progress line.
+  crawling, a live progress line, and output to JSON Lines, CSV, SQLite,
+  Parquet, Excel, DuckDB, PostgreSQL, MySQL or MongoDB, with upserts on a
+  key.
 - **Fast.** In a [reproducible benchmark](https://github.com/opensourcewinter/wintergrab/blob/main/benchmarks/README.md) against a
   local test shop, a wintergrab spider crawled about 1,000 pages/s on one
   core. That is 1.8× Crawlee and 3.8× Scrapy at the same concurrency, with
   under half their memory. On real sites, the site and your politeness
   settings usually set the pace, not the crawler.
 - **Browser superpowers.** Capture the JSON API calls a page makes while it
-  renders. Clear a login or JS check once in the browser, then continue over
-  fast HTTP with the same cookies.
+  renders, and see where each page's data is (`get --sources`: HTML, JSON-LD,
+  embedded JSON, APIs with their pagination). Sign in once in the browser,
+  then continue over fast HTTP with the same cookies. Logins and keys go to
+  the site they are for, and nowhere else.
+- **Say what you want.** `wintergrab goal 'Find all laptops under $1000 on
+  shop.example with name, price and rating'` reads the request, surveys the
+  site (robots.txt, sitemaps, a sample of pages), shows a plan with what it
+  will cost, and collects clean, typed records. Pages that need JavaScript go
+  to a browser, the others stay on fast HTTP; when the pages call a JSON API
+  that holds the records, it is read instead, page by page. No site in mind?
+  `--find-sites` asks a search API (with your key) which sites rank for it.
+- **Click to build.** `wintergrab build URL -o FILE` shows the page without
+  its scripts. Click a field, a repeated card, a table or the next-page
+  link, and get a schema you can read, edit and test on the page. It
+  crawls with `wintergrab crawl URL --extract FILE`.
+- **Generates scrapers, and tests them.** `wintergrab generate "..." -o DIR`
+  learns selectors for the site from its record pages. It then lints them,
+  turns the sample pages into tests and crawls more pages. It measures what
+  they read against wintergrab's own extraction, and keeps the scraper only
+  when every step passes. A model, when you name one, finds what the pages
+  don't publish, once; the scraper reads it without the model after that.
+- **Learns as it crawls.** With `--optimize`, a crawl learns which URL
+  patterns give items. It fetches those first, skips the patterns whose
+  pages lead nowhere, and stops downloading pages under parameters that
+  change nothing. On the test site's shop, that is 203 pages instead of
+  376, with every item found, and 172 on the next crawl.
+- **Replays crawls.** `--record` keeps a crawl's pages. `wintergrab replay`
+  crawls them again offline after you change a spider or a schema, and
+  shows what changed in the data. The exit status makes it a regression
+  test.
+- **Survives redesigns.** With `--heal`, an extractor notices when its
+  selectors stop matching and finds replacements. It tests them on the
+  failing pages and applies them only when other evidence on the page
+  agrees. Every change is a version you can roll back. When it isn't sure,
+  a person decides (`wintergrab review`).
+- **Runs on its own.** A `wintergrab.yaml` lists crawl and goal jobs with
+  their schedules (`every 2 hours`, `daily at 06:00`, cron).
+  `wintergrab schedule` runs them. Signed webhooks tell you when a job
+  fails, when a record changed or when extraction broke.
+  `wintergrab dashboard` shows each run's numbers, failures, domains and
+  changes, live while it runs.
 - **A small CLI.** `wintergrab get` and `wintergrab crawl` cover the common
   jobs with no code at all, including `--auto`, `--learn` and `--offline`.
 
@@ -55,6 +96,8 @@ thousands of pages), the same API scales up.
 pip install wintergrab                 # HTTP fetching, parsing, spiders, CLI
 pip install "wintergrab[browser]"      # + headless browser support
 pip install "wintergrab[speed]"        # + uvloop and orjson
+pip install "wintergrab[parquet]"      # + Parquet output (also: [xlsx], [duckdb], [postgres]...)
+pip install "wintergrab[pdf]"          # + reading PDFs (their text, tables and links)
 playwright install chromium            # one-time browser download (browser extra only)
 wintergrab doctor                      # check what is installed
 ```
@@ -65,6 +108,18 @@ libraries too. The development version installs straight from GitHub:
 `pip install "wintergrab @ git+https://github.com/opensourcewinter/wintergrab"`.
 
 ## A quick tour
+
+### Say what you want
+
+```python
+from wintergrab import WinterGrab
+
+wg = WinterGrab(network_policy="public")
+plan = wg.plan("Find all laptops under $1000 on shop.example with name, price and rating")
+print(plan.describe())                   # what it will fetch, how, and what it will cost
+result = wg.run(plan, "laptops.jsonl")   # typed, validated, de-duplicated records
+print(result.summary())
+```
 
 ### Fetch and parse
 
@@ -176,16 +231,16 @@ class BigCrawl(Spider):
     cache = ".cache/big"         # revalidating HTTP cache; cache_mode="offline" replays the crawl
     output = "catalog.db"        # SQLite...
     unique_key = "url"           # ...with upserts: re-crawls update rows in place
-    fallback_session = "browser" # blocked page? retry it in a headless browser, share its cookies
+    adaptive_fetch = True        # HTTP first; a browser for the pages that need JavaScript
 ```
 
 Spiders also give you:
 
 - **Sessions.** Route requests through different fetchers with
-  `Request(url, session="browser")`. Set `fallback_session="browser"` to
-  retry blocked pages in a headless browser automatically.
-- **Proxy rotation.** `proxies = [...]` (or a `ProxyRotator`). Proxies that
-  keep failing are benched for a while.
+  `Request(url, session="browser")`. Cookies from a browser session (a
+  sign-in) carry over to the HTTP sessions.
+- **Proxies.** `proxies = [...]` (or a `ProxyRotator`). A proxy that keeps
+  failing is benched for a while; a site's refusal is not held against it.
 - **Speed control.** Per-domain concurrency and delays that back off on
   429/503/block pages, honour `Retry-After` and robots.txt `Crawl-delay`,
   and recover gradually.
@@ -224,17 +279,47 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Adaptive selectors](https://github.com/opensourcewinter/wintergrab/blob/main/docs/adaptive-selectors.md) | How relocation works and how to tune it |
 | [Spiders](https://github.com/opensourcewinter/wintergrab/blob/main/docs/spiders.md) | Crawling, sessions, pause/resume, output, every setting |
 | [Power features](https://github.com/opensourcewinter/wintergrab/blob/main/docs/power-features.md) | Zero-selector extraction, cache & offline replay, API capture, cookie handoff, sitemaps, disk frontier, SQLite |
-| [Tough sites](https://github.com/opensourcewinter/wintergrab/blob/main/docs/anti-blocking.md) | Impersonation, browsers, proxies, AutoThrottle, etiquette |
-| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl` and `shell` reference |
+| [Responsible access](https://github.com/opensourcewinter/wintergrab/blob/main/docs/responsible-access.md) | robots.txt, slowing down, blocked pages, honest browsers, logins, proxies, etiquette |
+| [Storage](https://github.com/opensourcewinter/wintergrab/blob/main/docs/storage.md) | Where items go: JSON Lines, JSON, CSV, SQLite, Parquet, Excel, DuckDB, PostgreSQL and MySQL (typed columns, upserts), MongoDB, S3 objects, and your own formats |
+| [Observability](https://github.com/opensourcewinter/wintergrab/blob/main/docs/observability.md) | Events, live metrics, Prometheus, failure reports, dead letters |
+| [Data](https://github.com/opensourcewinter/wintergrab/blob/main/docs/data.md) | Normalizers, typed schemas, validation, pipelines, duplicates, quality monitoring |
+| [Extraction](https://github.com/opensourcewinter/wintergrab/blob/main/docs/extraction.md) | Typed records from any page with a strategy hierarchy, provenance and confidence |
+| [Entities](https://github.com/opensourcewinter/wintergrab/blob/main/docs/entities.md) | Which names are the same company, brand, product, person or place |
+| [What pages look like](https://github.com/opensourcewinter/wintergrab/blob/main/docs/visual.md) | Tables and labelled values read from where a browser draws them (div grids, dashboard tiles), and screenshots for models that read images (`--layout`, `--visual-tables`, `--vision`) |
+| [Benchmarks](https://github.com/opensourcewinter/wintergrab/blob/main/docs/benchmarks.md) | `wintergrab benchmark`: crawl throughput and latency, CPU, memory, parsing, extraction, validation, deduplication and browser overhead, measured on your machine |
+| [Where a page's data is](https://github.com/opensourcewinter/wintergrab/blob/main/docs/sources.md) | Every source a page holds records in: HTML, tables, JSON-LD, embedded JSON and the API calls it makes, with the records each holds, GraphQL operations and pagination (`get --sources`) |
+| [Places](https://github.com/opensourcewinter/wintergrab/blob/main/docs/places.md) | Where records are: addresses and listings' locations read into countries, regions, cities, postal codes and coordinates; kept by place or distance, grouped by place (`wintergrab data places`) |
+| [Knowledge graphs](https://github.com/opensourcewinter/wintergrab/blob/main/docs/graph.md) | The things records name, resolved, and typed edges between them with their sources; JSON, GraphML, Neo4j CSV (`wintergrab data graph`) |
+| [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |
+| [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies, site profiles and topology (`wintergrab inspect`), with the evidence |
+| [Goals](https://github.com/opensourcewinter/wintergrab/blob/main/docs/goals.md) | Say what data you want; wintergrab plans the crawl, shows its cost, and collects the records (`wintergrab goal`) |
+| [Search results](https://github.com/opensourcewinter/wintergrab/blob/main/docs/search.md) | Results from search APIs you have access to (Brave, Google, your SearXNG), with the rest of their pages (news, local results, questions...), and what they say: competitors, gaps, queries one page can answer, rankings over time (`wintergrab search`) |
+| [Visual builder](https://github.com/opensourcewinter/wintergrab/blob/main/docs/builder.md) | Click a page's fields, cards, tables and next-page link to build a schema; test it on the page, edit it, save it (`wintergrab build`) |
+| [Generated scrapers](https://github.com/opensourcewinter/wintergrab/blob/main/docs/generate.md) | A scraper for a goal: selectors learned for the site, linted, tested, sample-crawled, validated and benchmarked before it is kept (`wintergrab generate`) |
+| [Extraction tests](https://github.com/opensourcewinter/wintergrab/blob/main/docs/testing.md) | Pages with the values a schema must read from them; check every change in CI (`wintergrab fixture`, `wintergrab test`) |
+| [Runs and replay](https://github.com/opensourcewinter/wintergrab/blob/main/docs/runs.md) | Keep each crawl's record and pages; replay it offline after a change and see what it does to the data (`wintergrab runs`, `wintergrab replay`) |
+| [Projects](https://github.com/opensourcewinter/wintergrab/blob/main/docs/projects.md) | Jobs in one file, run on schedules (cron, `every 2 hours`), with signed webhooks for their events and for changed records (`wintergrab init`, `run`, `schedule`) |
+| [Dashboard](https://github.com/opensourcewinter/wintergrab/blob/main/docs/dashboard.md) | A local page over the runs: numbers, failures, domains, extraction, changes, live while a crawl runs; JSON too (`wintergrab dashboard`) |
+| [Healing](https://github.com/opensourcewinter/wintergrab/blob/main/docs/healing.md) | Extractors that repair their selectors when a site changes, with versions, rollback and a review queue (`wintergrab heal`, `wintergrab review`) |
+| [Models](https://github.com/opensourcewinter/wintergrab/blob/main/docs/models.md) | Optional language models (OpenAI-compatible, Anthropic, Ollama) for the fields a page's own data does not give, checked against the page |
+| [Plugins](https://github.com/opensourcewinter/wintergrab/blob/main/docs/plugins.md) | Packages that add outputs, inputs, field types, stages, strategies, model providers and commands |
+| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `generate`, `build`, `inspect`, `run`, `schedule`, `init`, `runs`, `replay`, `dashboard`, `fixture`, `test`, `heal`, `review`, `history`, `data`, `shell`, `doctor` and `plugins` reference |
+| [Configuration](https://github.com/opensourcewinter/wintergrab/blob/main/docs/configuration.md) | Where each setting lives: spider settings, files, environment variables, secrets |
+| [Architecture](https://github.com/opensourcewinter/wintergrab/blob/main/docs/architecture.md) | How it is built: the layers, a request's way through a crawl, where things are, extension points |
+| [Upgrading from 0.2](https://github.com/opensourcewinter/wintergrab/blob/main/docs/migration.md) | What behaves differently, and what code may need a change |
+| [API reference](https://github.com/opensourcewinter/wintergrab/blob/main/docs/api.md) | Every public name, by module, with its signature and what it does (written from the code) |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly
 
 wintergrab makes polite crawling the default. Spiders obey robots.txt,
-adapt their speed to each site, and back off when asked. Stealth features
-exist so legitimate automation isn't misclassified. They don't make it OK
-to ignore a site's terms, hammer servers, or collect personal data you
-have no right to. Check the rules of each site you scrape.
+adapt their speed to each site, and back off when asked. A blocked or
+rate-limited page is reported, not fetched another way to get past the
+refusal, and the browser does not hide that it is automated
+([responsible access](https://github.com/opensourcewinter/wintergrab/blob/main/docs/responsible-access.md)).
+None of this makes it OK to ignore a site's terms, hammer servers, or
+collect personal data you have no right to. Check the rules of each site
+you scrape.
 
 ## Development
 
@@ -247,7 +332,8 @@ ruff check . && ruff format --check .
 ```
 
 See [CONTRIBUTING.md](https://github.com/opensourcewinter/wintergrab/blob/main/CONTRIBUTING.md) for the live tests and the release
-process, and [SECURITY.md](https://github.com/opensourcewinter/wintergrab/blob/main/SECURITY.md) to report a vulnerability.
+process, [SECURITY.md](https://github.com/opensourcewinter/wintergrab/blob/main/SECURITY.md) to report a vulnerability, and the
+[code of conduct](https://github.com/opensourcewinter/wintergrab/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 

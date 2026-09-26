@@ -13,6 +13,7 @@ a very fast server, plus tooling to profile wintergrab's crawl path.
 | `run.py` | Runs the matrix (latency × concurrency × tool × repetitions). Each run is its own subprocess. Prints a markdown table and writes `results.json`. |
 | `results.json`, `results_eventloop.json` | The measured runs behind the tables below. |
 | `profile_wintergrab.py` | Runs the wintergrab crawl under cProfile, or reads `py-spy` stacks. Groups the time by layer: wintergrab, curl_cffi, lxml, asyncio, stdlib. |
+| `bench_shared_frontier.py` | How many requests a [shared frontier](../docs/power-features.md#crawling-together-a-shared-frontier) (PostgreSQL) hands out per second to 1, 2 and 4 processes: `.venv/bin/python benchmarks/bench_shared_frontier.py postgresql://user@host/db`. |
 
 ## Running it
 
@@ -177,6 +178,13 @@ Event-loop side experiment at 0 ms latency, concurrency 64 (`results_eventloop.j
   - Two dispatcher changes were tried before and made no difference (412 → 413): refilling the pipeline synchronously in `_task_done`, and freeing the download slot before the callback runs.
   - At concurrency 64 the gap mostly closes (879). At 256 the crawl is CPU-bound again (999).
 
+### The crawl optimizer
+
+With the crawl optimizer (`bench_wintergrab.py --optimize`, `Spider.optimize`)
+the benchmark crawl ran at 985 pages/s instead of 1,033 (median of 3, 64
+requests in flight). That is its cost on a site where it has nothing to
+save: all 10,000 pages lead to items, and no URL has a query string.
+
 ## Profile of wintergrab (latency 0, concurrency 64)
 
 Measured with py-spy (`--native`, 250 Hz, 3,914 samples) on commit `97d46d1`. Each sample is charged to the innermost identifiable frame. The "Before" column is the same measurement on the previous run's build (4,091 samples), which used 1.14 ms CPU per page; this build uses 0.95 ms. The shares are of a smaller total, so a layer whose absolute cost did not change (lxml parsing, curl_cffi) takes a larger share now.
@@ -231,3 +239,72 @@ Not worth pursuing:
 - Parsing from bytes instead of `text.encode()`: the encode is 12 µs of a 350 µs parse.
 - Tuning the dispatcher: both variants tried made no difference.
 - GC: no samples in the garbage collector.
+
+## Data layer
+
+`bench_data.py` measures the data layer on synthetic product records (no
+network): normalizers, schema normalization and validation, expressions, a
+five-stage pipeline, near-duplicate detection, quality monitoring and entity
+resolution.
+
+```bash
+.venv/bin/python benchmarks/bench_data.py --records 20000 --repeat 5
+```
+
+One core of a 4-vCPU cloud VM, Python 3.11.15, median of 5 runs:
+
+| Operation | Rate | Time per item |
+|---|---:|---:|
+| parse_money | 94,924 values/s | 10.5 µs |
+| parse_date | 166,308 values/s | 6.0 µs |
+| expression (3 comparisons) | 1,053,321 records/s | 0.9 µs |
+| Schema.normalize (10 fields) | 7,879 records/s | 126.9 µs |
+| Schema.validate (10 fields) | 41,247 records/s | 24.2 µs |
+| pipeline: normalize, validate, filter, compute, dedupe | 4,169 records/s | 239.9 µs |
+| Deduplicator near=True (40-word texts) | 6,347 records/s | 157.6 µs |
+| QualityMonitor.observe + report | 6,970 records/s | 143.5 µs |
+| EntityResolver: add + resolve (company names) | 3,769 mentions/s | 265.4 µs |
+
+The entity resolution row resolves 20,000 generated company names (two words
+from 60, ten legal forms and generic suffixes, some in capitals, 30% with a
+website): 15,558 distinct mentions and about 300,000 comparisons, with the
+name caches cleared before each run.
+
+URL normalization is the largest single cost inside `Schema.normalize`
+(about a fifth of it for the benchmark's all-distinct URLs).
+
+## Page analysis
+
+`bench_pages.py` measures extraction, page classification, technology
+detection and history snapshots on synthetic pages (no network). Every
+measurement builds a fresh `Response`, so HTML parsing is included, as in a
+crawl; "parse only" is that baseline.
+
+```bash
+.venv/bin/python benchmarks/bench_pages.py --repeat 5 --rounds 200
+```
+
+One core of a 4-vCPU cloud VM, Python 3.11.15, median of 5 runs of 200
+pages (10 for the large page):
+
+| Page | parse only | Extractor.extract (13 fields) | classify_page | detect_technologies | snapshot_page |
+|---|---:|---:|---:|---:|---:|
+| product page, JSON-LD (11 KB) | 0.26 ms | 6.72 ms | 3.03 ms | 0.86 ms | 2.44 ms |
+| product page, no structured data (10 KB) | 0.26 ms | 6.83 ms | 3.07 ms | 0.86 ms | 2.36 ms |
+| category page, 60 cards (10 KB) | 0.29 ms | 6.04 ms | 2.61 ms | 0.74 ms | 3.37 ms |
+| large product page (482 KB) | 1.48 ms | 61.79 ms | 19.68 ms | 11.69 ms | 16.29 ms |
+
+`classify_url`: 11.5 µs per URL.
+
+A `HealingExtractor` watching three of the thirteen fields (read with
+selectors) takes 8.02 ms per product page with JSON-LD, against 7.68 ms for
+`Extractor.extract` with the same schema. The extra 0.3 ms covers counting
+the selectors' matches, remembering the elements they match, and saving
+its state every 50 pages.
+
+The large page is mostly text. Scanning long texts is where regular
+expressions without a literal start cost the most: the money pattern was
+restructured so every alternative starts with a literal character (36 ms to
+2 ms over 480 KB of text without prices), and technology fingerprints only
+scan a page when it contains their literal parts (134 ms to 12 ms on this page, with the
+same detections).

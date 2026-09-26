@@ -18,12 +18,32 @@ __version__ = "0.2.0"
 # The parser must be imported before the adaptive package (they reference each other).
 from .parser import Field, Selector, SelectorList, parse  # isort: skip
 from .adaptive import MemoryStorage, SQLiteStorage
+from .credentials import Credentials
 from .errors import (
+    BrowserError,
+    BrowserFetchError,
     BrowserNotAvailable,
+    BudgetExceeded,
     CheckpointError,
+    ConfigurationError,
+    ExportError,
+    ExpressionError,
+    ExtractionError,
     FetchError,
+    FetchTimeout,
+    HTTPError,
     HTTPStatusError,
+    ModelError,
+    NetworkError,
+    NetworkPolicyError,
+    ParserError,
+    PolicyError,
+    ProxyError,
+    RobotsPolicyError,
+    SchemaError,
     SelectorSyntaxError,
+    StorageError,
+    ValidationError,
     WintergrabError,
 )
 from .fetchers import (
@@ -34,6 +54,7 @@ from .fetchers import (
     CapturedResponse,
     Fetcher,
     HTTPCache,
+    ResourceFilter,
     Response,
     aget,
     apost,
@@ -42,41 +63,72 @@ from .fetchers import (
     post,
     render,
 )
+from .netpolicy import NetworkPolicy
 from .parser.autoextract import LearnedSchema, RecordGroup
 from .proxy import ProxyRotator
 from .request import Request
+from .sdk import WinterGrab
 from .sitemaps import SitemapEntry, sitemap
-from .spider import AutoThrottle, CrawlResult, SessionManager, Spider
+from .spider import AutoThrottle, CrawlResult, DropItem, IgnoreRequest, ItemPipeline, SessionManager, Spider
+from .urls import URLNormalizer, URLRules, normalize_url, url_template
 from .utils import configure_logging
 
 __all__ = [
     "AsyncBrowserFetcher",
     "AsyncFetcher",
     "AutoThrottle",
+    "BrowserError",
+    "BrowserFetchError",
     "BrowserFetcher",
     "BrowserNotAvailable",
+    "BudgetExceeded",
     "CacheMiss",
     "CapturedResponse",
     "CheckpointError",
+    "ConfigurationError",
     "CrawlResult",
+    "Credentials",
+    "DropItem",
+    "ExportError",
+    "ExpressionError",
+    "ExtractionError",
     "FetchError",
+    "FetchTimeout",
     "Fetcher",
     "Field",
     "HTTPCache",
+    "HTTPError",
     "HTTPStatusError",
+    "IgnoreRequest",
+    "ItemPipeline",
     "LearnedSchema",
     "MemoryStorage",
+    "ModelError",
+    "NetworkError",
+    "NetworkPolicy",
+    "NetworkPolicyError",
+    "ParserError",
+    "PolicyError",
+    "ProxyError",
     "ProxyRotator",
     "RecordGroup",
     "Request",
+    "ResourceFilter",
     "Response",
+    "RobotsPolicyError",
     "SQLiteStorage",
+    "SchemaError",
     "Selector",
     "SelectorList",
     "SelectorSyntaxError",
     "SessionManager",
     "SitemapEntry",
     "Spider",
+    "StorageError",
+    "URLNormalizer",
+    "URLRules",
+    "ValidationError",
+    "WinterGrab",
     "WintergrabError",
     "__version__",
     "aget",
@@ -84,8 +136,10 @@ __all__ = [
     "arender",
     "configure_logging",
     "get",
+    "normalize_url",
     "parse",
     "post",
     "render",
     "sitemap",
+    "url_template",
 ]

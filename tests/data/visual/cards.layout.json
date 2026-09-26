@@ -1,0 +1,202 @@
+{
+ "_about": "The layout Chromium drew for tests/data/visual/cards.html (wintergrab.parser.layout), recorded once so the tests read it without a browser.",
+ "layout": {
+  "boxes": [
+   {
+    "text": "Laptops",
+    "x": 20,
+    "y": 21.4,
+    "width": 124.4,
+    "height": 36,
+    "lines": 1,
+    "size": 32,
+    "weight": 700,
+    "tag": "h1",
+    "path": "body > h1"
+   },
+   {
+    "text": "Aero 13",
+    "x": 31,
+    "y": 90.9,
+    "width": 58.7,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 700,
+    "tag": "div",
+    "path": "body > div > div:nth-of-type(1) > div:nth-of-type(1)"
+   },
+   {
+    "text": "Price",
+    "x": 31,
+    "y": 116.9,
+    "width": 36.5,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(1) > div:nth-of-type(2) > span:nth-of-type(1)"
+   },
+   {
+    "text": "$999",
+    "x": 111,
+    "y": 116.9,
+    "width": 35.6,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(1) > div:nth-of-type(2) > span:nth-of-type(2)"
+   },
+   {
+    "text": "Weight",
+    "x": 31,
+    "y": 134.9,
+    "width": 49.5,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(1) > div:nth-of-type(3) > span:nth-of-type(1)"
+   },
+   {
+    "text": "1.1 kg",
+    "x": 111,
+    "y": 134.9,
+    "width": 43.6,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(1) > div:nth-of-type(3) > span:nth-of-type(2)"
+   },
+   {
+    "text": "Aero 15",
+    "x": 267,
+    "y": 90.9,
+    "width": 58.7,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 700,
+    "tag": "div",
+    "path": "body > div > div:nth-of-type(2) > div:nth-of-type(1)"
+   },
+   {
+    "text": "Price",
+    "x": 267,
+    "y": 116.9,
+    "width": 36.5,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(2) > div:nth-of-type(2) > span:nth-of-type(1)"
+   },
+   {
+    "text": "$1,299",
+    "x": 347,
+    "y": 116.9,
+    "width": 48.9,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(2) > div:nth-of-type(2) > span:nth-of-type(2)"
+   },
+   {
+    "text": "Weight",
+    "x": 267,
+    "y": 134.9,
+    "width": 49.5,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(2) > div:nth-of-type(3) > span:nth-of-type(1)"
+   },
+   {
+    "text": "1.6 kg",
+    "x": 347,
+    "y": 134.9,
+    "width": 43.6,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(2) > div:nth-of-type(3) > span:nth-of-type(2)"
+   },
+   {
+    "text": "Bolt 14",
+    "x": 503,
+    "y": 90.9,
+    "width": 53.3,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 700,
+    "tag": "div",
+    "path": "body > div > div:nth-of-type(3) > div:nth-of-type(1)"
+   },
+   {
+    "text": "Price",
+    "x": 503,
+    "y": 116.9,
+    "width": 36.5,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(3) > div:nth-of-type(2) > span:nth-of-type(1)"
+   },
+   {
+    "text": "$749",
+    "x": 583,
+    "y": 116.9,
+    "width": 35.6,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(3) > div:nth-of-type(2) > span:nth-of-type(2)"
+   },
+   {
+    "text": "Weight",
+    "x": 503,
+    "y": 134.9,
+    "width": 49.5,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(3) > div:nth-of-type(3) > span:nth-of-type(1)"
+   },
+   {
+    "text": "1.4 kg",
+    "x": 583,
+    "y": 134.9,
+    "width": 43.6,
+    "height": 17,
+    "lines": 1,
+    "size": 16,
+    "weight": 400,
+    "tag": "span",
+    "path": "body > div > div:nth-of-type(3) > div:nth-of-type(3) > span:nth-of-type(2)"
+   }
+  ],
+  "width": 1366.0,
+  "height": 768.0,
+  "truncated": false
+ }
+}

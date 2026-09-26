@@ -5,12 +5,13 @@ from __future__ import annotations
 import gzip
 import http.client
 import json
+import re
 import threading
 import time
 from collections import Counter, defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 QUOTES = [
     ("The world as we have created it is a process of our thinking.", "Albert Einstein", ["change", "thinking"]),
@@ -26,6 +27,17 @@ BOOKS_PER_PAGE = 4
 RATINGS = ["One", "Two", "Three", "Four", "Five"]
 PRODUCT_PAGES = 5
 PER_PAGE = 4
+# /shop/: categories of products (with ?ref= parameters that change nothing) and a tag cloud that leads nowhere
+SHOP_CATEGORIES = ["phones", "laptops", "tablets", "cameras", "watches"]
+SHOP_PER_CATEGORY = 30
+SHOP_PER_PAGE = 10
+SHOP_TAGS = [
+    "red", "blue", "green", "black", "white", "silver", "gold", "pink", "purple", "orange", "yellow", "grey",
+    "brown", "navy", "teal", "olive", "maroon", "beige", "cyan", "lime", "steel", "plastic", "glass", "leather",
+    "wood", "carbon", "metal", "fabric", "rubber", "ceramic", "light", "heavy", "small", "large", "slim", "thick",
+    "fast", "quiet", "loud", "bright", "cheap", "premium", "classic", "modern", "retro", "sport", "travel", "office",
+    "gaming", "kids", "outdoor", "indoor", "smart", "basic", "compact", "rugged", "wireless", "portable", "durable", "elegant",
+]  # fmt: skip
 
 
 def product(i: int) -> dict[str, Any]:
@@ -88,6 +100,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length).decode("utf-8", "replace")
+        parts = urlsplit(self.path)
+        if parts.path == "/redirect":
+            query = parse_qs(parts.query)
+            code = int(query.get("code", ["302"])[0])
+            return self.send(code, "", headers={"Location": query.get("to", ["/"])[0]})
         self.send(
             200,
             json.dumps(
@@ -115,6 +132,8 @@ class Handler(BaseHTTPRequestHandler):
             site.log.append((time.monotonic(), self.path, dict(self.headers)))
         q = lambda name, default=None: query.get(name, [default])[0]  # noqa: E731
 
+        if path.startswith("/shop/"):
+            return self._shop(path, query)
         if path == "/":
             links = "".join(f"<li><a href='/products/page/{n}'>Page {n}</a></li>" for n in range(1, PRODUCT_PAGES + 1))
             return self.send(200, layout("Test shop", f"<h1 id='title'>Test shop</h1><ul class='pages'>{links}</ul>"))
@@ -185,7 +204,11 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(float(q("delay", "0.5")))
             return self.send(200, layout("slow", "<p>finally</p>"))
         if path == "/redirect":
-            return self.send(302, "", headers={"Location": q("to", "/")})
+            return self.send(int(q("code", "302")), "", headers={"Location": q("to", "/")})
+        if path == "/attachment.csv":  # a file a browser downloads rather than shows
+            return self.send(200, "sku,name\n1,Parka\n", "text/csv", {"Content-Disposition": "attachment"})
+        if path == "/echo":
+            return self.send(200, json.dumps({"method": self.command, "path": self.path}), "application/json")
         if path == "/headers":
             return self.send(200, json.dumps(dict(self.headers)), "application/json")
         if path == "/cookies/set":
@@ -341,17 +364,22 @@ class Handler(BaseHTTPRequestHandler):
             head = f"<meta property='og:title' content='Rich {n}'><meta property='og:image' content='/img/{n}.png'>"
             html = layout(f"Rich {n}", body).replace("<head>", "<head>" + head, 1)
             return self.send(200, html)
-        if path.startswith("/jsgate/"):
-            # Content needs a cookie that only a JavaScript-running client gets.
-            if "gate=passed" in (self.headers.get("Cookie") or ""):
-                n = path.rsplit("/", 1)[1]
-                return self.send(200, layout(f"gated {n}", f"<h1 id='gated'>Gated {n}</h1>"))
-            html = (
-                "<html><head><title>Just a moment...</title></head><body>Checking your browser"
-                "<script>document.cookie = 'gate=passed; path=/'; setTimeout(function(){location.reload()}, 300);</script>"
-                "</body></html>"
+        if path == "/members/login":
+            # A members' area you sign into with the site's own form (its script sets the session cookie).
+            html = layout(
+                "Sign in",
+                "<input id='user'> <button id='signin' onclick=\"document.cookie = 'member=' +"
+                " encodeURIComponent(document.getElementById('user').value) + '; path=/';"
+                " location.href = '/members/1'\">Sign in</button>",
             )
-            return self.send(403, html)
+            return self.send(200, html)
+        if path.startswith("/members/"):
+            n = path.rsplit("/", 1)[1]
+            member = re.search(r"(?:^|;\s*)member=([^;]+)", self.headers.get("Cookie") or "")
+            if member:
+                name = unquote(member.group(1))
+                return self.send(200, layout(f"members {n}", f"<h1 id='member'>Members page {n} for {name}</h1>"))
+            return self.send(401, layout("Sign in first", "<p>Members only. <a href='/members/login'>Sign in</a></p>"))
         if path == "/guarded":
             if self.headers.get("X-Solved") == "yes":
                 return self.send(200, layout("Guarded", "<h1 id='real'>Guarded content</h1>"))
@@ -380,6 +408,48 @@ class Handler(BaseHTTPRequestHandler):
                     links + "<a href='https://elsewhere.invalid/x'>offsite</a><a href='/private/secret'>private</a>",
                 ),
             )
+        if path.startswith("/tree"):
+            # A binary tree of pages two levels deep: /tree/ -> /tree/a, /tree/b -> /tree/a/a ...
+            node = path[len("/tree") :].strip("/")
+            depth = len([p for p in node.split("/") if p])
+            links = (
+                "".join(f"<a class='child' href='/tree/{node + '/' if node else ''}{c}'>{c}</a>" for c in "ab")
+                if depth < 2
+                else ""
+            )
+            return self.send(200, layout(f"tree {node or 'root'}", f"<p id='node'>{node or 'root'}</p>{links}"))
+        if path == "/tracking-links":
+            # The same pages behind tracking parameters, fragments and dot segments.
+            links = "".join(
+                f"<a href='/item/{i}?utm_source=news&utm_medium=email'>a</a><a href='/item/{i}#reviews'>b</a>"
+                f"<a href='/x/../item/{i}?gclid=abc'>c</a><a href='/item/{i}'>d</a>"
+                for i in range(3)
+            )
+            links += "<a href='/img/photo.jpg'>image</a><a href='/a/b/a/b/a/b/a/b'>trap</a>"
+            return self.send(200, layout("tracking", links))
+        if path == "/thirdparty":
+            host = self.headers.get("Host", "127.0.0.1")
+            html = layout(
+                "third party",
+                f"<img src='http://{host}/img/logo.png'><p id='t'>content</p>"
+                "<script src='https://www.google-analytics.com/analytics.js'></script>"
+                f"<script src='http://{host}/local.js'></script>",
+            )
+            return self.send(200, html)
+        if path == "/local.js":
+            return self.send(200, "document.getElementById('t').textContent = 'scripted';", "application/javascript")
+        if path.startswith("/img/"):
+            return self.send(200, b"\x89PNG\r\n\x1a\n" + b"\0" * 64, "image/png")
+        if path == "/fetch-localhost":
+            port = self.server.server_address[1]
+            html = layout(
+                "fetch",
+                "<p id='out'>waiting</p><script>fetch('http://localhost:"
+                + str(port)
+                + "/api/products?page=7').then(r => r.json()).then(d => {document.getElementById('out').textContent"
+                " = 'leaked'}).catch(e => {document.getElementById('out').textContent = 'refused'});</script>",
+            )
+            return self.send(200, html)
         if path.startswith("/item/"):
             i = path.rsplit("/", 1)[1]
             delay = float(q("delay", "0"))
@@ -440,6 +510,50 @@ def _books_page(handler: Handler, path: str) -> None:
 
 
 Handler._books = _books_page  # type: ignore[attr-defined]
+
+
+def _shop_page(handler: Handler, path: str, query: dict[str, list[str]]) -> None:
+    """Categories of products whose links carry ?ref= (which changes nothing), and a tag cloud of pages that
+    only lead to more tags."""
+    tags = SHOP_TAGS
+
+    def tag_links(start: int, count: int) -> str:
+        return "".join(f"<a class='tag' href='/shop/tag/{tags[(start + k) % len(tags)]}'>#</a> " for k in range(count))
+
+    if path == "/shop/":
+        cats = "".join(f"<li><a href='/shop/c/{c}'>{c}</a></li>" for c in SHOP_CATEGORIES)
+        return handler.send(200, layout("Shop", f"<h1>Shop</h1><ul>{cats}</ul><div>{tag_links(0, 30)}</div>"))
+    if path.startswith("/shop/c/") and path[8:] in SHOP_CATEGORIES:
+        c = SHOP_CATEGORIES.index(path[8:])
+        n = int(query.get("page", ["1"])[0])
+        first = c * SHOP_PER_CATEGORY + (n - 1) * SHOP_PER_PAGE + 1
+        items = "".join(
+            f"<li><a href='/shop/p/{i}?ref=c-{path[8:]}'>Item {i}</a></li>" for i in range(first, first + SHOP_PER_PAGE)
+        )
+        more = SHOP_PER_CATEGORY // SHOP_PER_PAGE
+        nxt = f"<a class='next' href='/shop/c/{path[8:]}?page={n + 1}'>next</a>" if n < more else ""
+        return handler.send(
+            200, layout(f"{path[8:]} {n}", f"<h1>{path[8:]}</h1><ul>{items}</ul>{nxt}{tag_links(n, 5)}")
+        )
+    if path.startswith("/shop/p/"):
+        i = int(path[8:])
+        c = (i - 1) // SHOP_PER_CATEGORY
+        first = c * SHOP_PER_CATEGORY + 1
+        related = "".join(
+            f"<a href='/shop/p/{first + (i - first + k) % SHOP_PER_CATEGORY}?ref=related'>more</a> " for k in (1, 2)
+        )
+        body = (
+            f"<h1>Shop product {i}</h1><p class='price'>${10 + i}.00</p><div>{related}</div>"
+            f"<a href='/shop/c/{SHOP_CATEGORIES[c]}'>back</a> {tag_links(i, 5)}"
+        )
+        return handler.send(200, layout(f"Shop product {i}", body))
+    if path.startswith("/shop/tag/") and path[10:] in tags:
+        k = tags.index(path[10:])
+        return handler.send(200, layout(f"#{path[10:]}", f"<h1>#{path[10:]}</h1>{tag_links(k * 7 + 1, 8)}"))
+    return handler.send(404, layout("Not found", "<p>nope</p>"))
+
+
+Handler._shop = _shop_page  # type: ignore[attr-defined]
 
 
 class SiteServer(ThreadingHTTPServer):

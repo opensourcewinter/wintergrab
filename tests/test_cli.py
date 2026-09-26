@@ -168,3 +168,55 @@ def test_output_survives_a_narrow_locale_encoding(monkeypatch) -> None:
     print("₹ 中文 £")  # UnicodeEncodeError in cp1252
     sys.stdout.flush()
     assert raw.getvalue().decode("utf-8").strip() == "₹ 中文 £"
+
+
+def test_public_only_refuses_local_addresses(fresh_site, capsys) -> None:
+    code, _, err = run(capsys, "get", fresh_site.url + "/product/1", "--public-only")
+    assert code == 1 and "Blocked by network policy" in err and "loopback" in err
+    code, out, err = run(capsys, "crawl", fresh_site.url + "/products/page/1", "--public-only", "--no-robots")
+    assert out == "" and "0 items" in err
+    assert sum(fresh_site.site.hits.values()) == 0
+
+
+def test_crawl_normalize_urls_and_default_url_rules(fresh_site, capsys) -> None:
+    code, out, _ = run(
+        capsys, "crawl", fresh_site.url + "/tracking-links", "--normalize-urls", "--no-robots",
+        "--allow", r"/item/|/img/|/a/b/|tracking-links",
+    )  # fmt: skip
+    assert code == 0
+    urls = sorted(json.loads(line)["url"] for line in out.splitlines())
+    assert urls == [fresh_site.url + f"/item/{i}" for i in range(3)] + [fresh_site.url + "/tracking-links"]
+    assert fresh_site.site.hits["/img/photo.jpg"] == 0  # skipped by the default URL rules
+
+
+def test_crawl_budget_order_and_failure_summary(fresh_site, tmp_path, capsys) -> None:
+    events = tmp_path / "events.jsonl"
+    code, out, err = run(
+        capsys, "crawl", fresh_site.url + "/links?n=30", "--no-robots", "--max-requests", "5",
+        "--order", "dfs", "--events", str(events), "--allow", "/item/",
+    )  # fmt: skip
+    assert code == 0 and "limit (max_requests): 5 pages" in err
+    assert len(out.splitlines()) == 5
+    kinds = [json.loads(line)["event"] for line in events.read_text(encoding="utf-8").splitlines()]
+    assert kinds[0] == "crawl_started" and "budget_exhausted" in kinds and kinds[-1] == "crawl_finished"
+    code, _, err = run(capsys, "crawl", fresh_site.url + "/status/404", "--no-robots")
+    assert "failures:" in err and "HTTP 404 on 127.0.0.1: 1 URL(s); cause: the page does not exist" in err
+
+
+def test_crawl_retry_failed(fresh_site, tmp_path, capsys) -> None:
+    crawl_dir = str(tmp_path / "crawl")
+    url = fresh_site.url + "/flaky/cli?fail=4"
+    common = ("--no-robots", "--crawl-dir", crawl_dir, "--max-depth", "0", "--no-autothrottle")
+    code, _, err = run(capsys, "crawl", url, *common, "-s", "retries=1")
+    assert "1 failed request(s) recorded; retry just those with --retry-failed" in err
+    code, out, err = run(capsys, "crawl", url, *common, "--retry-failed")
+    assert code == 0 and [json.loads(line)["url"] for line in out.splitlines()] == [url]
+
+
+def test_the_doctor_as_json(capsys) -> None:
+    assert main(["doctor", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    checks = report["checks"]
+    assert report["ok"] is True and [c["name"] for c in checks[:4]] == ["python", "curl_cffi", "lxml", "cssselect"]
+    assert all(set(c) == {"name", "ok", "detail", "fix"} and (c["fix"] is None) == c["ok"] for c in checks)
+    assert "duckdb" in {c["name"] for c in checks}
