@@ -42,6 +42,10 @@ New to the code? [docs/architecture.md](docs/architecture.md) shows where
 things are. Much can be added as a [plugin](docs/plugins.md), without
 changing wintergrab.
 
+`docs/api.md` is written from the code: after changing a public name, a
+signature or the first sentence of a docstring, run `python
+scripts/api_reference.py` (a test checks that it is up to date).
+
 A bug fix should come with a test that fails without it. The hot-path
 shortcuts in `utils.py`, `request.py` and the parser must return exactly
 what the code they bypass returns; `tests/test_fast_paths.py` checks that.

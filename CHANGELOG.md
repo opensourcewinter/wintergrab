@@ -541,6 +541,9 @@
   0.2. SECURITY.md covers the new trust boundaries and credentials.
 - A code of conduct, issue forms for bugs and features, and a pull request
   template.
+- `docs/api.md`: every public name by module, with its signature and
+  summary, written from the code by `scripts/api_reference.py`. A test
+  keeps it up to date.
 - New examples: a record from a template with its evidence, a goal, a
   recorded crawl replayed after a change, a project file, and a plugin
   package. Each is tested offline, and live before releases.

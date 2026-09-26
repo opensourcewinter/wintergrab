@@ -271,6 +271,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Configuration](https://github.com/opensourcewinter/wintergrab/blob/main/docs/configuration.md) | Where each setting lives: spider settings, files, environment variables, secrets |
 | [Architecture](https://github.com/opensourcewinter/wintergrab/blob/main/docs/architecture.md) | How it is built: the layers, a request's way through a crawl, where things are, extension points |
 | [Upgrading from 0.2](https://github.com/opensourcewinter/wintergrab/blob/main/docs/migration.md) | What behaves differently, and what code may need a change |
+| [API reference](https://github.com/opensourcewinter/wintergrab/blob/main/docs/api.md) | Every public name, by module, with its signature and what it does (written from the code) |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly
