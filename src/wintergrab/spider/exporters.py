@@ -1,9 +1,12 @@
-"""Write scraped items to JSON Lines, JSON, CSV or SQLite as they arrive."""
+"""Write scraped items as they arrive: JSON Lines, JSON, CSV, SQLite, and through
+:mod:`wintergrab.storage` Parquet, Excel and PostgreSQL (or any format registered with
+:func:`register_exporter`)."""
 
 from __future__ import annotations
 
 import csv
 import dataclasses
+import importlib
 import json
 import os
 import re
@@ -77,6 +80,12 @@ class _CountingWriter:
 
 
 class Exporter:
+    """Writes items to an output. Subclasses take ``(path, *, append)``, and ``unique_key`` too when
+    they set :attr:`supports_unique_key` (upserts); an output given as a URL gets the URL."""
+
+    #: Rows are upserted on ``unique_key`` (the exporter's constructor takes it).
+    supports_unique_key = False
+
     def __init__(self, path: Path, *, append: bool) -> None:
         self.path = path
         self.append = append
@@ -254,6 +263,7 @@ class SqliteExporter(Exporter):
     table = "items"
     meta_table = "_wintergrab_columns"
     rowid = "_wg_rowid"
+    supports_unique_key = True
 
     def __init__(self, path: Path, *, append: bool, unique_key: str | None = None) -> None:
         super().__init__(path, append=append)
@@ -364,7 +374,9 @@ class StdoutExporter(Exporter):
         sys.stdout.flush()
 
 
-EXPORTERS: dict[str, type[Exporter]] = {
+#: Outputs by file extension: an :class:`Exporter` class, or ``"module:Class"`` imported when first
+#: used (for formats whose library is optional). More with :func:`register_exporter`.
+EXPORTERS: dict[str, type[Exporter] | str] = {
     ".jsonl": JsonLinesExporter,
     ".ndjson": JsonLinesExporter,
     ".jl": JsonLinesExporter,
@@ -373,24 +385,70 @@ EXPORTERS: dict[str, type[Exporter]] = {
     ".sqlite": SqliteExporter,
     ".sqlite3": SqliteExporter,
     ".db": SqliteExporter,
+    ".parquet": "wintergrab.storage.parquet:ParquetExporter",
+    ".pq": "wintergrab.storage.parquet:ParquetExporter",
+    ".xlsx": "wintergrab.storage.xlsx:XlsxExporter",
 }
+#: Outputs by URL scheme (``postgresql://...``).
+URL_EXPORTERS: dict[str, type[Exporter] | str] = {
+    "postgresql": "wintergrab.storage.postgres:PostgresExporter",
+    "postgres": "wintergrab.storage.postgres:PostgresExporter",
+}
+_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
+
+
+def register_exporter(key: str, exporter: type[Exporter] | str) -> None:
+    """Add an output: ``".ext"`` for files with that extension, ``"scheme"`` for ``scheme://`` URLs.
+
+    ``exporter`` is an :class:`Exporter` subclass, or ``"module:Class"`` imported when first used.
+    """
+    name = key.lower()
+    if name.startswith("."):
+        EXPORTERS[name] = exporter
+    elif _SCHEME.match(name + "://"):
+        URL_EXPORTERS[name] = exporter
+    else:
+        raise ValueError(f"an output is registered by extension ('.ext') or URL scheme ('scheme'), not {key!r}")
+
+
+def output_scheme(output: str | os.PathLike[str]) -> str | None:
+    """The URL scheme of an output (``"postgresql"``), or ``None`` for a file."""
+    match = _SCHEME.match(os.fspath(output))
+    return match.group(1).lower() if match else None
+
+
+def _resolve(entry: type[Exporter] | str) -> type[Exporter]:
+    if isinstance(entry, str):
+        module, _, name = entry.partition(":")
+        return getattr(importlib.import_module(module), name)  # type: ignore[no-any-return]
+    return entry
 
 
 def open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter:
-    """Pick an exporter from the file extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``).
+    """Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``,
+    ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``).
 
     ``"-"`` writes JSON Lines to standard output.
     """
-    if str(path) == "-":
+    text = os.fspath(path)
+    if text == "-":
         return StdoutExporter(Path("-"), append=append)
-    target = Path(path)
-    cls = EXPORTERS.get(target.suffix.lower())
-    if cls is None:
-        raise ValueError(f"Unsupported output format {target.suffix!r}; use .jsonl, .json, .csv or .sqlite")
+    scheme = output_scheme(text)
+    if scheme is not None:
+        entry = URL_EXPORTERS.get(scheme)
+        if entry is None:
+            known = ", ".join(f"{s}://" for s in sorted(URL_EXPORTERS))
+            raise ValueError(f"no output for {scheme}:// URLs (known: {known})")
+        cls = _resolve(entry)
+        return cls(text, append=append, **({"unique_key": unique_key} if cls.supports_unique_key else {}))  # type: ignore[arg-type]
+    target = Path(text)
+    found = EXPORTERS.get(target.suffix.lower())
+    if found is None:
+        known = ", ".join(sorted(EXPORTERS))
+        raise ValueError(f"Unsupported output format {target.suffix!r}; use one of {known}, or postgresql://...")
+    cls = _resolve(found)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if cls is SqliteExporter:
-        return SqliteExporter(target, append=append, unique_key=unique_key)
-    return cls(target, append=append)
+    return cls(target, append=append, **({"unique_key": unique_key} if cls.supports_unique_key else {}))
 
 
 def write_items(path: str | os.PathLike[str], items: list[Any]) -> Path:

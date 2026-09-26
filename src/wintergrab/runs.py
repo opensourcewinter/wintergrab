@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from .errors import ConfigurationError
-from .redact import REDACTED, redact, redact_argv
+from .redact import REDACTED, redact, redact_argv, redact_url
 from .utils import replace_file
 
 if TYPE_CHECKING:
@@ -449,7 +449,7 @@ class RunRecorder:
                 self.metrics(result.metrics)
         run.quality = _quality_of(self.spider)
         output = self.spider.output
-        run.output = None if output in (None, "-") else str(output)
+        run.output = None if output in (None, "-") else redact_url(str(output))
         self.registry.save(run)
 
 

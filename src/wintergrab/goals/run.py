@@ -197,7 +197,12 @@ def run_plan(
                 strategy.record(url, "http", False)  # what the sample showed: those pages need a browser
         options.setdefault("adaptive_fetch", strategy)
     if goal.monitor and output:
-        options.setdefault("history", str(Path(output).with_suffix(".history")))
+        from ..spider.exporters import output_scheme
+
+        if output_scheme(output) is None:
+            options.setdefault("history", str(Path(output).with_suffix(".history")))
+        else:  # a database: the history in the workspace, named after the goal's records
+            options.setdefault("history", str(Path(".wintergrab") / f"{goal.kind.name}.history"))
     if goal.limit:
         options.setdefault("max_items", goal.limit)
     spider = GoalSpider(

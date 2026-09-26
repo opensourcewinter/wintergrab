@@ -22,6 +22,7 @@ from .errors import ConfigurationError, FetchError, WintergrabError, describe
 from .fetchers import AsyncBrowserFetcher, AsyncFetcher, Response
 from .parser import Selector
 from .proxy import ProxyRotator
+from .redact import redact_url
 from .spider import Spider
 from .spider.exporters import dumps, to_dict
 from .utils import configure_logging, ensure_scheme, host_of
@@ -1178,7 +1179,7 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     print(
         f"{status}: {stats.get('pages', 0)} pages, {stats.get('items', 0)} items, "
         f"{stats.get('errors', 0)} errors in {stats.get('elapsed_seconds', 0):.1f}s"
-        + (f" -> {spider.output}" if spider.output and spider.output != "-" else ""),
+        + (f" -> {redact_url(str(spider.output))}" if spider.output and spider.output != "-" else ""),
         file=sys.stderr,
     )
     _print_failures(result, verbose=args.verbose)
@@ -1932,7 +1933,7 @@ def build_parser() -> argparse.ArgumentParser:
     data = sub.add_parser(
         "data",
         help="infer schemas, validate, clean and check the quality of datasets",
-        description="Work with scraped datasets: JSON Lines, JSON or CSV files.",
+        description="Work with scraped datasets: JSON Lines, JSON, CSV, Parquet or Excel files, or PostgreSQL tables.",
         epilog=EPILOG_DATA,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

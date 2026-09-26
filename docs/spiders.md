@@ -80,7 +80,8 @@ The default makes one request per URL in `start_urls`.
 ## Output
 
 ```python
-QuotesSpider(output="quotes.jsonl").run()   # .jsonl, .json or .csv, streamed as items arrive
+QuotesSpider(output="quotes.jsonl").run()   # streamed as items arrive: .jsonl, .json, .csv, .sqlite,
+                                            # .parquet, .xlsx or postgresql://... (see storage.md)
 result = QuotesSpider().run()
 result.items          # items from this run (turn off with keep_items=False for huge crawls)
 result.stats          # pages, items, retries, errors, status codes, bytes, elapsed...
@@ -302,7 +303,7 @@ kept: raise the budget and run again to continue.
 | `max_errors` | URLs given up on |
 | `max_error_rate` | failed / started pages, after `error_rate_min_pages` (50) pages |
 | `max_memory`, `max_cpu_seconds` | resident memory (bytes), CPU seconds of this run |
-| `max_output_bytes` | bytes written to `output` in this run, checked after every item (SQLite output: the file's growth, checked once a second) |
+| `max_output_bytes` | bytes written to `output` in this run, checked after every item (SQLite output: the file's growth, checked once a second; Parquet, Excel and PostgreSQL: the items as JSON) |
 
 To degrade gracefully instead, set `budget_soft_limit = 0.9`: once any budget
 is 90% used only requests with `priority >= budget_soft_priority` (default 1)
@@ -547,7 +548,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `url_rules` | `None` | Filter discovered links: patterns, domains, extensions, crawler traps (`True`, a dict, or `URLRules`). |
 | `network_policy` | `None` | Where requests may go: `"public"`, `"private"`, a dict, or a `NetworkPolicy`. `None` = anywhere. |
 | `resource_filter` | `None` | Browser sessions: also block ads, analytics and trackers. |
-| `output` | `None` | Stream items to `.jsonl` / `.json` / `.csv`. |
+| `output` | `None` | Where items go: `.jsonl`, `.json`, `.csv`, `.sqlite`, `.parquet`, `.xlsx`, `postgresql://...` ([storage](storage.md)). |
 | `crawl_dir` | `None` | Enables pause/resume. |
 | `checkpoint_interval` | `60` | Seconds between automatic checkpoints. |
 | `keep_items` | `True` | Keep items in `result.items`. |

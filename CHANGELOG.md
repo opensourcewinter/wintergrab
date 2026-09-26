@@ -445,6 +445,28 @@
 - Runs keep their metrics (`metrics.json`: every two seconds while they
   run, then the final ones) and the quality reports of their records.
 
+### Storage adapters (`wintergrab.storage`)
+
+- More outputs, chosen by extension or URL, each behind its own extra:
+  - `.parquet` (`wintergrab[parquet]`, pyarrow): a typed column per field,
+    zstd-compressed, nested values as JSON that reads back as it was;
+  - `.xlsx` (`wintergrab[xlsx]`, openpyxl): text is never a formula
+    (`=HYPERLINK(...)` from a page stays text), control characters are
+    left out, and long crawls continue on new sheets;
+  - `postgresql://user@host/db?table=NAME` (`wintergrab[postgres]`,
+    psycopg 3): typed columns that widen when a value does not fit, `jsonb`
+    for nested values, upserts on `unique_key`. It only writes tables it
+    created, and keeps passwords out of what it shows.
+- Parquet and Excel files are written when the crawl ends. Until then the
+  items are spooled beside them, so a stopped crawl loses nothing and a
+  resumed one continues.
+- `read_records` (and every `wintergrab data` command) reads Parquet, Excel
+  and PostgreSQL tables too.
+- `register_exporter(".ext" | "scheme", ...)` and `register_reader(...)` add
+  formats. A class or `"module:Class"` works: optional libraries are
+  imported only when used.
+- A CI job tests the PostgreSQL output against a PostgreSQL 16 server.
+
 ### Fixes
 
 - A run's record (`run.json`) kept credentials as they were given: the

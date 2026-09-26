@@ -34,6 +34,7 @@ from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..fetchers.response import Response
 from ..fetchers.strategy import FetchStrategy
 from ..proxy import ProxyRotator, proxy_label
+from ..redact import redact_url
 from ..request import Request
 from ..runs import RunRecorder, RunRegistry
 from ..urls import URLNormalizer, URLRules
@@ -1758,7 +1759,7 @@ class Engine:
                 self.exporter.write(processed)
             except Exception as exc:
                 self.stats.inc("export_errors")
-                log.error("could not write item to %s: %s", self.spider.output, describe(exc))
+                log.error("could not write item to %s: %s", redact_url(str(self.spider.output)), describe(exc))
             if self._output_budget:
                 exhausted = self.budget.check_output()
                 if exhausted is not None:

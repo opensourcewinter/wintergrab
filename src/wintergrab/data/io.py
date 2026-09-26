@@ -1,20 +1,57 @@
-"""Reading record files: JSON Lines, JSON and CSV (writing uses the crawl exporters)."""
+"""Reading records: JSON Lines, JSON, CSV, and through :mod:`wintergrab.storage` Parquet, Excel and
+PostgreSQL (writing uses the crawl exporters)."""
 
 from __future__ import annotations
 
 import csv
+import importlib
 import itertools
 import json
+import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import IO, Any
 
 from ..errors import ConfigurationError
 
-__all__ = ["RECORD_SUFFIXES", "read_records"]
+__all__ = ["READERS", "RECORD_SUFFIXES", "URL_READERS", "read_records", "register_reader"]
 
-RECORD_SUFFIXES = (".jsonl", ".ndjson", ".json", ".csv")
+Reader = Callable[[str], Iterator[dict[str, Any]]]
+#: Readers by file extension, beyond the built-in ones: a function ``(path) -> records``, or
+#: ``"module:function"`` imported when first used. More with :func:`register_reader`.
+READERS: dict[str, Reader | str] = {
+    ".parquet": "wintergrab.storage.parquet:read_parquet",
+    ".pq": "wintergrab.storage.parquet:read_parquet",
+    ".xlsx": "wintergrab.storage.xlsx:read_xlsx",
+}
+#: Readers by URL scheme (``postgresql://...``).
+URL_READERS: dict[str, Reader | str] = {
+    "postgresql": "wintergrab.storage.postgres:read_postgres",
+    "postgres": "wintergrab.storage.postgres:read_postgres",
+}
+RECORD_SUFFIXES = (".jsonl", ".ndjson", ".json", ".csv", *READERS)
+_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
+
+
+def register_reader(key: str, reader: Reader | str) -> None:
+    """Read more: ``".ext"`` for files with that extension, ``"scheme"`` for ``scheme://`` URLs."""
+    name = key.lower()
+    if name.startswith("."):
+        READERS[name] = reader
+    elif _SCHEME.match(name + "://"):
+        URL_READERS[name] = reader
+    else:
+        raise ValueError(f"a reader is registered by extension ('.ext') or URL scheme ('scheme'), not {key!r}")
+
+
+def _reader(entry: Reader | str) -> Reader:
+    if isinstance(entry, str):
+        module, _, name = entry.partition(":")
+        return getattr(importlib.import_module(module), name)  # type: ignore[no-any-return]
+    return entry
+
+
 _WRAPPERS = ("items", "records", "data", "results", "rows")
 
 
@@ -37,8 +74,9 @@ def read_records(path: str | Path, *, limit: int | None = None) -> Iterator[dict
 
     ``.jsonl``/``.ndjson``: one JSON object per line. ``.json``: a list of
     objects (or an object holding one under ``items``, ``records``, ``data``...).
-    ``.csv``: one record per row, values as strings. ``"-"``: JSON Lines on
-    standard input.
+    ``.csv``: one record per row, values as strings. ``.parquet``, ``.xlsx``
+    and ``postgresql://.../db?table=NAME``: see :mod:`wintergrab.storage`.
+    ``"-"``: JSON Lines on standard input.
     """
     records = _read(str(path))
     yield from records if limit is None else itertools.islice(records, limit)
@@ -48,10 +86,22 @@ def _read(source: str) -> Iterator[dict[str, Any]]:
     if source == "-":
         yield from _json_lines(iter(sys.stdin), "stdin")
         return
+    scheme = _SCHEME.match(source)
+    if scheme:
+        entry = URL_READERS.get(scheme.group(1).lower())
+        if entry is None:
+            raise ConfigurationError(f"no reader for {scheme.group(1)}:// URLs (known: {', '.join(URL_READERS)})")
+        yield from _reader(entry)(source)
+        return
     target = Path(source)
     suffix = target.suffix.lower()
     if suffix not in RECORD_SUFFIXES:
         raise ConfigurationError(f"unsupported input {target.name!r}; use {', '.join(RECORD_SUFFIXES)}")
+    if suffix in READERS:
+        if not target.is_file():
+            raise ConfigurationError(f"cannot read {target}: no such file")
+        yield from _reader(READERS[suffix])(str(target))
+        return
     try:
         handle: IO[str] = target.open(encoding="utf-8-sig", newline="" if suffix == ".csv" else None)
     except OSError as exc:
