@@ -288,6 +288,8 @@ pipeline: 4 in -> 2 out
 | `Lookup(on, table, fields=...)` | copies columns from a reference table (dict, rows, `.csv`/`.json`/`.jsonl`/`.yaml`) matched on a field |
 | `ConvertCurrency(fields, to=, rates=)` | converts amounts with exchange rates **you** supply (none are fetched) |
 | `Enrich(fn)` | merges the fields a function returns; the function may be `async` (a web service, an AI provider adapter) |
+| `Analyze(field, add=...)` | adds a text field's `language`, `keywords`, `words` and `reading_minutes` (and `language_confidence`, `sentences`, `characters`, `script`), with no model ([content](intelligence.md#content-language-keywords-topics)); a text written without spaces between words gets `None` words and reading time |
+| `Classify(field, model, categories=...)` | adds a model's `topic`, `category` (one of yours), `sentiment` and `entities` (found in the text), checked; a model that fails leaves the record as it was |
 | `QualityCheck(schema)` | measures quality as records pass (see [Quality](#quality)) |
 
 Any object with `process_item` and any `record -> record | None` function

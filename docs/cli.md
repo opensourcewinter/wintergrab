@@ -172,6 +172,7 @@ wintergrab data entities INPUT --field NAME [--kind KIND] [--attribute ATTR=FIEL
                          [--review-output FILE] [--annotate FILE] [--merge P] [--review P]
 wintergrab data commit DIR INPUT [--key FIELD] [-m MESSAGE] [--force]   # save the next version
 wintergrab data log DIR                                                  # list the versions
+wintergrab data analyze INPUT --field FIELD [--add FEATURES] [--model PROVIDER:NAME [--categories A,B]] [-o OUT]
 wintergrab data graph [KIND=]INPUT... [--kind KIND] [--relation FIELD=RELATION:KIND] [--only] [-o GRAPH]
 wintergrab data diff OLD NEW [--key FIELD] [--ignore FIELD] [-o CHANGES] [--json] [--exit-code]
 ```

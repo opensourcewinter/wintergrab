@@ -111,6 +111,7 @@ EPILOG_DATA = """examples:
   wintergrab data entities companies.jsonl --field name --attribute website --attribute phone -o entities.jsonl
   wintergrab data entities products.jsonl --field brand --kind brand --annotate products.resolved.jsonl
   wintergrab data graph job=jobs.jsonl company=companies.jsonl -o graph.graphml   # the things they name, linked
+  wintergrab data analyze articles.jsonl --field body -o analyzed.jsonl   # language, keywords, length
   wintergrab data commit prices/ today.jsonl --key url -m "daily run"   # save a version
   wintergrab data diff prices/@previous prices/@latest                    # what changed since the last one
   wintergrab data diff yesterday.jsonl today.jsonl --key sku -o changes.jsonl
@@ -1591,6 +1592,45 @@ def cmd_data_entities(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data_analyze(args: argparse.Namespace) -> int:
+    from collections import Counter
+
+    from .data import Analyze, Classify, Pipeline
+    from .data.io import read_records
+
+    try:
+        features = [a.strip() for a in args.add.split(",") if a.strip()] if args.add else None
+        analyze = (
+            Analyze(args.field, prefix=args.prefix)
+            if features is None
+            else Analyze(args.field, add=features, prefix=args.prefix)
+        )
+        stages: list[Any] = [analyze]
+        if args.model:
+            categories = [c.strip() for c in args.categories.split(",") if c.strip()] if args.categories else None
+            stages.append(Classify(args.field, _model(args), categories=categories, prefix=args.prefix))
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    pipeline = Pipeline(stages, name="analyze")
+    records = pipeline.run(read_records(args.input, limit=args.limit))
+    _write_records(records, args.output)
+    if args.verbose >= 0:
+        languages = Counter(r.get(args.prefix + "language") for r in records)
+        shown = ", ".join(f"{language or 'unknown'} {count:,}" for language, count in languages.most_common(8))
+        print(f"{len(records):,} record(s); languages: {shown}", file=sys.stderr)
+        keywords = Counter(k for r in records for k in r.get(args.prefix + "keywords") or ())
+        if keywords:
+            print("keywords: " + ", ".join(f"{k} ({n})" for k, n in keywords.most_common(10)), file=sys.stderr)
+        sentiments = Counter(r.get(args.prefix + "sentiment") for r in records if r.get(args.prefix + "sentiment"))
+        if sentiments:
+            print("sentiment: " + ", ".join(f"{s} {n:,}" for s, n in sentiments.most_common()), file=sys.stderr)
+        errors = sum(stage.stats["errors"] for stage in pipeline)
+        if errors:
+            print(f"the model failed on {errors:,} record(s): they are kept without its labels", file=sys.stderr)
+    return 0
+
+
 def cmd_data_graph(args: argparse.Namespace) -> int:
     from .data.graph import RELATIONS, KnowledgeGraph, Relation
     from .data.io import read_records
@@ -2200,6 +2240,29 @@ def build_parser() -> argparse.ArgumentParser:
     ent.add_argument("--show", type=int, default=10, metavar="N", help="entities and review pairs to print (10)")
     ent.add_argument("--limit", type=int, metavar="N", help="only the first N records")
     ent.set_defaults(func=cmd_data_entities)
+    an = actions.add_parser(
+        "analyze", help="a text field's language, keywords and length; with a model, its topic, sentiment and entities"
+    )
+    an.add_argument("input", metavar="INPUT")
+    an.add_argument("--field", required=True, metavar="FIELD", help="the text to analyze (dotted paths work)")
+    an.add_argument(
+        "--add",
+        metavar="FEATURES",
+        help="comma-separated: language, language_confidence, keywords, words, sentences, characters, "
+        "reading_minutes, script "
+        "(default: language, keywords, words, reading_minutes)",
+    )
+    an.add_argument("--prefix", default="", metavar="TEXT", help="put before the added fields' names")
+    an.add_argument(
+        "--model",
+        metavar="PROVIDER:NAME",
+        help="also ask a language model for the topic, sentiment and entities (checked; see docs/models.md)",
+    )
+    an.add_argument("--model-url", metavar="URL", help="(--model) where the model's API is (a server of your own)")
+    an.add_argument("--categories", metavar="A,B,C", help="(--model) the categories to choose one from")
+    an.add_argument("-o", "--output", metavar="FILE", help="write the records with what was found (default stdout)")
+    an.add_argument("--limit", type=int, metavar="N", help="only the first N records")
+    an.set_defaults(func=cmd_data_analyze)
     gr = actions.add_parser(
         "graph", help="a knowledge graph: the things records name, resolved, and how they relate, with sources"
     )

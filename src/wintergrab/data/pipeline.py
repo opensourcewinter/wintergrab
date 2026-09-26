@@ -61,7 +61,7 @@ from ..errors import ConfigurationError, ExpressionError, ValidationError, Winte
 from ..files import read_structured, yaml_module
 from ..utils import maybe_await
 from .dedupe import Deduplicator
-from .expressions import Expression, compile_expression
+from .expressions import Expression, compile_expression, get_path
 from .issues import Issue
 from .normalize import (
     as_int_or_float,
@@ -88,6 +88,8 @@ from .validate import Rule, validate_record
 
 __all__ = [
     "OPERATIONS",
+    "Analyze",
+    "Classify",
     "Compute",
     "ConfigLoader",
     "ConvertCurrency",
@@ -1797,6 +1799,147 @@ class Enrich(Stage):
         return self._named(options)
 
 
+class Analyze(Stage):
+    """Add what a text field says of itself: its language, keywords and size, with no model
+    (:mod:`wintergrab.intel.content`).
+
+    ``Analyze("body")`` adds ``language``, ``keywords``, ``words`` and ``reading_minutes``. ``add`` picks
+    among those and ``language_confidence``, ``sentences``, ``characters`` and ``script``; ``prefix`` names
+    them (``body_language``...). A record without text in the field is left as it is. A text written
+    without spaces between words (Chinese, Japanese, Thai...) gets ``None`` words and reading time.
+    """
+
+    kind = "analyze"
+    FEATURES = ("language", "language_confidence", "keywords", "words", "sentences", "characters",
+                "reading_minutes", "script")  # fmt: skip
+
+    def __init__(
+        self,
+        field: str,
+        *,
+        add: Sequence[str] = ("language", "keywords", "words", "reading_minutes"),
+        prefix: str = "",
+        keywords: int = 8,
+        name: str | None = None,
+    ) -> None:
+        super().__init__(name=name)
+        unknown = [a for a in add if a not in self.FEATURES]
+        if unknown:
+            raise ConfigurationError(
+                f"unknown feature(s) {', '.join(unknown)}; known: {', '.join(self.FEATURES)}", key=self.name
+            )
+        self.field, self.add, self.prefix, self.keywords = field, tuple(add), prefix, keywords
+
+    def apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None:
+        from ..intel.content import analyze_text
+
+        text = _text_of(get_path(record, self.field))
+        if not text:
+            return record
+        analysis = analyze_text(text, keywords=self.keywords)
+        for feature in self.add:
+            record[self.prefix + feature] = getattr(analysis, feature)
+        return record
+
+    @classmethod
+    def from_config(cls, options: Any, loader: ConfigLoader) -> Analyze:
+        opts = _options(options, {"field", "add", "prefix", "keywords", "name"}, cls.kind, required=["field"])
+        if "add" in opts:
+            opts["add"] = _names(opts["add"], "add", cls.kind)
+        return cls(str(opts.pop("field")), **opts)
+
+    def to_config(self) -> dict[str, Any]:
+        options: dict[str, Any] = {"field": self.field, "add": list(self.add)}
+        if self.prefix:
+            options["prefix"] = self.prefix
+        if self.keywords != 8:
+            options["keywords"] = self.keywords
+        return self._named(options)
+
+
+class Classify(Stage):
+    """Ask a model for a text field's topic, category (one of ``categories``), sentiment and entities,
+    and add them, checked (:func:`wintergrab.intel.content.classify_text`).
+
+    ``model`` is a model provider, or ``"provider:name"`` (keys from the environment). When the model
+    fails, the error is counted and the record kept.
+    """
+
+    kind = "classify"
+    FEATURES = ("topic", "category", "sentiment", "entities")
+
+    def __init__(
+        self,
+        field: str,
+        model: Any,
+        *,
+        categories: Sequence[str] | None = None,
+        add: Sequence[str] | None = None,
+        prefix: str = "",
+        name: str | None = None,
+    ) -> None:
+        super().__init__(name=name)
+        self.model_spec = model if isinstance(model, str) else None
+        if isinstance(model, str):
+            from ..models import load_model
+
+            model = load_model(model)
+        self.model = model
+        self.field, self.prefix = field, prefix
+        self.categories = list(categories) if categories else None
+        chosen = add if add is not None else [f for f in self.FEATURES if f != "category" or self.categories]
+        unknown = [a for a in chosen if a not in self.FEATURES]
+        if unknown:
+            raise ConfigurationError(
+                f"unknown feature(s) {', '.join(unknown)}; known: {', '.join(self.FEATURES)}", key=self.name
+            )
+        self.add = tuple(chosen)
+
+    def apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None:
+        from ..intel.content import classify_text
+
+        text = _text_of(get_path(record, self.field))
+        if not text:
+            return record
+        try:
+            labels = classify_text(text, self.model, categories=self.categories, entities="entities" in self.add)
+        except Exception as exc:  # the model is down, slow, or says nonsense: the record stays
+            self.error(f"{type(exc).__name__}: {exc}")
+            return record
+        for feature in self.add:
+            record[self.prefix + feature] = getattr(labels, feature)
+        return record
+
+    @classmethod
+    def from_config(cls, options: Any, loader: ConfigLoader) -> Classify:
+        opts = _options(options, {"field", "model", "categories", "add", "prefix", "name"}, cls.kind,
+                        required=["field", "model"])  # fmt: skip
+        if "add" in opts:
+            opts["add"] = _names(opts["add"], "add", cls.kind)
+        if "categories" in opts:
+            opts["categories"] = _names(opts["categories"], "categories", cls.kind)
+        return cls(str(opts.pop("field")), str(opts.pop("model")), **opts)
+
+    def to_config(self) -> dict[str, Any]:
+        if self.model_spec is None:
+            return super().to_config()
+        options: dict[str, Any] = {"field": self.field, "model": self.model_spec, "add": list(self.add)}
+        if self.categories:
+            options["categories"] = self.categories
+        if self.prefix:
+            options["prefix"] = self.prefix
+        return self._named(options)
+
+
+def _text_of(value: Any) -> str:
+    """A field's text: a string, or the strings of a list, joined."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        return " ".join(v for v in value if isinstance(v, str)).strip()
+    return ""
+
+
 class QualityCheck(Stage):
     """Measure dataset quality as records pass; never drops anything.
 
@@ -1996,6 +2139,8 @@ STAGES: dict[str, type[Stage]] = {
         Lookup,
         ConvertCurrency,
         Enrich,
+        Analyze,
+        Classify,
         QualityCheck,
         _Function,
     )

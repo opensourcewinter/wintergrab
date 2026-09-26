@@ -324,6 +324,71 @@ about 200 bytes each); past that, new URLs are not counted and
 do not mirror its structure (every product at `/p/{slug}`) shows it in its
 navigation instead.
 
+## Content: language, keywords, topics
+
+`analyze_text(text)` reads a text with no model, and nothing leaves the
+machine:
+
+```python
+from wintergrab.intel import analyze_text
+
+analysis = analyze_text(article["body"])
+analysis.language, analysis.language_confidence   # 'de', 0.959 (runner_up: 'da') for the test's German news
+analysis.keywords                                 # the words and phrases that stand out
+analysis.words, analysis.sentences, analysis.characters, analysis.reading_minutes
+```
+
+- **Language** comes from the script when a script is one language's
+  (Greek, Hebrew, Thai, Korean...), and from the letters when it is shared:
+  Persian and Urdu letters in Arabic script; hiragana, the letters of
+  Japanese particles, for Japanese (katakana alone may be a name quoted in
+  Chinese); and ten Chinese characters without hiragana for Chinese. Fewer
+  could as well be Japanese, and a Japanese headline in kanji alone reads as
+  Chinese. Otherwise the language comes from the commonest words of 25
+  languages, each counting by how few languages share it:
+  - in Latin script, English, French, German, Spanish, Italian, Portuguese,
+    Dutch, Swedish, Danish, Norwegian, Finnish, Polish, Czech, Slovak,
+    Hungarian, Romanian, Turkish, Indonesian, Vietnamese and Catalan;
+  - in Cyrillic, Russian, Ukrainian and Bulgarian;
+  - in Devanagari, Hindi and Marathi.
+
+  Measured on the 59 paragraphs of `tests/data/languages.json` (news and a
+  product description in each language), every one is named, none wrongly.
+  Some texts get no language rather than a guess:
+  - fewer than five words or three common words (a product name, a heading);
+  - fewer than three letters of a script (a symbol: `Ω`);
+  - letters not mostly of one script;
+  - words that are as much another language's.
+
+  Close languages (Danish and Norwegian, Czech and Slovak) are named with
+  less confidence, as is a text partly in another script.
+- **Keywords** are the words and short phrases that recur, the language's
+  common words aside.
+- **Size** is words, sentences and characters (spaces aside), and **reading
+  time** is at 230 words a minute. A text written without spaces between
+  words (Chinese, Japanese, Thai...) gets no word count, reading time or
+  keywords (`None`, `[]`), as its words cannot be told apart without a
+  dictionary.
+
+With a [model](models.md), `classify_text(text, model, categories=[...])`
+asks for a topic, a category, a sentiment and the entities named, and
+checks what comes back:
+- a category must be one of yours;
+- a sentiment must be `positive`, `negative`, `neutral` or `mixed`;
+- an entity must be in the text.
+
+What fails is left out, and `labels.dropped` says why.
+
+In pipelines (see [data](data.md#pipelines)), `{analyze: {field: body}}`
+adds `language`, `keywords`, `words` and `reading_minutes`, and
+`{classify: {field: body, model: "openai:NAME", categories: [...]}}` adds
+the model's labels. On the command line:
+
+```bash
+wintergrab data analyze articles.jsonl --field body -o analyzed.jsonl
+wintergrab data analyze reviews.jsonl --field text --model openai:NAME --categories praise,complaint,question
+```
+
 ## Speed
 
 `benchmarks/bench_pages.py` (one core of a 4-vCPU cloud VM, Python 3.11,

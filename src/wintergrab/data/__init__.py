@@ -29,6 +29,8 @@ from .inference import TypeGuess, explain_inference, infer_schema
 from .issues import Issue
 from .pipeline import (
     OPERATIONS,
+    Analyze,
+    Classify,
     Compute,
     ConfigLoader,
     ConvertCurrency,
@@ -69,6 +71,8 @@ __all__ = [
     "FIELD_TYPES",
     "FUNCTIONS",
     "OPERATIONS",
+    "Analyze",
+    "Classify",
     "Compute",
     "ConfigLoader",
     "ConvertCurrency",

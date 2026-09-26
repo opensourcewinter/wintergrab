@@ -478,6 +478,30 @@
   read it, the rules do.
 - None is needed or called unless named.
 
+### Content intelligence (`wintergrab.intel.content`)
+
+- `analyze_text(text)` gives a text's language, keywords, words, sentences,
+  characters and reading time, with no model:
+  - **scripts** name their language where they are one language's (Greek,
+    Hebrew, Thai, Korean...), and letters where a script is shared: Persian
+    and Urdu letters in Arabic script, hiragana for Japanese, ten Chinese
+    characters without it for Chinese;
+  - **common words** name 25 other languages (21 in Latin script, Russian,
+    Ukrainian, Bulgarian, Hindi, Marathi), each word counting by how few
+    languages share it;
+  - a text too short or too mixed to tell gets no language, not a guess.
+    On the 59 test paragraphs (`tests/data/languages.json`), every
+    language is named, none wrongly.
+  - a text written without spaces between words (Chinese, Japanese, Thai)
+    gets no word count, reading time or keywords rather than wrong ones.
+- `classify_text(text, model, categories=)` asks a model for a topic, a
+  category, a sentiment and the entities named, and checks the answer. A
+  category must be one of yours, a sentiment one of four, and an entity
+  must be in the text.
+- Pipeline stages `analyze` and `classify`, and `wintergrab data analyze
+  INPUT --field FIELD [--model PROVIDER:NAME]`, which sums up the
+  languages, keywords and sentiments.
+
 ### Knowledge graphs (`wintergrab.data.graph`)
 
 - `wintergrab data graph [KIND=]INPUT... -o GRAPH` (`KnowledgeGraph`)

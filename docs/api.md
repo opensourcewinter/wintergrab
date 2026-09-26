@@ -450,6 +450,14 @@ checks that it is up to date.
 - **`FIELD_TYPES`**: a dict
 - **`FUNCTIONS`**: a dict
 - **`OPERATIONS`**: a dict
+- **`Analyze(field: str, *, add: Sequence[str] = ('language', 'keywords', 'words', 'reading_minutes'), prefix: str = '', keywords: int = 8, name: str | None = None)`** (class). Add what a text field says of itself: its language, keywords and size, with no model (:mod:`wintergrab.intel.content`).
+  - `apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None`: Return the record (changed in place, or a new dict), or ``None`` to drop it (set ``ctx.reason``).
+  - `classmethod from_config(cls, options: Any, loader: ConfigLoader) -> Analyze`
+  - `to_config(self) -> dict[str, Any]`: The stage's configuration-file form: ``{kind: options}``.
+- **`Classify(field: str, model: Any, *, categories: Sequence[str] | None = None, add: Sequence[str] | None = None, prefix: str = '', name: str | None = None)`** (class). Ask a model for a text field's topic, category (one of ``categories``), sentiment and entities, and add them, checked (:func:`wintergrab.intel.content.classify_text`).
+  - `apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None`: Return the record (changed in place, or a new dict), or ``None`` to drop it (set ``ctx.reason``).
+  - `classmethod from_config(cls, options: Any, loader: ConfigLoader) -> Classify`
+  - `to_config(self) -> dict[str, Any]`: The stage's configuration-file form: ``{kind: options}``.
 - **`Compute(fields: str | Mapping[str, Any], expression: Any = None, *, on_error: str = 'null', name: str | None = None)`** (class). Set fields from expressions or functions of the record.
   - `apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None`: Return the record (changed in place, or a new dict), or ``None`` to drop it (set ``ctx.reason``).
   - `classmethod from_config(cls, options: Any, loader: ConfigLoader) -> Compute`
@@ -725,6 +733,7 @@ checks that it is up to date.
 
 ## `wintergrab.intel`: Page types, technologies, site profiles
 
+- **`LANGUAGES`**: a tuple
 - **`PAGE_TYPES`**: a tuple
 - **`RULES`**: a tuple
 - **`Endpoint(url: str, method: str | None, source: str, pages: int = 1, note: str | None = None, status: int | None = None, content_type: str | None = None)`** (class). An API endpoint seen in (or conventional for) the site's pages.
@@ -751,6 +760,10 @@ checks that it is up to date.
 - **`Technology(name: str, category: str, confidence: float, version: str | None = None, evidence: list[str] = ...)`** (class). A detected technology.
   - `to_dict(self) -> dict[str, Any]`
 - **`TemplateCluster(pattern: str, pages: int, page_type: str | None, examples: list[str], layout: int = 0)`** (class). Pages that share a layout (their tag structure), with the URL pattern they follow.
+- **`TextAnalysis(language: str | None, language_confidence: float, script: str | None, words: int | None, sentences: int, reading_minutes: float | None, keywords: list[str] = ..., runner_up: str | None = None, characters: int = 0)`** (class). What :func:`analyze_text` found.
+  - `to_dict(self) -> dict[str, Any]`
+- **`TextLabels(topic: str | None = None, category: str | None = None, sentiment: str | None = None, entities: list[dict[str, str]] = ..., dropped: list[str] = ...)`** (class). What :func:`classify_text` got from a model, checked.
+  - `to_dict(self) -> dict[str, Any]`
 - **`Topology(site: str, root: TopologyNode, hosts: list[TopologyNode] = ..., navigation: list[dict[str, Any]] = ..., feeds: list[str] = ..., html_sitemaps: list[str] = ..., paginated: dict[str, int] = ..., dead_ends: list[str] = ..., duplicates: list[dict[str, Any]] = ..., orphans: list[str] | None = None, counts: dict[str, int] = ...)`** (class). A site's organization (see the module docs).
   - `find(self, text: str) -> list[TopologyNode]`: Sections whose name or path mentions ``text`` (any case), biggest first.
   - `render(self, depth: int = 3, width: int = 8) -> str`: The tree as text, ``depth`` levels deep, ``width`` sections per level.
@@ -764,8 +777,11 @@ checks that it is up to date.
 - **`TopologyNode(path: str, label: str, urls: int, page_type: str | None = None, types: dict[str, int] = ..., children: list[TopologyNode] = ..., other_sections: int = 0, other_urls: int = 0)`** (class). A section of the site: a URL path and the URLs under it.
   - `to_dict(self) -> dict[str, Any]`
   - `walk(self) -> Iterator[TopologyNode]`: This node and every node under it, depth first.
+- **`analyze_text(text: str, *, keywords: int = 8) -> TextAnalysis`**. The language, size and keywords of ``text`` (see the module docs).
 - **`classify_page(page: Any, *, url: str | None = None, status: int | None = None) -> PageType`**. The type of a page (a :class:`~wintergrab.Response`, a :class:`~wintergrab.Selector` or HTML).
+- **`classify_text(text: str, model: Any, *, categories: Sequence[str] | None = None, entities: bool = True, max_chars: int = 12000) -> TextLabels`**. A topic, a category (one of ``categories``), a sentiment and the entities of ``text``, from ``model`` (a :class:`~wintergrab.models.ModelProvider`), checked (see the module docs).
 - **`classify_url(url: str) -> PageType`**. A guess from the URL alone (before fetching): cheap, and less sure than :func:`classify_page`.
+- **`detect_language(text: str) -> tuple[str | None, float, str | None]`**. ``(language, confidence, runner_up)`` of ``text`` (see the module docs); ``(None, 0.0, None)`` when it cannot be told.
 - **`detect_technologies(page: Any, **kwargs: Any) -> list[Technology]`**. :meth:`TechDetector.detect` with the built-in fingerprints.
 - **`read_sitemaps(origin: str, robots_text: str | None = None, *, max_sitemaps: int = 10, max_entries: int = 50000, **fetch_options: Any) -> SitemapRead`**. The pages a site's sitemaps list: those named in robots.txt, or ``/sitemap.xml``, following sitemap indexes, up to ``max_sitemaps`` sitemaps and ``max_entries`` pages.
 - **`survey_site(url: str, *, pages: int = 30, sitemaps: bool = True, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, keep_pages: bool = False, prefer: Callable[[str], bool | float] | None = None, extra_urls: Iterable[str] = (), log_level: str | None = 'WARNING', **spider_settings: Any) -> SiteSurvey`**. Read ``url``'s site: robots.txt, sitemaps, and ``pages`` pages, into a :class:`SiteSurvey`.
