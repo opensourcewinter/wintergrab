@@ -46,7 +46,8 @@ def test_parquet(tmp_path) -> None:
     # a crawl that stopped: its items wait in the spool, and the resumed crawl adds to them
     stopped = open_exporter(path, append=False)
     stopped.write(ITEMS[0])
-    stopped.flush()  # (a checkpoint; then the process dies)
+    stopped.flush()  # (a checkpoint)
+    stopped.spool.close()  # (then the process dies, and its files are closed)
     resumed = write(path, [ITEMS[1]], append=True)
     assert resumed.count == 1 and [r["url"] for r in read_records(path)] == [
         "https://s.example/1",

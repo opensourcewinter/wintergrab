@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import ConfigurationError, ExportError
+from ..utils import replace_file
 
 __all__ = ["Spool", "as_text", "column_kinds", "kind_of", "require", "widen"]
 
@@ -115,7 +116,7 @@ class Spool:
         temporary = self.target.with_name(f".{self.target.name}.{os.getpid()}.tmp")
         try:
             write(temporary)
-            os.replace(temporary, self.target)
+            replace_file(temporary, self.target)
         except Exception as exc:
             temporary.unlink(missing_ok=True)
             raise ExportError(f"could not write {self.target} (the items are kept in {self.path}): {exc}") from exc

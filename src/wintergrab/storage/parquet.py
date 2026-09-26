@@ -93,11 +93,14 @@ def read_parquet(path: str | Path) -> Iterator[dict[str, Any]]:
     """The records of a Parquet file, with the JSON columns wintergrab wrote decoded again."""
     _, pq = _pyarrow()
     source = pq.ParquetFile(str(path))
-    meta = source.schema_arrow.metadata or {}
-    nested = set(json.loads(meta[_META_KEY]).get("json_columns", [])) if _META_KEY in meta else set()
-    for batch in source.iter_batches(batch_size=10_000):
-        for row in batch.to_pylist():
-            for name in nested:
-                if isinstance(row.get(name), str):
-                    row[name] = json.loads(row[name])
-            yield row
+    try:
+        meta = source.schema_arrow.metadata or {}
+        nested = set(json.loads(meta[_META_KEY]).get("json_columns", [])) if _META_KEY in meta else set()
+        for batch in source.iter_batches(batch_size=10_000):
+            for row in batch.to_pylist():
+                for name in nested:
+                    if isinstance(row.get(name), str):
+                        row[name] = json.loads(row[name])
+                yield row
+    finally:
+        source.close()  # (Windows cannot replace a file that is open)
