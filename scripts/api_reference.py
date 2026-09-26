@@ -38,6 +38,7 @@ MODULES = [
     ("wintergrab.goals", "Goals in plain words"),
     ("wintergrab.goals.api", "Records from the API a site's pages call"),
     ("wintergrab.intel", "Page types, technologies, site profiles"),
+    ("wintergrab.intel.serp", "Search results"),
     ("wintergrab.history", "What changed between crawls"),
     ("wintergrab.runs", "Run records and replay"),
     ("wintergrab.project", "Projects and the scheduler"),

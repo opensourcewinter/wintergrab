@@ -53,7 +53,8 @@ thousands of pages), the same API scales up.
   site (robots.txt, sitemaps, a sample of pages), shows a plan with what it
   will cost, and collects clean, typed records. Pages that need JavaScript go
   to a browser, the others stay on fast HTTP; when the pages call a JSON API
-  that holds the records, it is read instead, page by page.
+  that holds the records, it is read instead, page by page. No site in mind?
+  `--find-sites` asks a search API (with your key) which sites rank for it.
 - **Click to build.** `wintergrab build URL -o FILE` shows the page without
   its scripts. Click a field, a repeated card, a table or the next-page
   link, and get a schema you can read, edit and test on the page. It

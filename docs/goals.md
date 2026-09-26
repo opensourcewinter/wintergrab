@@ -47,7 +47,7 @@ The records go to stdout as JSON Lines, or to a file with `-o books.jsonl`
 |---|---|---|
 | The kind of record | products, articles, posts, news, jobs, vacancies, events, concerts, companies, businesses, restaurants, hotels, shops, dentists, people, speakers, reviews, recipes | `goal.entity`: `product`, `article`, `job`, `event`, `company`, `place`, `person`, `review`, `recipe` |
 | Fields | "with name, price and rating", "extract title, author and date", "and their contact details" | `goal.fields`, with synonyms: "stock status" is `availability`, "phone number" is `telephone`, "headline" is `title`, "contact details" is `telephone`, `email` and `address` |
-| Sites | `shop.example`, `https://shop.example/c/phones`, or `--site URL` | `goal.sites`; a URL with a path is the part of the site to cover |
+| Sites | `shop.example`, `https://shop.example/c/phones`, or `--site URL` | `goal.sites`; a URL with a path is the part of the site to cover. None named: `--find-sites` shows the sites a search API ranks for the request ([search](search.md#sites-for-a-goal)) |
 | Prices | "under $1000", "between €100 and €300", "that cost up to 50 dollars" | `price < 1000 and (currency is None or currency == 'USD')` |
 | Ratings | "rated 4 stars or more", "with a rating above 4.5" | `rating >= 4` |
 | Dates | "published after 2025-01-01", "in the last 30 days", "this month", "in 2025", "before March 2024" | `date(published) >= '2026-08-27'` (on the entity's date field: published, date posted, start date...) |

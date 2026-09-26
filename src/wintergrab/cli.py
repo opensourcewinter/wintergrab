@@ -82,6 +82,15 @@ Everything runs on this machine: a synthetic shop served from 127.0.0.1, and eac
 process of its own. Compare runs on one machine; see docs/benchmarks.md for the method.
 """
 
+EPILOG_SEARCH = """examples:
+  wintergrab search "budget laptop" "laptop under 500" -o serp.jsonl        # Brave: BRAVE_SEARCH_API_KEY
+  wintergrab search "budget laptop" --provider searxng --endpoint https://searx.example
+  wintergrab search --report serp.jsonl --domain shop.example --before last-week.jsonl
+
+Only search APIs are asked, with your own access; search engines' result pages are not fetched.
+Requests go one at a time, a second apart. See docs/search.md.
+"""
+
 EPILOG_INSPECT = """examples:
   wintergrab inspect https://shop.example                 # 30 pages, robots.txt and sitemaps
   wintergrab inspect https://shop.example --pages 100 -o shop.profile.json
@@ -711,7 +720,13 @@ def cmd_goal(args: argparse.Namespace) -> int:
             if args.verbose >= 0:
                 print("Understood: " + goal.describe().replace("\n", "\n            "), file=sys.stderr)
             if not goal.sites:
-                print("error: which site? Name it in the request (shop.example) or add --site URL", file=sys.stderr)
+                if args.find_sites:
+                    return _candidate_sites(args, " ".join(args.text))
+                print(
+                    "error: which site? Name it in the request (shop.example) or add --site URL "
+                    "(--find-sites asks a search API for candidates)",
+                    file=sys.stderr,
+                )
                 return 2
             if args.verbose >= 0:
                 print(
@@ -776,6 +791,127 @@ def cmd_goal(args: argparse.Namespace) -> int:
         if plan.goal.monitor:
             again = f"wintergrab goal --plan {args.save_plan or args.plan or 'PLAN.json'} --yes -o {args.output or 'OUT.jsonl'}"
             print(f"to watch for changes ({plan.goal.monitor}), run this again on a schedule: {again}", file=sys.stderr)
+    return 0
+
+
+def _candidate_sites(args: argparse.Namespace, text: str) -> int:
+    """The sites that rank for a goal's request, from a search API: printed, for the user to pick one."""
+    from .intel.serp import competitors, search
+
+    try:
+        answer = search(text, provider=args.provider, endpoint=args.endpoint, pages=1, timeout=args.timeout)
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    ranked = competitors(answer.results, top=10)
+    if not ranked:
+        print(f"{args.provider} found no site for it: name one with --site URL", file=sys.stderr)
+        return 2
+    print(f"Sites that rank for it ({args.provider}, {len(answer.results)} results):")
+    for n, site in enumerate(ranked, 1):
+        example = next(r for r in answer.results if r.domain == site.domain)
+        print(f"  {n:>2}. {site.domain:<32} best #{min(r.position for r in answer.results if r.domain == site.domain)}"
+              f"  {example.title[:60]}")  # fmt: skip
+    print(f"pick one: wintergrab goal {_quoted(text)} --site {ranked[0].domain}", file=sys.stderr)
+    return 2
+
+
+def _quoted(text: str) -> str:
+    import shlex
+
+    return shlex.quote(text)
+
+
+def cmd_search(args: argparse.Namespace) -> int:
+    from .data.io import read_records
+    from .intel.serp import (
+        cluster_queries,
+        competitors,
+        gaps,
+        ranking_changes,
+        read_results,
+        search,
+        visibility_score,
+    )
+    from .spider.exporters import open_exporter
+
+    if args.report:
+        try:
+            results = read_results(r for path in args.report for r in read_records(path))
+            before = read_results(read_records(args.before)) if args.before else []
+        except WintergrabError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not results:
+            print("error: no search results in it (records with a query, a position and a URL)", file=sys.stderr)
+            return 1
+        queries = len({r.query for r in results})
+        print(f"{len(results):,} results for {queries:,} queries")
+        if args.domain:
+            print(f"{args.domain}: visibility {visibility_score(results, args.domain, depth=args.depth)} "
+                  f"(1.0: first for every query)")  # fmt: skip
+        print("\nCompetitors (visibility: the sum of 1/position, over the queries):")
+        for v in competitors(results, domain=args.domain, depth=args.depth, top=args.show):
+            print(
+                f"  {v.domain:<32} {v.visibility:<6} in {v.queries} of {queries} queries, average #{v.average_position}"
+            )
+        clusters = [c for c in cluster_queries(results, depth=args.depth) if len(c) > 1]
+        if clusters:
+            print("\nQueries one page can answer (they share results):")
+            for cluster in clusters[: args.show]:
+                print("  " + " | ".join(cluster))
+        if args.domain:
+            missing = gaps(results, args.domain, depth=args.depth)
+            print(
+                f"\nGaps: {len(missing)} queries where rivals rank and {args.domain} does not"
+                + (":" if missing else "")
+            )
+            for gap in missing[: args.show]:
+                rivals = ", ".join(f"{d} #{p}" for d, p in gap["rivals"].items())
+                print(f"  {gap['query']:<40} {rivals}")
+            if before:
+                changes = [c for c in ranking_changes(before, results, args.domain) if c["change"] != "same"]
+                print(f"\nChanges since {args.before}: {len(changes)}" + (":" if changes else ""))
+                for change in changes[: args.show]:
+                    was = f"#{change['before']}" if change["before"] else "-"
+                    now = f"#{change['after']}" if change["after"] else "-"
+                    print(f"  {change['query']:<40} {was} -> {now}  ({change['change']})")
+        return 0
+    if not args.query:
+        print('error: say what to search for: wintergrab search "budget laptop" (or --report FILE)', file=sys.stderr)
+        return 2
+    exporter = open_exporter(args.output) if args.output else None
+    found = 0
+    try:
+        for n, query in enumerate(args.query):
+            if n:
+                time.sleep(args.delay)
+            answer = search(query, provider=args.provider, endpoint=args.endpoint, pages=args.pages,
+                            delay=args.delay, timeout=args.timeout)  # fmt: skip
+            found += len(answer.results)
+            for result in answer.results:
+                if exporter is not None:
+                    exporter.write(result.to_dict())
+            if exporter is None and args.verbose >= 0:
+                print(
+                    f"{query}  ({len(answer.results)} results" + (f" of {answer.total:,}" if answer.total else "") + ")"
+                )
+                for result in answer.results:
+                    print(f"  {result.position:>3}. {result.domain:<28} {result.title[:70]}")
+                if answer.related:
+                    print("  related: " + ", ".join(answer.related[:8]))
+                for question in answer.questions[:5]:
+                    print(f"  asked: {question['question']}")
+            for note in answer.notes:
+                print(f"note: {query}: {note}", file=sys.stderr)
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if exporter is not None:
+            exporter.close()
+    if exporter is not None and args.verbose >= 0:
+        print(f"{found:,} results for {len(args.query)} queries -> {redact_url(args.output)}", file=sys.stderr)
     return 0
 
 
@@ -2802,6 +2938,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gp.add_argument("--browser", "-b", action="store_true", help="survey with a browser (slower)")
     gp.add_argument(
+        "--find-sites",
+        action="store_true",
+        help="when the request names no site, ask a search API which sites rank for it (see wintergrab search)",
+    )
+    gp.add_argument("--provider", default="brave", choices=["brave", "google", "searxng"],
+                    help="(--find-sites) the search API (brave)")  # fmt: skip
+    gp.add_argument("--endpoint", metavar="URL", help="(--find-sites) the search API's URL (a SearXNG instance)")
+    gp.add_argument(
         "--no-api",
         action="store_true",
         help="read the pages, even where the site's pages call an API that holds the records "
@@ -2811,6 +2955,30 @@ def build_parser() -> argparse.ArgumentParser:
     gp.add_argument("-o", "--output", metavar="FILE", help="save the records (.jsonl, .csv, .json); default stdout")
     gp.add_argument("--json", action="store_true", help="print the plan as JSON (and collect nothing)")
     gp.set_defaults(func=cmd_goal)
+
+    se = sub.add_parser(
+        "search",
+        help="search results from a search API (Brave, Google, your SearXNG), and what they say of rankings",
+        description="Ask a search API that permits it, with your key, for the results of queries; or read "
+        "collected results for competitors, gaps, queries one page can answer, and ranking changes.",
+        epilog=EPILOG_SEARCH,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    se.add_argument("query", nargs="*", metavar="QUERY", help="what to search for (repeatable)")
+    se.add_argument("--provider", default="brave", choices=["brave", "google", "searxng"],
+                    help="the search API: brave (BRAVE_SEARCH_API_KEY), google (GOOGLE_API_KEY and GOOGLE_CSE_ID), "
+                    "searxng (SEARXNG_URL)")  # fmt: skip
+    se.add_argument("--endpoint", metavar="URL", help="the API's URL (your SearXNG instance: https://searx.example)")
+    se.add_argument("--pages", type=int, default=1, metavar="N", help="pages of results per query (1; 10 at most)")
+    se.add_argument("--delay", type=float, default=1.0, metavar="SEC", help="between requests (1)")
+    se.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (20)")
+    se.add_argument("-o", "--output", metavar="FILE", help="save the results as records (.jsonl, .csv, a database...)")
+    se.add_argument("--report", nargs="+", metavar="FILE", help="read collected results instead, and report on them")
+    se.add_argument("--domain", metavar="DOMAIN", help="(--report) your site: its visibility, gaps and changes")
+    se.add_argument("--before", metavar="FILE", help="(--report, --domain) earlier results: what moved since")
+    se.add_argument("--depth", type=int, default=10, metavar="N", help="(--report) positions that count (10)")
+    se.add_argument("--show", type=int, default=15, metavar="N", help="(--report) entries per list (15)")
+    se.set_defaults(func=cmd_search)
 
     gen = sub.add_parser(
         "generate",

@@ -622,6 +622,27 @@ an error that says so, not a setting silently ignored
 - `pagination_of` reads an answer whose total is no more than the records
   it holds, or that says there is no more, as the only page.
 
+### Search results (`wintergrab.intel.serp`)
+
+- `wintergrab search QUERY...` (`search()`) asks a search API, with your own
+  access, for each query's results: Brave's Search API
+  (`BRAVE_SEARCH_API_KEY`), Google's Programmable Search JSON API
+  (`GOOGLE_API_KEY`, `GOOGLE_CSE_ID`) or your SearXNG (`SEARXNG_URL`). Search
+  engines' own pages are never fetched. Requests go a second apart, a 429 is
+  waited out once and then stops the search with a note, a refused key names
+  the variable to check, and no message shows a key.
+- Results are records (query, position across pages, URL, domain, title,
+  snippet, date, source, time), read without a fixed schema, with related
+  searches and questions where the provider gives them; `-o` writes them to
+  any output.
+- `--report FILE` (`competitors`, `gaps`, `cluster_queries`, `overlap`,
+  `ranking_changes`, `visibility_score`): the domains competing for the
+  queries (visibility: the sum of 1/position), queries one page can answer
+  (shared results), your gaps, and what moved since `--before`. Any records
+  with a query, a position and a URL can be read.
+- `wintergrab goal --find-sites`: a request that names no site gets the
+  sites a search API ranks for it, shown for the user to pick one.
+
 ### Browser actions (`wintergrab.fetchers.actions`)
 
 - `browser.get(url, actions=[...])` does steps on the page before it is

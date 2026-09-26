@@ -7,7 +7,7 @@ stdout, so you can pipe the output anywhere.
 ```
 wintergrab [-v | -q] [--version] COMMAND ...
 
-COMMAND: get, crawl, data, inspect, goal, generate, build, review, fixture, test, run,
+COMMAND: get, crawl, data, inspect, goal, search, generate, build, review, fixture, test, run,
          schedule, init, runs, replay, dashboard, heal, history, templates, shell, doctor,
          plugins (and the commands of installed plugins)
 ```
@@ -254,6 +254,7 @@ See [intelligence.md](intelligence.md#site-profiles).
 ```bash
 wintergrab goal "REQUEST" [--site URL] [--sample N] [--plan-only] [--save-plan FILE] [--explain] [--json]
                           [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-api] [--no-optimize]
+                          [--find-sites [--provider P] [--endpoint URL]]
                           [--record] [--quality FILE] [--model PROVIDER:NAME [--model-url URL]] [-o FILE]
 wintergrab goal --plan FILE [-y] [--no-api] [-o FILE]
 ```
@@ -269,8 +270,25 @@ each estimate rests on. When the site's pages call a JSON API that holds the
 records, the plan collects from it, page by page over HTTP, and reads the
 pages only if it fails without refusing; `--no-api` reads the pages. The
 crawl skips URL patterns that give nothing and drops query parameters that
-change nothing; `--no-optimize` fetches every page the plan leads to. See
-[goals.md](goals.md#records-from-the-sites-api).
+change nothing; `--no-optimize` fetches every page the plan leads to. A
+request that names no site can ask a search API which sites rank for it
+(`--find-sites`, see [search.md](search.md#sites-for-a-goal)): they are
+shown, for you to pick one. See [goals.md](goals.md#records-from-the-sites-api).
+
+## `wintergrab search`: search results, and what they say
+
+```bash
+wintergrab search QUERY [QUERY...] [--provider brave|google|searxng] [--endpoint URL] [--pages N] [--delay SEC] [-o FILE]
+wintergrab search --report FILE [FILE...] [--domain DOMAIN] [--before FILE] [--depth N] [--show N]
+```
+
+Asks a search API, with your own key (`BRAVE_SEARCH_API_KEY`;
+`GOOGLE_API_KEY` and `GOOGLE_CSE_ID`; `SEARXNG_URL` for your SearXNG), for
+each query's results: printed, or saved as records with `-o`. Requests go
+one at a time, `--delay` seconds apart; search engines' own pages are never
+fetched. `--report` reads collected results for the competitors, the
+queries one page can answer, and with `--domain` your visibility, your gaps
+and, with `--before`, what moved. See [search.md](search.md).
 
 ## `wintergrab generate`: a scraper for a goal, tested
 
