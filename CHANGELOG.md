@@ -576,6 +576,11 @@
   instead of 1.1 ms on an 11 KB page without pagination, with the same
   answers (checked against the previous version on 120,000 generated
   pages).
+- A product's category read from a breadcrumb was the next-to-last link
+  even when the page itself was not linked: "Books" rather than "Poetry"
+  in Home > Books > Poetry > A Light in the Attic. The last link is left
+  out only when it is the page itself (marked `aria-current`, linking
+  here, or naming the page's heading).
 
 ## 0.2.0
 

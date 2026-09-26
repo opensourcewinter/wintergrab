@@ -21,6 +21,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, ClassVar
+from urllib.parse import urlsplit
 
 from ..data.normalize import iter_numbers, normalize_availability, normalize_phone, parse_rating
 from ..parser import Selector
@@ -737,11 +738,29 @@ class DomHeuristics(Strategy):
         return out
 
     def _category(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
-        crumbs = [a.text for a in page.root.xpath(_BREADCRUMB_LINKS) if a.text]
-        if len(crumbs) >= 2:
-            # The last crumb is usually the page itself; the one before it its category.
-            return [(crumbs if f.many else crumbs[-2] if len(crumbs) > 2 else crumbs[-1], "dom:breadcrumb")]
+        links = [a for a in page.root.xpath(_BREADCRUMB_LINKS) if a.text]
+        if len(links) >= 2 and _is_this_page(page, links[-1]):
+            links.pop()  # the page itself, linked: its category is the crumb before it
+        crumbs = [a.text for a in links]
+        if len(crumbs) >= 2:  # the last link is the most specific category (the first is the home page)
+            return [(crumbs if f.many else crumbs[-1], "dom:breadcrumb")]
         return []
+
+
+def _is_this_page(page: PageContext, link: Selector) -> bool:
+    """Whether a breadcrumb's link is the page itself: it says so (``aria-current``), leads to this
+    page, or names what the page's heading names (a crumb may shorten it: "A Light in the...")."""
+    if (link.attr("aria-current") or "").strip().lower() in ("page", "true", "location"):
+        return True
+    href = (link.attr("href") or "").strip()
+    if href and not href.startswith("#") and page.url:  # "#" is a placeholder, not this page
+        there, here = urlsplit(link.urljoin(href)), urlsplit(page.url)
+        if (there.netloc, there.path.rstrip("/")) == (here.netloc, here.path.rstrip("/")):
+            return True
+    heading = page.root.css("h1")
+    name = " ".join((heading[0].text or "").split()).casefold() if heading else ""
+    text = " ".join((link.text or "").split()).casefold().rstrip(".…")
+    return bool(name and text) and (text == name or (len(text) >= 8 and name.startswith(text)))
 
 
 # --------------------------------------------------------------------------- #

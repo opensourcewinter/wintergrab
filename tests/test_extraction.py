@@ -165,6 +165,33 @@ def test_ratings_written_in_class_names() -> None:
     assert Extractor(schema).extract('<h1>X</h1><div class="col-md-4 rating"></div>').data.get("rating") is None
 
 
+def test_categories_from_breadcrumbs() -> None:
+    schema = {"name": "product", "fields": {"name": "string", "category": "string"}}
+
+    def category(crumbs: str, url: str = "https://shop.example/p/1") -> str | None:
+        page = f'<ul class="breadcrumb">{crumbs}</ul><h1>Blue Laptop 13 inch</h1>'
+        return Extractor(schema).extract(page, url=url).data.get("category")
+
+    home = '<li><a href="/">Home</a></li>'
+    # the page itself is not linked: the last link is its category
+    assert category(home + '<li><a href="#">Books</a></li><li><a href="#">Poetry</a></li><li>Blue Laptop</li>') == (
+        "Poetry"
+    )
+    # the page itself, linked: to itself, by its name (shortened), or marked as the current page
+    assert category(home + '<li><a href="/laptops">Laptops</a></li><li><a href="/p/1">Blue</a></li>') == "Laptops"
+    assert category(home + '<li><a href="/laptops">Laptops</a></li><li><a href="/x">Blue Laptop 13...</a></li>') == (
+        "Laptops"
+    )
+    assert category(home + '<li><a href="/laptops">Laptops</a></li><li><a aria-current="page">Blue</a></li>') == (
+        "Laptops"
+    )
+    # links to categories only
+    assert category(home + '<li><a href="/c">Computers</a></li><li><a href="/c/laptops">Laptops</a></li>') == (
+        "Laptops"
+    )
+    assert category(home + '<li><a href="/p/1">Blue Laptop 13 inch</a></li>') is None  # no category but the page
+
+
 def test_selectors_and_embedded_json() -> None:
     schema = {"name": "item", "fields": {
         "title": {"type": "string", "selectors": [".t::text"]},
