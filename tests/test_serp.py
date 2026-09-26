@@ -228,6 +228,15 @@ def test_the_search_command(api, monkeypatch, tmp_path, capsys) -> None:
     assert main(["search"]) == 2
 
 
+def test_from_the_entry_point(api, monkeypatch) -> None:
+    from wintergrab import NetworkPolicyError, WinterGrab
+
+    monkeypatch.setenv("SEARXNG_URL", api)
+    assert len(WinterGrab().search("budget laptop", provider="searxng").results) == 4
+    with pytest.raises(NetworkPolicyError):  # its settings hold: a local instance is refused under "public"
+        WinterGrab(network_policy="public").search("budget laptop", provider="searxng")
+
+
 def test_a_goal_finds_sites(api, monkeypatch, capsys) -> None:
     monkeypatch.setenv("SEARXNG_URL", api)
     code = main(["goal", "budget laptop", "--find-sites", "--provider", "searxng"])

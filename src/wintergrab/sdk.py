@@ -16,6 +16,7 @@
     record = wg.extract(page, "product")                       # a typed record, from a template or a schema
     print(wg.sources("https://shop.example/catalog").describe())   # where a page's data is
     survey = wg.inspect("https://shop.example")                # a site's robots.txt, sitemaps and profile
+    answer = wg.search("budget laptop")                        # a search API's results (your key)
 
 Each method returns what the rest of wintergrab uses (:class:`~wintergrab.goals.GoalPlan`,
 :class:`~wintergrab.goals.GoalResult`, :class:`~wintergrab.Response`...): nothing here is a world of its own,
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from .extraction.engine import ExtractedRecord
     from .fetchers.response import Response
     from .goals import Goal, GoalPlan, GoalResult
+    from .intel.serp import SearchAnswer
     from .intel.sources import DataSources
     from .intel.survey import SiteSurvey
 
@@ -181,6 +183,17 @@ class WinterGrab:
             return data_sources(page)
         response = self.get(page, capture=True) if self.browser else self.get(page)
         return data_sources(response, recorded=self.browser)
+
+    def search(self, query: str, *, provider: str = "brave", pages: int = 1, **options: Any) -> SearchAnswer:
+        """A search API's results for ``query`` (:func:`~wintergrab.intel.serp.search`: Brave's, Google's or your
+        SearXNG, with your key from the environment), asked under this WinterGrab's network policy.
+        ``options``: ``endpoint``, ``key``, ``delay``..."""
+        from .intel.serp import search
+
+        options.setdefault("timeout", self.timeout)
+        if self.network_policy is not None:
+            options.setdefault("network_policy", self.network_policy)
+        return search(query, provider=provider, pages=pages, **options)
 
     def inspect(self, url: str, *, pages: int = 30) -> SiteSurvey:
         """A site's robots.txt, sitemaps and ``pages`` pages, with its profile (``survey.profile.describe()``),

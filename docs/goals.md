@@ -234,6 +234,7 @@ page = wg.get("https://shop.example/p/1")        # a Response (rendered, with br
 wg.extract(page, "product")                      # a typed record, from a template or a schema
 wg.sources("https://shop.example/catalog")       # where a page's data is
 wg.inspect("https://shop.example")               # robots.txt, sitemaps and a site profile
+wg.search("budget laptop")                       # a search API's results, with your key (see search.md)
 wg.configure(browser=True).sources("https://shop.example/catalog")   # a copy, one setting changed
 ```
 

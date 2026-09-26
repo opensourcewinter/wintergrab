@@ -642,6 +642,8 @@ an error that says so, not a setting silently ignored
   with a query, a position and a URL can be read.
 - `wintergrab goal --find-sites`: a request that names no site gets the
   sites a search API ranks for it, shown for the user to pick one.
+- `WinterGrab.search(query)` asks under the entry point's network policy and
+  timeout.
 
 ### Browser actions (`wintergrab.fetchers.actions`)
 

@@ -223,7 +223,10 @@ def search(
             try:
                 response = fetcher.get(url, params=params, headers=headers)
             except WintergrabError as exc:
-                raise WintergrabError(f"{spec.name}: {_without(describe(exc), key)}") from None
+                if key and (key in str(exc) or key in repr(getattr(exc, "context", ""))):
+                    # (a key in the URL: Google's) the error as text, the key left out
+                    raise WintergrabError(f"{spec.name}: {_without(describe(exc), key)}") from None
+                raise
             if response.status in (401, 403):
                 check = f"check the key in {spec.key_variable}" if spec.key_variable else "check the instance"
                 if spec.name == "searxng":

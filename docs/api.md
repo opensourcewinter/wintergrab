@@ -264,6 +264,7 @@ checks that it is up to date.
   - `inspect(self, url: str, *, pages: int = 30) -> SiteSurvey`: A site's robots.txt, sitemaps and ``pages`` pages, with its profile (``survey.profile.describe()``), as ``wintergrab inspect`` reads them.
   - `plan(self, goal: str | Goal, *, sites: list[str] | None = None, sample: int = 30, api: bool = True) -> GoalPlan`: Survey the goal's sites (robots.txt, sitemaps, ``sample`` pages each) and plan the crawl: what to fetch, how, and what it will cost.
   - `run(self, goal: str | Goal | GoalPlan, output: str | None = None, *, sites: list[str] | None = None, sample: int = 30, max_pages: int | None = None, api: bool = True, **settings: Any) -> GoalResult`: Collect a goal's records into ``output`` (``.jsonl``, ``.csv``, a database URL...; kept in ``result.records`` when there is none).
+  - `search(self, query: str, *, provider: str = 'brave', pages: int = 1, **options: Any) -> SearchAnswer`: A search API's results for ``query`` (:func:`~wintergrab.intel.serp.search`: Brave's, Google's or your SearXNG, with your key from the environment), asked under this WinterGrab's network policy.
   - `sources(self, page: str | Response) -> DataSources`: Where a page's data is (:func:`~wintergrab.intel.sources.data_sources`): its HTML records, JSON-LD, embedded JSON and, in a browser, the API calls it makes.
 - **`WintergrabError`** (exception). Base class for every error raised by wintergrab.
 - **`__version__`** = `'0.2.0'`
