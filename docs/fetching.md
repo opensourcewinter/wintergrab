@@ -96,6 +96,12 @@ The browser is started on the first request and shared by all requests. Each
 request opens a new tab. `BrowserFetcher` also works inside Jupyter, because it
 runs its event loop in a background thread.
 
+A browser that crashes, or that the system kills (short of memory), is
+started again for the next request: the pages open at the time fail (and
+are tried again, within `retries`), and the next ones get the new browser.
+`browser.restarts` counts the times, and a crawl's stats say
+`browser_restarts` when there were any.
+
 ### Browser options
 
 | Option | Default | What it does |

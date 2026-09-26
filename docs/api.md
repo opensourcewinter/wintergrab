@@ -13,7 +13,7 @@ checks that it is up to date.
   - `get(self, url: str, **kwargs: Any) -> Response`
   - `get_many(self, urls: Iterable[str], *, concurrency: int | None = None, return_exceptions: bool = True, **kwargs: Any) -> list[Response | FetchError]`: Render many pages concurrently (bounded by ``max_pages``).
   - `request(self, method: str, url: str, *, proxy: str | None = None, headers: Mapping[str, str] | None = None, timeout: float | None = None, retries: int | None = None, wait_for: str | None = None, wait: float = 0.0, wait_until: str | None = None, scroll: bool | int = False, page_action: Callable[[Any], Any] | None = None, screenshot: str | Path | bool | None = None, capture: bool | str | Callable[[str], bool] | None = None, layout: bool = False, actions: Any = None, downloads: str | Path | None = None, request: Request | None = None, **_ignored: Any) -> Response`: Open ``url`` in a new tab and return the rendered page.
-  - `start(self)`: Launch the browser (done automatically on the first request).
+  - `start(self)`: Launch the browser (done automatically on the first request), and launch it again when it closed without being asked to: it crashed, or was killed (by the system, short of memory).
 - **`AsyncFetcher(*, max_connections: int = 64, **kwargs: Any)`** (class). Asynchronous version of :class:`Fetcher` for fetching many pages at once.
   - `aclose(self)`
   - `add_cookies(self, cookies: Mapping[str, str] | Iterable[Mapping[str, Any]], *, url: str | None = None, domain: str | None = None)`: Load cookies into the session (see :meth:`Fetcher.add_cookies`).

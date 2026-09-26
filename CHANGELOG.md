@@ -1090,6 +1090,15 @@ an error that says so, not a setting silently ignored
 
 ### Fixes
 
+- A browser that crashed, or that the system killed, was never started
+  again: every page after it failed ("Target page, context or browser has
+  been closed"), to the end of the crawl. It is now started again for the
+  next request, and a page it was loading is tried again on the new one
+  (within `retries`; a spider's engine retries it). `restarts` counts the
+  times, and a crawl's stats say `browser_restarts`. Tried by crashing
+  Chromium (its own `Browser.crash`) between pages, while a page loaded,
+  and in the middle of a crawl, which fetched every page.
+
 - The dashboard's and the builder's `Server` header named the Python
   version (`wintergrab-dashboard Python/3.11.15`): each names the product
   alone now, as the job trigger listener's does.

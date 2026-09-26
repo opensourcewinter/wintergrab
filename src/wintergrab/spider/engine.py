@@ -803,6 +803,9 @@ class Engine:
         await self._close_pipelines()
         if self.exporter is not None:
             self.exporter.close()
+        restarts = sum(int(getattr(self.sessions.get(name), "restarts", 0) or 0) for name in self.sessions)
+        if restarts:  # (a browser that crashed, or was killed, and was started again)
+            self.stats["browser_restarts"] = restarts
         await self.sessions.close_all()
         if self._robots_fetcher is not None:
             await self._robots_fetcher.aclose()

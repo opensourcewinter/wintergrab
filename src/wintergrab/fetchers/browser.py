@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import fnmatch
 import glob
 import json as _json
@@ -287,6 +288,9 @@ class AsyncBrowserFetcher:
         self._context_users: dict[str, int] = {}
         self._context_lock: asyncio.Lock | None = None
         self._persistent: Any = None
+        self._persistent_closed = False
+        #: How many times the browser was started again, having closed without being asked to (a crash, a kill).
+        self.restarts = 0
         self._lock: asyncio.Lock | None = None
         self._sem: asyncio.Semaphore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -295,7 +299,9 @@ class AsyncBrowserFetcher:
     # lifecycle
     # ------------------------------------------------------------------ #
     async def start(self) -> None:
-        """Launch the browser (done automatically on the first request)."""
+        """Launch the browser (done automatically on the first request), and launch it again when it closed without
+        being asked to: it crashed, or was killed (by the system, short of memory). The pages open then fail, and
+        those asked for after get the new browser; :attr:`restarts` counts the times."""
         loop = asyncio.get_running_loop()
         if self._loop is not loop:
             self._lock, self._sem, self._loop = asyncio.Lock(), asyncio.Semaphore(self.max_pages), loop
@@ -303,7 +309,11 @@ class AsyncBrowserFetcher:
         assert self._lock is not None
         async with self._lock:
             if self._browser is not None or self._persistent is not None:
-                return
+                if self._alive():
+                    return
+                await self._forget()
+                self.restarts += 1
+                log.warning("the browser closed without being asked to (it crashed, or was killed): starting it again")
             try:
                 from playwright.async_api import async_playwright
             except ImportError:
@@ -345,6 +355,8 @@ class AsyncBrowserFetcher:
                     self._persistent = await chromium.launch_persistent_context(
                         self.user_data_dir, **opts, **self._context_options(None)
                     )
+                    self._persistent_closed = False
+                    self._persistent.on("close", self._on_persistent_close)
                     await self._prepare_context(self._persistent)
                 else:
                     self._browser = await chromium.launch(**opts)
@@ -353,6 +365,26 @@ class AsyncBrowserFetcher:
             except Exception as exc:
                 errors.append(f"{extra or 'default'}: {describe(exc)}")
         raise BrowserNotAvailable(INSTALL_HINT + "\n\nLaunch attempts:\n  " + "\n  ".join(errors))
+
+    def _on_persistent_close(self, context: Any) -> None:
+        if context is self._persistent:
+            self._persistent_closed = True
+
+    def _alive(self) -> bool:
+        """Whether the browser is still there (a crash or a kill closes it without our asking)."""
+        if self._browser is not None:
+            return bool(self._browser.is_connected())
+        return self._persistent is not None and not self._persistent_closed
+
+    async def _forget(self) -> None:
+        """Let go of a browser that is gone, its contexts, and the Playwright driver that ran it."""
+        self._contexts.clear()
+        self._context_users.clear()
+        for obj in (self._persistent, self._browser, self._pw):
+            if obj is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(obj.stop() if obj is self._pw else obj.close(), 10)
+        self._persistent = self._browser = self._pw = None
 
     def _user_agent(self) -> str | None:
         return self.user_agent or None
@@ -550,6 +582,8 @@ class AsyncBrowserFetcher:
         last_error: FetchError | None = None
         chosen, rotated, switch = proxy, False, True
         for attempt in range(attempts):
+            if attempt:
+                await self.start()  # (the browser may have closed under the last attempt: a new one then)
             if switch:  # the first attempt, or the last one's proxy failed: pick one
                 chosen = proxy or (self.proxies.next() if self.proxies is not None else None)
                 rotated = proxy is None and self.proxies is not None
@@ -1074,6 +1108,11 @@ class BrowserFetcher:
     def get_many(self, urls: Iterable[str], **kwargs: Any) -> list[Response | FetchError]:
         urls = list(urls)
         return self._run(lambda: self._async.get_many(urls, **kwargs))
+
+    @property
+    def restarts(self) -> int:
+        """How many times the browser was started again, having closed without being asked to."""
+        return self._async.restarts
 
     def export_cookies(self, url: str | None = None, *, proxy: str | None = None) -> list[dict[str, Any]]:
         """Cookies of the browser session - see :meth:`AsyncBrowserFetcher.export_cookies`."""

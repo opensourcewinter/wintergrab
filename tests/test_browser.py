@@ -140,3 +140,58 @@ def test_spider_hands_browser_cookies_to_http(fresh_site) -> None:
     by_page = {i["page"]: i["source"] for i in result.items}
     assert by_page == {f"Members page {i} for ada": "browser" if i == 1 else "http" for i in range(1, 5)}
     assert result.stats["cookie_handoffs"] == 1
+
+
+async def _crash(fetcher: AsyncBrowserFetcher) -> None:
+    """Crash the browser, as a crash or the system killing it for memory would (Chromium's own Browser.crash)."""
+    import asyncio
+    import contextlib
+
+    session = await fetcher._browser.new_browser_cdp_session()
+    with contextlib.suppress(Exception):  # (it dies before it answers)
+        await asyncio.wait_for(session.send("Browser.crash"), 3)
+
+
+def test_a_browser_that_crashes_is_started_again(site) -> None:
+    import asyncio
+
+    async def crawl() -> list[int]:
+        async with AsyncBrowserFetcher(retries=1) as browser:
+            statuses = [(await browser.get(site.url + "/books/")).status]
+            await _crash(browser)
+            statuses.append((await browser.get(site.url + "/js", wait_for=".item")).status)  # a new browser
+            assert browser.restarts == 1
+            loading = asyncio.create_task(browser.get(site.url + "/books/", wait=3))
+            await asyncio.sleep(1.0)
+            await _crash(browser)  # (while a page loads: it fails, and its retry gets a new browser)
+            statuses.append((await loading).status)
+            assert browser.restarts == 2
+            return statuses
+
+    assert asyncio.run(crawl()) == [200, 200, 200]
+
+
+def test_a_crawl_goes_on_when_its_browser_crashes(fresh_site) -> None:
+    from wintergrab import Spider
+
+    class Books(Spider):
+        name = "books"
+        use_browser = True
+        concurrency = 1
+
+        def configure_sessions(self, sessions):
+            super().configure_sessions(sessions)
+            self.browser = sessions.get("browser")
+            self.crashed = False
+
+        async def parse(self, response):
+            if not self.crashed:  # (the first page's browser crashes: the next pages need a new one)
+                self.crashed = True
+                await _crash(self.browser)
+            yield {"url": response.url}
+            for href in response.css("li.next a::attr(href)").getall()[:1]:
+                yield response.follow(href)
+
+    result = Books(start_urls=[fresh_site.url + "/books/"], max_pages=3, log_level="WARNING").run()
+    assert result.stats["status"] == "finished" and len(result.items) == 3
+    assert result.stats["browser_restarts"] == 1
