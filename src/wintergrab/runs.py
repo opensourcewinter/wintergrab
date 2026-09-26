@@ -58,7 +58,7 @@ _MAX_LIST = 1000  # items of a list setting kept with a run
 _NOT_REPLAYED = frozenset({"name", "cache", "cache_mode", "cache_ttl", "run_id"})
 _ALL_METHODS = ("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS")
 # settings never worth keeping with a run (objects, or noise)
-_SKIPPED_SETTINGS = frozenset({"events", "middlewares", "pipelines", "throttle", "run_recipe"})
+_SKIPPED_SETTINGS = frozenset({"events", "middlewares", "pipelines", "throttle", "run_recipe", "webhooks"})
 
 
 @dataclass
@@ -80,6 +80,7 @@ class Run:
             "module:Class"}`` or ``{"goal_plan": {...}}``.
         output: Where the items went.
         failures: The failure diagnoses: ``{"signature", "domain", "urls", "cause"}``.
+        label: A label given to the run (the project job that ran it).
         error: What stopped it, if it failed.
         directory: Where it is kept.
     """
@@ -98,6 +99,7 @@ class Run:
     output: str | None = None
     failures: list[dict[str, Any]] = dataclass_field(default_factory=list)
     error: str | None = None
+    label: str | None = None
     directory: Path = dataclass_field(default=Path("."), repr=False, compare=False)
 
     @property
@@ -115,7 +117,8 @@ class Run:
         facts = f"{s.get('pages', 0):,} pages, {s.get('items', 0):,} items, {s.get('errors', 0):,} errors"
         took = f", {self.duration:.1f} s" if self.duration is not None else ""
         extra = "  [recorded]" if self.recorded else ""
-        return f"{self.id:<8} {when}  {self.status:<9} {self.name:<16} {facts}{took}{extra}"
+        name = f"{self.label} ({self.name})" if self.label else self.name
+        return f"{self.id:<8} {when}  {self.status:<9} {name:<16} {facts}{took}{extra}"
 
     def details(self) -> str:
         """Several lines: the run, its settings and stats, its failures, its files."""
@@ -247,6 +250,7 @@ class RunRegistry:
         resumed: bool = False,
         settings: Mapping[str, Any] | None = None,
         recipe: Mapping[str, Any] | None = None,
+        label: str | None = None,
     ) -> Run:
         """A new run, numbered after the last one (safe with several processes: the directory decides)."""
         self.runs_dir.mkdir(parents=True, exist_ok=True)
@@ -259,7 +263,7 @@ class RunRegistry:
             except FileExistsError:
                 number += 1
         run = Run(f"run-{number}", number, name, time.time(), recorded=recorded, resumed=resumed,
-                  settings=dict(settings or {}), recipe=dict(recipe or {}), directory=directory)  # fmt: skip
+                  settings=dict(settings or {}), recipe=dict(recipe or {}), label=label, directory=directory)  # fmt: skip
         self.save(run)
         return run
 
@@ -368,6 +372,7 @@ class RunRecorder:
             resumed=resumed,
             settings=settings_of(spider),
             recipe=recipe_of(spider),
+            label=spider.run_label,
         )
         if self.record:
             from .fetchers.cache import HTTPCache
@@ -528,6 +533,8 @@ def replay(
         "record": False,
         "run_registry": None,
         "run_recipe": None,
+        "run_label": None,
+        "webhooks": (),  # a replay tells no one
         "retry_dead_letters": False,
         "network_policy": None,  # nothing reaches the network: no address to check
         # the recording says which pages: no page limits (max_items stays: it shapes the output)

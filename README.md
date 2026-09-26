@@ -65,6 +65,10 @@ thousands of pages), the same API scales up.
   failing pages and applies them only when other evidence on the page
   agrees. Every change is a version you can roll back. When it isn't sure,
   a person decides (`wintergrab review`).
+- **Runs on its own.** A `wintergrab.yaml` lists crawl and goal jobs with
+  their schedules (`every 2 hours`, `daily at 06:00`, cron).
+  `wintergrab schedule` runs them. Signed webhooks tell you when a job
+  fails or when a record changed.
 - **A small CLI.** `wintergrab get` and `wintergrab crawl` cover the common
   jobs with no code at all, including `--auto`, `--learn` and `--offline`.
 
@@ -253,8 +257,9 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Goals](https://github.com/opensourcewinter/wintergrab/blob/main/docs/goals.md) | Say what data you want; wintergrab plans the crawl, shows its cost, and collects the records (`wintergrab goal`) |
 | [Extraction tests](https://github.com/opensourcewinter/wintergrab/blob/main/docs/testing.md) | Pages with the values a schema must read from them; check every change in CI (`wintergrab fixture`, `wintergrab test`) |
 | [Runs and replay](https://github.com/opensourcewinter/wintergrab/blob/main/docs/runs.md) | Keep each crawl's record and pages; replay it offline after a change and see what it does to the data (`wintergrab runs`, `wintergrab replay`) |
+| [Projects](https://github.com/opensourcewinter/wintergrab/blob/main/docs/projects.md) | Jobs in one file, run on schedules (cron, `every 2 hours`), with signed webhooks for their events and for changed records (`wintergrab init`, `run`, `schedule`) |
 | [Healing](https://github.com/opensourcewinter/wintergrab/blob/main/docs/healing.md) | Extractors that repair their selectors when a site changes, with versions, rollback and a review queue (`wintergrab heal`, `wintergrab review`) |
-| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `runs`, `replay`, `fixture`, `test`, `heal`, `review`, `history`, `data` and `shell` reference |
+| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `run`, `schedule`, `init`, `runs`, `replay`, `fixture`, `test`, `heal`, `review`, `history`, `data`, `shell` and `doctor` reference |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly

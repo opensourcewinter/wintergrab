@@ -38,6 +38,7 @@ from ..request import Request
 from ..runs import RunRecorder, RunRegistry
 from ..urls import URLNormalizer, URLRules
 from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
+from ..webhooks import Webhook
 from .budget import BudgetMonitor, BudgetStatus
 from .checkpoint import Checkpoint
 from .deadletters import DeadLetterQueue
@@ -138,7 +139,7 @@ class Engine:
         self.failures = FailureTracker()
         self.budget = BudgetMonitor(spider)
         self.dead_letters = self._dead_letter_queue()
-        self._own_sinks: list[JsonlEventSink] = []
+        self._own_sinks: list[Any] = []  # event sinks and webhooks: closed at the end
         self._unsubscribe_sinks: list[Any] = []
         self._emit_response = False  # someone subscribed to high-volume events (re-checked periodically)
         self._emit_item = False
@@ -278,6 +279,10 @@ class Engine:
             self.budget.attach_output(self.exporter)
             self._output_budget = "max_output_bytes" in self.budget.limits and self.exporter is not None
             self._setup_events()
+            for setting in spider.webhooks or ():
+                hook = Webhook.coerce(setting)
+                self._own_sinks.append(hook)  # closed (what waits, delivered) at the end
+                self._unsubscribe_sinks.append(self.events.subscribe(hook, hook.kinds()))
             if self.recorder is not None and self.recorder.run is not None:
                 sink = JsonlEventSink(self.recorder.run.directory / "events.jsonl")
                 self._own_sinks.append(sink)
@@ -821,7 +826,10 @@ class Engine:
         for unsubscribe in self._unsubscribe_sinks:
             unsubscribe()
         for sink in self._own_sinks:
-            sink.close()
+            if isinstance(sink, Webhook):
+                await asyncio.to_thread(sink.close)  # the last deliveries, without holding up the loop
+            else:
+                sink.close()
         return result
 
     def _close_history(self, status: str) -> Any:
@@ -839,12 +847,29 @@ class Engine:
                 else:
                     log.info("changes since run %d:\n%s", report.old.id, report.summary())
                 self.events.emit("changes_detected", run=self._history_run, kinds=report.kinds(), **report.counts())
+                if report.old is not None:  # a first run is the baseline: nothing "changed"
+                    self._emit_changes(report)
         except Exception as exc:
             log.error("could not finish the history run: %s", describe(exc))
         finally:
             if self._own_history:
                 self.history.close()
         return report
+
+    def _emit_changes(self, report: Any) -> None:
+        """``site_changed`` when something did, and (for those who listen) one event per page."""
+        events = self.events
+        if report.added or report.removed or report.modified:
+            events.emit("site_changed", run=self._history_run, previous=report.old.id, **report.counts())
+        if events.wants("record_created"):
+            for url in report.added:
+                events.emit("record_created", url=url)
+        if events.wants("record_updated"):
+            for change in report.modified:
+                events.emit("record_updated", **change.to_dict())
+        if events.wants("record_deleted"):
+            for url in report.removed:
+                events.emit("record_deleted", url=url)
 
     def snapshot(self) -> dict[str, Any]:
         """Live metrics (see :mod:`wintergrab.spider.metrics`)."""

@@ -387,6 +387,38 @@
   exits with 1 when a value differs, for CI.
 - `HTTPCache.entries()` lists what a cache holds.
 
+### Projects, schedules and webhooks (`wintergrab.project`, `wintergrab.schedules`, `wintergrab.webhooks`)
+
+- A project file (`wintergrab.yaml`, `.toml` or `.json`) holds jobs: crawl,
+  goal and spider command lines written as mappings (`crawl: URL`,
+  `allow: /books/`, `output: ...`), with `defaults` for all of them. An
+  unknown option is an error that names the closest one. `wintergrab init`
+  writes one to start from.
+- `wintergrab run [JOB...]` runs jobs now, each in a process of its own,
+  and keeps its run in the workspace, labelled with the job's name.
+  `wintergrab schedule` runs them on their schedules until stopped, with
+  each job's output in `.wintergrab/logs/`. `--list` shows when each job
+  runs next, and `--once` runs what is due, for cron or CI.
+- Schedules: cron expressions (lists, ranges, steps, names), `every 2
+  hours`, `daily at 06:00`, `weekly on monday at 06:00`, `once at
+  2026-10-01 06:00`, in the machine's time or a `timezone`. A time missed
+  while no scheduler was running is made up for once, as soon as one runs,
+  unless the job would start later than its `start_within`.
+- Webhooks (`Spider.webhooks`, or a project's `webhooks`) post events as
+  JSON, batched (a second, at most 100 per delivery), signed with
+  HMAC-SHA256 when given a `secret` (`X-Wintergrab-Signature`;
+  `wintergrab.webhooks.verify()`), and retried after 1 and 4 seconds.
+  Deliveries have their own thread and never slow a crawl down. `${NAME}`
+  in a project's webhook takes the environment variable, so secrets stay
+  out of the file (and off command lines: a job's options take none).
+- New events. With a `history`, from its second run: `site_changed` (the
+  counts), and one `record_created`, `record_updated` (what changed) or
+  `record_deleted` per page. From a project's jobs: `job_started`,
+  `job_finished`, `job_failed` (the run, its stats, its log).
+- `EVENT_KINDS` lists the kinds that are emitted: `pipeline_report` was
+  missing from it, and `extraction_failed` and `schema_changed`, which
+  nothing emitted, are gone.
+
 ### Fixes
 
 - A spider given an empty `HTTPCache` object (`cache=HTTPCache(...)` with

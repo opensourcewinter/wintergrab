@@ -5,7 +5,10 @@ Installing wintergrab adds a `wintergrab` command (also runnable as
 stdout, so you can pipe the output anywhere.
 
 ```
-wintergrab [-v | -q] [--version] {get,crawl,data,shell,doctor} ...
+wintergrab [-v | -q] [--version] COMMAND ...
+
+COMMAND: get, crawl, data, inspect, goal, review, fixture, test, run, schedule, init,
+         runs, replay, heal, history, shell, doctor
 ```
 
 `-v` shows debug logs; `-q` keeps only warnings.
@@ -118,6 +121,7 @@ Options for any crawl:
 | `-b/--browser` | `use_browser = True` |
 | `--auto-browser`, `--fetch-stats FILE`, `--render-if-missing SEL` | `adaptive_fetch`: HTTP first, a browser for the pages that [need one](spiders.md#http-first-a-browser-when-needed) |
 | `--record`, `--workspace DIR` | `record`, `run_registry`: keep the run, its pages and items, to [replay](runs.md) it without the network |
+| `--project FILE`, `--job NAME` | `webhooks`, `run_label`: post events to the [project's webhooks](projects.md#webhooks), label the run (set by `wintergrab run` and `schedule`) |
 | `--optimize [FILE]` | `optimize`: [learn what to crawl](spiders.md#learning-what-to-crawl) (promising URL patterns first, barren ones skipped, parameters that change nothing dropped); FILE keeps what was learned for the next crawls |
 | `--public-only` | `network_policy = "public"` |
 | `--normalize-urls` | `url_normalizer = True` |
@@ -273,6 +277,23 @@ the recorded ones, and exits with 1 when they differ. `goal --record` keeps
 goal runs the same way. Once `.wintergrab` exists, every crawl's run is
 kept. See [runs.md](runs.md).
 
+## `wintergrab init`, `run` and `schedule`: projects
+
+```bash
+wintergrab init [DIR] [--force]            # a wintergrab.yaml to start from, and the workspace
+wintergrab run [JOB...] [--list]           # the project's jobs, now
+wintergrab schedule [--list | --once]      # the jobs on their schedules, until stopped
+```
+
+A project file (`wintergrab.yaml`, `.toml` or `.json` in the current
+directory, or `--project FILE`) holds jobs: crawl, goal and spider command
+lines written as mappings, each with a schedule (a cron expression, `every 2
+hours`, `daily at 06:00`), and webhooks for their events. `run` exits with 1
+when a job failed. `schedule --list` shows when each job runs next, and
+`--once` runs what is due and stops, for cron or CI. Jobs run as `crawl` and
+`goal` with `--project FILE --job NAME`, which post the crawl's events to the
+project's webhooks and label its run. See [projects.md](projects.md).
+
 ## `wintergrab history`: what changed between crawls
 
 ```bash
@@ -295,3 +316,19 @@ wintergrab shell https://quotes.toscrape.com
 Opens Python (IPython if installed) with `page` already fetched, plus `wg`,
 `get`, `render`, `parse` and `Field`, so you can try selectors quickly.
 Add `--browser` to render the page first.
+
+## `wintergrab doctor`: what is installed
+
+```
+$ wintergrab doctor
+ok  python       3.11.15
+ok  curl_cffi    0.16.3
+ok  lxml         6.1.3
+ok  playwright   1.63.0
+ok  chromium     /opt/pw-browsers/chromium-1194/chrome-linux/chrome
+ok  pyyaml       6.0.3
+...
+```
+
+Lists the optional parts wintergrab can use (browser, faster event loop and
+JSON, YAML) and whether each is there.

@@ -618,6 +618,7 @@ def cmd_goal(args: argparse.Namespace) -> int:
         progress=False if output == "-" else None,
         optimize=not args.no_optimize,
         **_workspace_settings(args, None),  # a goal run's recipe is its plan
+        **_project_settings(args),
     )
     if args.verbose >= 0:
         print(result.summary(), file=sys.stderr)
@@ -662,6 +663,80 @@ def cmd_review(args: argparse.Namespace) -> int:
             f"\n{len(items)} item(s) to review: --accept ID [--choice B], --reject ID, --correct ID VALUE",
             file=sys.stderr,
         )
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    from .project import Scheduler, find_project
+
+    project = find_project(args.project)
+    jobs = project.select(args.jobs)
+    if args.list:
+        for job in project.jobs.values():
+            when = f"  ({job.schedule})" if job.schedule is not None else ""
+            print(f"{job.name:<16} wintergrab {' '.join(job.command())}{when}")
+        return 0
+    scheduler = Scheduler(project)
+    failed = 0
+    try:
+        for job in jobs:
+            print(f"== {job.name}: wintergrab {' '.join(job.command())}", file=sys.stderr)
+            result = scheduler.run(job, logged=False)
+            print(result.describe(), file=sys.stderr)
+            failed += not result.ok
+    finally:
+        for hook in scheduler.webhooks:
+            hook.close()
+    return 1 if failed else 0
+
+
+def cmd_schedule(args: argparse.Namespace) -> int:
+    from .project import Scheduler, find_project
+
+    project = find_project(args.project)
+    scheduler = Scheduler(project, webhooks=[] if args.list else None)  # listing needs no secrets
+    plan = scheduler.plan()
+    if args.list or not plan:
+        now = scheduler.now()
+        for job, when in plan:
+            next_time = "never" if when is None else "now (due)" if when <= now else f"{when:%Y-%m-%d %H:%M}"
+            print(f"{job.name:<16} {job.schedule!s:<28} next: {next_time}")
+        for job in project.jobs.values():
+            if job.schedule is None:
+                print(f"{job.name:<16} {'(no schedule: wintergrab run ' + job.name + ')':<28}")
+        if not plan:
+            print("no job has a schedule", file=sys.stderr)
+        return 0
+    configure_logging(logging.DEBUG if args.verbose > 0 else logging.INFO)
+    if args.once:
+        results = scheduler.run_due()
+        for hook in scheduler.webhooks:
+            hook.close()
+        print(f"{len(results)} job(s) were due", file=sys.stderr)
+        return 1 if any(not r.ok for r in results) else 0
+    print(f"{project.path}: {len(plan)} scheduled job(s), logs in {project.workspace / 'logs'}; Ctrl+C to stop",
+          file=sys.stderr)  # fmt: skip
+    for job, when in plan:
+        print(f"  {job.name}: {job.schedule}, next {when:%Y-%m-%d %H:%M}" if when else f"  {job.name}: never",
+              file=sys.stderr)  # fmt: skip
+    scheduler.loop()
+    return 0
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    from .project import starter_project
+    from .runs import DEFAULT_WORKSPACE
+
+    directory = Path(args.directory or ".")
+    target = directory / "wintergrab.yaml"
+    if target.exists() and not args.force:
+        print(f"error: {target} exists (--force to write over it)", file=sys.stderr)
+        return 1
+    directory.mkdir(parents=True, exist_ok=True)
+    target.write_text(starter_project(), encoding="utf-8")
+    (directory / DEFAULT_WORKSPACE).mkdir(exist_ok=True)
+    print(f"wrote {target} and {directory / DEFAULT_WORKSPACE} (where every run is kept)")
+    print("next: edit the jobs, then: wintergrab run   (or: wintergrab schedule)", file=sys.stderr)
     return 0
 
 
@@ -1021,9 +1096,22 @@ def _workspace_settings(args: argparse.Namespace, recipe: dict[str, Any] | None)
     return settings
 
 
+def _project_settings(args: argparse.Namespace) -> dict[str, Any]:
+    """``--project FILE --job NAME`` (what a project's jobs are run with): its webhooks, the run's label."""
+    settings: dict[str, Any] = {}
+    if getattr(args, "project", None):
+        from .project import Project
+
+        settings["webhooks"] = Project(args.project).webhooks()
+    if getattr(args, "job", None):
+        settings["run_label"] = args.job
+    return settings
+
+
 def cmd_crawl(args: argparse.Namespace) -> int:
     cls, overrides = _crawl_settings(args)
     overrides.update(_workspace_settings(args, {"command": list(getattr(args, "argv", None) or [])}))
+    overrides.update(_project_settings(args))
     try:
         spider = cls(**overrides)
     except TypeError as exc:
@@ -1723,6 +1811,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help="where runs are kept (default .wintergrab; once it exists, every crawl's run is kept)",
     )
+    c.add_argument("--project", metavar="FILE", help="(set by wintergrab run/schedule) post events to its webhooks")
+    c.add_argument("--job", metavar="NAME", help="(set by wintergrab run/schedule) the job's name, kept with the run")
     c.add_argument(
         "--optimize",
         nargs="?",
@@ -1925,6 +2015,8 @@ def build_parser() -> argparse.ArgumentParser:
     gp.add_argument("--max-pages", type=int, metavar="N", help="stop after N pages")
     gp.add_argument("--record", action="store_true", help="keep the run's pages and items, to replay it")
     gp.add_argument("--workspace", metavar="DIR", help="where runs are kept (default .wintergrab)")
+    gp.add_argument("--project", metavar="FILE", help="(set by wintergrab run/schedule) post events to its webhooks")
+    gp.add_argument("--job", metavar="NAME", help="(set by wintergrab run/schedule) the job's name, kept with the run")
     gp.add_argument(
         "--no-optimize",
         action="store_true",
@@ -1984,6 +2076,37 @@ def build_parser() -> argparse.ArgumentParser:
     ts.add_argument("--update", action="store_true", help="accept what was read where it differs (review it)")
     ts.add_argument("--json", action="store_true", help="print the report as JSON")
     ts.set_defaults(func=cmd_test)
+
+    rj = sub.add_parser(
+        "run",
+        help="run a project's jobs now (wintergrab.yaml)",
+        description="Run the jobs of a project (wintergrab.yaml in the current directory, or --project FILE) now: "
+        "all of them, or those named. Each runs in a process of its own; its run is kept in the workspace.",
+    )
+    rj.add_argument("jobs", nargs="*", metavar="JOB", help="the jobs to run (default: all)")
+    rj.add_argument("--project", metavar="FILE", help="the project file (default: wintergrab.yaml here)")
+    rj.add_argument("--list", action="store_true", help="list the jobs and their command lines")
+    rj.set_defaults(func=cmd_run)
+
+    sc = sub.add_parser(
+        "schedule",
+        help="run a project's jobs on their schedules, until stopped",
+        description="Run the jobs of a project on their schedules (cron, 'every 2 hours', 'daily at 06:00'), one "
+        "after the other, until stopped. Their output goes to the workspace's logs/.",
+    )
+    sc.add_argument("--project", metavar="FILE", help="the project file (default: wintergrab.yaml here)")
+    sc.add_argument("--list", action="store_true", help="the scheduled jobs and when they run next")
+    sc.add_argument("--once", action="store_true", help="run the jobs due now, then stop (for cron or CI)")
+    sc.set_defaults(func=cmd_schedule)
+
+    it = sub.add_parser(
+        "init",
+        help="start a project: wintergrab.yaml and a workspace",
+        description="Write a wintergrab.yaml to start from, and create the workspace (.wintergrab) that keeps runs.",
+    )
+    it.add_argument("directory", nargs="?", metavar="DIR", help="where (default: here)")
+    it.add_argument("--force", action="store_true", help="write over an existing wintergrab.yaml")
+    it.set_defaults(func=cmd_init)
 
     ru = sub.add_parser(
         "runs",

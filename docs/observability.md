@@ -45,11 +45,19 @@ Or let the spider write them: `event_log = True` writes
 | `pipeline_report` | `pipeline`, `stages` (per-stage counts, when a [data pipeline](data.md#pipelines) closes) |
 | `quality_degraded` | `dataset`, `field`, `code`, `message`, `severity` ([quality monitoring](data.md#quality)) |
 | `changes_detected` | `run`, `added`, `removed`, `modified`, `unchanged`, `missing`, `skipped`, `kinds` (at the end of a crawl with a [history](history.md)) |
+| `site_changed` | `run`, `previous`, and the counts of `changes_detected` (with a history, from its second run, when something changed) |
+| `record_created`, `record_deleted` | `url` (with a history, from its second run: one per page) |
+| `record_updated` | `url`, `kinds`, `details` (`{"price": [10.0, 8.0]}`; as `record_created`) |
+| `job_started` | `job`, `command` (a [project](projects.md)'s jobs, from `wintergrab run` or `schedule`) |
+| `job_finished`, `job_failed` | `job`, `status`, `exit_code`, `seconds`, `run`, `log`, `stats` |
 
 `response` and `item_scraped` fire for every page and item, so they are
 only built when someone subscribed to them: an unobserved crawl pays
 nothing. A handler that raises is logged and ignored; watching a crawl never
 breaks it. Each event carries `time` (UTC) and `origin` (the spider name).
+
+To have events posted to a URL as they happen (signed, batched, retried),
+give the spider [`webhooks`](projects.md#webhooks).
 
 ## Metrics
 

@@ -247,6 +247,11 @@ class Spider:
     record: bool = False
     #: How to run this crawl again, kept with its record (the command line and goal runs set it).
     run_recipe: dict[str, Any] | None = None
+    #: A label kept with the run's record (a project sets its job's name).
+    run_label: str | None = None
+    #: Where to post the crawl's events as they happen (see :mod:`wintergrab.webhooks`): URLs,
+    #: ``{"url", "events", "secret"...}`` mappings, or :class:`~wintergrab.webhooks.Webhook` objects.
+    webhooks: Sequence[Any] = ()
     #: Session to retry *blocked* requests with (e.g. ``"browser"``).
     fallback_session: str | None = None
     #: Copy cookies from browser responses into the HTTP sessions, so a session

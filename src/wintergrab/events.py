@@ -19,7 +19,7 @@ Event kinds emitted by wintergrab (see :data:`EVENT_KINDS`)::
     crawl_finished     spider, status, stats, limit_reason
     response           url, status, bytes, latency, source, cache      (high volume)
     item_scraped       item                                             (high volume)
-    item_dropped       reason, item
+    item_dropped       pipeline, reason
     request_retried    url, reason, attempt, delay
     request_failed     url, error, category, kind, status
     blocked            url, status, domain
@@ -28,8 +28,15 @@ Event kinds emitted by wintergrab (see :data:`EVENT_KINDS`)::
     policy_refused     url, reason, policy
     budget_exhausted   budget, used, limit
     changes_detected   run, added, removed, modified, unchanged, missing, skipped, kinds   (with ``history``)
-    ...and from the data layer: record_created, record_updated, record_deleted,
-    extraction_failed, schema_changed, quality_degraded, site_changed, job_failed.
+    site_changed       run, previous, added, removed, modified, unchanged, missing, skipped   (with ``history``)
+    record_created     url                                              (with ``history``, one per page)
+    record_updated     url, kinds, details                              (with ``history``, one per page)
+    record_deleted     url                                              (with ``history``, one per page)
+    pipeline_report    pipeline, stages                                 (a data pipeline, when it closes)
+    quality_degraded   dataset, field, code, message, severity          (a data pipeline's quality monitor)
+    job_started        job, command                                     (a project's jobs)
+    job_finished       job, status, exit_code, seconds, run, log, stats
+    job_failed         job, status, exit_code, seconds, run, log, stats
 """
 
 from __future__ import annotations
@@ -58,9 +65,8 @@ EVENT_KINDS: frozenset[str] = frozenset(
     {
         "crawl_started", "crawl_finished", "response", "item_scraped", "item_dropped", "request_retried",
         "request_failed", "blocked", "browser_needed", "throttle_backoff", "policy_refused", "budget_exhausted",
-        "changes_detected",
-        "record_created", "record_updated", "record_deleted", "extraction_failed", "schema_changed",
-        "quality_degraded", "site_changed", "job_started", "job_finished", "job_failed",
+        "changes_detected", "site_changed", "record_created", "record_updated", "record_deleted",
+        "pipeline_report", "quality_degraded", "job_started", "job_finished", "job_failed",
     }
 )  # fmt: skip
 #: Kinds that fire once per response or item; only built when subscribed to.
