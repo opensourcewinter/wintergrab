@@ -1,4 +1,4 @@
-"""Watching a URL for changes: a sitemap, a feed, or a page (a project job's ``watch:``).
+"""Watching a URL or a dataset for changes: a sitemap, a feed, a page, or records (a project job's ``watch:``).
 
 ::
 
@@ -13,11 +13,15 @@ What is compared:
 
 * a sitemap: its URLs and their ``lastmod`` (a sitemap index: its sitemaps and theirs);
 * an RSS or Atom feed: its items' links;
-* anything else: the page's visible text (scripts and styles aside), or a JSON document's data.
+* anything else: the page's visible text (scripts and styles aside), or a JSON document's data;
+* a dataset (``data/products.jsonl``, a ``.csv``, ``.sqlite`` or ``.parquet`` file,
+  ``postgresql://.../db?table=NAME``... anything :func:`~wintergrab.data.io.read_records` reads): its records,
+  by their contents, whatever their order. A record that changed is one gone and one new.
 
-Each check is one request, conditional when the last answer had an ``ETag`` or ``Last-Modified``
+Each check of a URL is one request, conditional when the last answer had an ``ETag`` or ``Last-Modified``
 (a ``304 Not Modified`` means no change), and allowed by the site's robots.txt (unless told not
-to look). A check that fails (network, HTTP 4xx/5xx, robots.txt) changes nothing: it says why.
+to look). A dataset is read whole, unless it is a file not written since the last check. A check that
+fails (network, HTTP 4xx/5xx, robots.txt, a dataset that cannot be read) changes nothing: it says why.
 """
 
 from __future__ import annotations
@@ -27,11 +31,13 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
 
-from .errors import FetchError, describe
+from .errors import FetchError, WintergrabError, describe
+from .redact import redact_query
 
 __all__ = ["WatchCheck", "check"]
 
@@ -137,10 +143,13 @@ def check(
     user_agent: str = "*",
     timeout: float = 30.0,
 ) -> WatchCheck:
-    """Check ``url`` against ``previous`` (the last check's :attr:`WatchCheck.state`; see the module docs)."""
+    """Check ``url`` against ``previous`` (the last check's :attr:`WatchCheck.state`; see the module docs).
+    Anything but an http(s) URL is a dataset."""
     from . import get
 
     previous = previous or {}
+    if not url.startswith(("http://", "https://")):
+        return _check_dataset(url, previous)
     result = WatchCheck(url=url, first=not previous.get("fingerprint"), kind=previous.get("kind", "page"))
     result.state = dict(previous)
     if obey_robots and not _robots_allow(url, user_agent, timeout):
@@ -210,4 +219,54 @@ def check(
         result.summary = f"{previous.get('count', 0):,} -> {len(keys):,} {noun}s"
     else:
         result.summary = f"the {result.kind} changed"
+    return result
+
+
+def _check_dataset(target: str, previous: dict[str, Any]) -> WatchCheck:
+    """A dataset's check: its records compared by their contents (see the module docs)."""
+    from .data.io import read_records
+
+    result = WatchCheck(url=redact_query(target), first=not previous.get("fingerprint"), kind="data")
+    result.state = dict(previous)
+    stamp = None
+    if "://" not in target:  # a file: not read again when it was not written since
+        try:
+            info = Path(target).stat()
+        except OSError as exc:
+            result.error = f"cannot read {target}: {exc.strerror or exc}"
+            return result
+        stamp = [info.st_mtime_ns, info.st_size]
+        if previous.get("fingerprint") and previous.get("stamp") == stamp:
+            result.summary = "no change (not written since)"
+            result.state["checked"] = time.time()
+            return result
+    try:
+        keys = [_key(json.dumps(r, sort_keys=True, ensure_ascii=False, default=str)) for r in read_records(target)]
+    except (WintergrabError, OSError) as exc:
+        result.error = redact_query(describe(exc))
+        return result
+    state: dict[str, Any] = {
+        "kind": "data",
+        "fingerprint": _digest(sorted(keys)),
+        "checked": time.time(),
+        "count": len(keys),
+        "stamp": stamp,
+    }
+    if len(keys) <= _KEPT_KEYS:
+        state["keys"] = sorted(set(keys))
+    result.state = state
+    if result.first:
+        result.summary = f"{len(keys):,} record{'s' if len(keys) != 1 else ''} (first look)"
+        return result
+    result.changed = state["fingerprint"] != previous.get("fingerprint")
+    if not result.changed:
+        result.summary = "no change"
+    elif "keys" in previous and "keys" in state:
+        before, now = set(previous["keys"]), set(state["keys"])
+        new, gone = len(now - before), len(before - now)
+        facts = [f"{new:,} new record{'s' if new != 1 else ''}"] if new else []
+        facts += [f"{gone:,} gone"] if gone else []
+        result.summary = ", ".join(facts) or "records repeated or no longer repeated"
+    else:
+        result.summary = f"{previous.get('count', 0):,} -> {len(keys):,} records"
     return result

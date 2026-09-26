@@ -66,7 +66,7 @@ from typing import Any
 
 from .errors import ConfigurationError
 from .files import read_structured
-from .redact import redact_argv
+from .redact import redact_argv, redact_query
 from .runs import DEFAULT_WORKSPACE, Run, RunRegistry
 from .schedules import Cron, Schedule, parse_duration, parse_schedule
 from .utils import replace_file
@@ -83,6 +83,16 @@ _JOB_KEYS = frozenset(
     {*_KINDS, "schedule", "timezone", "description", "enabled", "set", "start_within", "watch", "check", "after"}
 )
 _VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _dataset(target: str) -> bool:
+    """Whether ``watch:`` names a dataset: a file of records (by its extension), or a URL of another scheme
+    than http(s) (a table's, an object's: its reader says whether it knows it)."""
+    from .data.io import READERS, RECORD_SUFFIXES
+
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", target):
+        return not target.lower().startswith(("http://", "https://"))
+    return Path(target).suffix.lower() in (*RECORD_SUFFIXES, *READERS)
 
 
 def _expand(value: Any, where: str) -> Any:
@@ -117,7 +127,9 @@ class Job:
         enabled: ``False`` keeps it from its schedule (``wintergrab run JOB`` still runs it).
         start_within: Skip a time the job would start later than this after it (default: a missed
             time is made up for, once, as soon as the scheduler runs).
-        watch: A sitemap, feed or page: the job runs when it changes (see :mod:`wintergrab.watch`).
+        watch: A sitemap, feed or page, or a dataset (a file of records, a table's URL): the job runs when it
+            changes (see :mod:`wintergrab.watch`). ``${NAME}`` in it is read from the environment when it is
+            checked, and is never shown.
         check: How often ``watch`` is checked.
         after: Jobs after each successful run of which this one runs.
     """
@@ -139,7 +151,7 @@ class Job:
         """What runs the job, in words: ``"every 2 hours"``, ``"when https://.../sitemap.xml changes"``..."""
         parts = [str(self.schedule)] if self.schedule is not None else []
         if self.watch:
-            parts.append(f"when {self.watch} changes (checked every {_duration(self.check)})")
+            parts.append(f"when {redact_query(self.watch)} changes (checked every {_duration(self.check)})")
         if self.after:
             parts.append(f"after {', '.join(self.after)}")
         return " + ".join(parts) or "when asked"
@@ -262,8 +274,12 @@ class Project:
                 if not isinstance(schedule, Cron):
                     raise ConfigurationError("start_within is for schedules at set times (cron, 'daily at 06:00')")
                 start_within = parse_duration(spec["start_within"])
-            if watch is not None and not (isinstance(watch, str) and watch.startswith(("http://", "https://"))):
-                raise ConfigurationError(f"watch is the http(s) URL of a sitemap, a feed or a page, not {watch!r}")
+            if watch is not None and not (isinstance(watch, str) and (watch.startswith(("http://", "https://"))
+                                                                      or _dataset(watch))):  # fmt: skip
+                raise ConfigurationError(
+                    "watch is the http(s) URL of a sitemap, a feed or a page, or a dataset (a .jsonl, .csv, "
+                    f".sqlite... file, a table's postgresql://... URL), not {redact_query(str(watch))!r}"
+                )
             if spec.get("check") is not None:
                 if watch is None:
                     raise ConfigurationError("check says how often watch: is checked")
@@ -589,26 +605,45 @@ class Scheduler:
             state = json.loads(self._watch_path(job).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
-        return state if isinstance(state, dict) and state.get("url") == job.watch else {}  # another URL: start over
+        same = isinstance(state, dict) and state.get("url") == redact_query(str(job.watch))
+        return state if same else {}  # another URL: start over
 
     def check(self, job: Job) -> Any:
-        """Check ``job``'s watched URL now, and keep what was found (a :class:`~wintergrab.watch.WatchCheck`)."""
-        from .watch import check
+        """Check ``job``'s watched URL or dataset now, and keep what was found (a
+        :class:`~wintergrab.watch.WatchCheck`). ``${NAME}`` in it is read now, and what the check says has
+        neither its value nor a password the URL holds."""
+        from .watch import WatchCheck, check
 
         previous = self.watch_state(job)
         checker = self.checker or check
-        found = checker(str(job.watch), previous, obey_robots=not job.options.get("no_robots"))
+        shown = redact_query(str(job.watch))
+        written = str(job.watch)
+        secrets = [os.environ[n] for n in _VARIABLE.findall(written) if os.environ.get(n)]
+        try:
+            target = _expand(written, f"{self.project.path.name}, job {job.name!r}, watch")
+        except ConfigurationError as exc:
+            found = WatchCheck(url=shown, error=str(exc))
+        else:
+            if "://" not in target and not Path(target).is_absolute():  # a dataset: from the project's directory
+                target = str(self.project.path.parent / target)
+            found = checker(target, previous, obey_robots=not job.options.get("no_robots"))
+            for secret in secrets:
+                found.url = found.url.replace(secret, "***")
+                found.summary = found.summary.replace(secret, "***")
+                found.error = found.error.replace(secret, "***") if found.error else found.error
+            found.url, found.summary = redact_query(found.url), redact_query(found.summary)
+            found.error = redact_query(found.error) if found.error else found.error
         state = dict(found.state if found.error is None else previous)
-        state.update(url=job.watch, checked_at=self.now().isoformat(), last_error=found.error)
+        state.update(url=shown, checked_at=self.now().isoformat(), last_error=found.error)
         path = self._watch_path(job)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(state), encoding="utf-8")
         replace_file(tmp, path)
         if found.error is not None:
-            log.warning("%s: could not check %s: %s", job.name, job.watch, found.error)
+            log.warning("%s: could not check %s: %s", job.name, shown, found.error)
         else:
-            log.info("%s: %s: %s", job.name, job.watch, found.summary)
+            log.info("%s: %s: %s", job.name, shown, found.summary)
         return found
 
     # -- running -------------------------------------------------------------------------------- #

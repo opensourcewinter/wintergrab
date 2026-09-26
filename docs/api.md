@@ -990,7 +990,7 @@ checks that it is up to date.
   - `select(self, names: Iterable[str] | None) -> list[Job]`
   - `webhooks(self) -> list[Webhook]`: The project's webhooks (``${NAME}`` read from the environment now).
 - **`Scheduler(project: Project, *, now: Callable[[], datetime] = datetime.now, sleep: Callable[[float], None] = time.sleep, runner: Callable[..., int] | None = None, webhooks: Sequence[Webhook] | None = None, checker: Callable[..., Any] | None = None)`** (class). Runs a project's jobs on their schedules (see the module docs).
-  - `check(self, job: Job) -> Any`: Check ``job``'s watched URL now, and keep what was found (a :class:`~wintergrab.watch.WatchCheck`).
+  - `check(self, job: Job) -> Any`: Check ``job``'s watched URL or dataset now, and keep what was found (a :class:`~wintergrab.watch.WatchCheck`).
   - `check_due(self, job: Job, now: datetime) -> datetime | None`: When ``job``'s watched URL is checked next (right away the first time).
   - `due(self, job: Job, now: datetime) -> datetime | None`: When ``job`` runs, or its watched URL is checked, next (``None``: never; see :meth:`scheduled` and :meth:`check_due`).
   - `last_run(self, job: Job) -> datetime | None`

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -139,3 +140,90 @@ def test_what_triggers_say(tmp_path, capsys) -> None:
     listed = capsys.readouterr().out
     assert "prices           daily at 06:00 + when https://s.example/sitemap.xml changes" in listed
     assert "later            after prices" in listed
+
+
+def _written(path: Any, text: str, second: int) -> None:
+    """Write ``text``, with a modification time of its own (a file system's clock may be coarse)."""
+    path.write_text(text, encoding="utf-8")
+    os.utime(path, ns=(second * 1_000_000_000, second * 1_000_000_000))
+
+
+def test_a_dataset(tmp_path) -> None:
+    from wintergrab.spider.exporters import write_items
+
+    data = tmp_path / "prices.jsonl"
+    _written(data, '{"sku": "a", "price": 10}\n{"sku": "b", "price": 12}\n', 1)
+    first = check(str(data))
+    assert (first.first, first.changed, first.kind, first.summary) == (True, False, "data", "2 records (first look)")
+    same = check(str(data), first.state)
+    assert not same.changed and same.summary == "no change (not written since)"
+    _written(data, '{"price": 12, "sku": "b"}\n{"sku": "a", "price": 10}\n', 2)  # written again, another order
+    again = check(str(data), same.state)
+    assert not again.changed and again.summary == "no change"
+    _written(data, '{"sku": "a", "price": 9}\n{"sku": "b", "price": 12}\n{"sku": "c", "price": 5}\n', 3)
+    moved = check(str(data), again.state)
+    assert moved.changed and moved.summary == "2 new records, 1 gone"  # a's price changed; c is new
+    missing = check(str(tmp_path / "gone.jsonl"), moved.state)
+    assert missing.error.startswith("cannot read") and not missing.changed and missing.state == moved.state
+    table = tmp_path / "items.sqlite"  # (as a crawl writes one)
+    write_items(table, [{"sku": "a", "tags": ["x"]}])
+    assert check(str(table)).summary == "1 record (first look)"
+
+
+def test_jobs_run_when_a_dataset_changes(tmp_path) -> None:
+    data = tmp_path / "data" / "prices.jsonl"
+    data.parent.mkdir()
+    _written(data, '{"sku": "a", "price": 10}\n', 1)
+    project = _project(tmp_path, {"jobs": {"report": {"crawl": "https://s.example/", "watch": "data/prices.jsonl",
+                                                      "check": "5 minutes"}}})  # fmt: skip
+    assert project.jobs["report"].trigger() == "when data/prices.jsonl changes (checked every 5 minutes)"
+    clock = [datetime(2026, 9, 26, 9, 0)]
+    started: list[tuple[str, str | None]] = []
+
+    def runner(command: list[str], *, cwd: Any, log_file: Any) -> int:
+        return 0
+
+    scheduler = Scheduler(project, now=lambda: clock[0], sleep=lambda s: None, runner=runner, webhooks=[])
+    scheduler.on_start = lambda job, trigger, reason: started.append((trigger, reason))
+    scheduler.run_due()  # (read from the project's directory) nothing collected yet: it runs
+    assert started == [("watch", "1 record (first look)")]
+    clock[0] += timedelta(minutes=5)
+    scheduler.run_due()
+    assert len(started) == 1  # no change
+    _written(data, '{"sku": "a", "price": 8}\n', 2)
+    clock[0] += timedelta(minutes=5)
+    scheduler.run_due()
+    assert started[-1] == ("watch", "1 new record, 1 gone")
+    with pytest.raises(ConfigurationError, match="or a dataset"):
+        _project(tmp_path, {"jobs": {"a": {"crawl": "https://s.example/", "watch": "prices.txt"}}})
+
+
+def test_a_watched_dataset_keeps_its_password_to_itself(tmp_path, monkeypatch, caplog) -> None:
+    import logging
+
+    from wintergrab.watch import WatchCheck
+
+    monkeypatch.setenv("SHOP_DB_PASSWORD", "s3cr3t-pw")
+    project = _project(tmp_path, {"jobs": {
+        "a": {"crawl": "https://s.example/", "watch": "postgresql://crawler:${SHOP_DB_PASSWORD}@127.0.0.1:1/shop?table=t"},
+        "b": {"crawl": "https://s.example/", "watch": "mysql://crawler:literal-pw@127.0.0.1:1/shop?table=t"},
+    }})  # fmt: skip
+    assert "postgresql://***@127.0.0.1:1/shop" in project.jobs["a"].trigger()  # (its user shown as ***)
+    assert "literal-pw" not in project.jobs["b"].trigger()
+    asked: list[str] = []
+
+    def checker(target: str, previous: Any, **options: Any) -> WatchCheck:
+        asked.append(target)
+        return WatchCheck(url=target, error=f"could not connect to {target}")  # (an error that repeats it)
+
+    scheduler = Scheduler(project, checker=checker, webhooks=[])
+    with caplog.at_level(logging.INFO, "wintergrab.project"):
+        found = scheduler.check(project.jobs["a"])
+        scheduler.check(project.jobs["b"])
+    assert asked[0] == "postgresql://crawler:s3cr3t-pw@127.0.0.1:1/shop?table=t"  # read with it
+    assert "s3cr3t-pw" not in found.error and "s3cr3t-pw" not in found.url
+    kept = "".join(p.read_text() for p in (tmp_path / ".wintergrab" / "watch").glob("*.json"))
+    for secret in ("s3cr3t-pw", "literal-pw"):
+        assert secret not in caplog.text and secret not in kept
+    monkeypatch.delenv("SHOP_DB_PASSWORD")
+    assert "SHOP_DB_PASSWORD is not set" in scheduler.check(project.jobs["a"]).error

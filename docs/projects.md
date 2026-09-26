@@ -147,7 +147,28 @@ A **watched URL** can be a sitemap, an RSS or Atom feed, or any page:
 - a page by its visible text (scripts and styles aside), a JSON document by
   its data.
 
-`wintergrab schedule` checks the URL every `check`, with a conditional
+A job can watch a **dataset** too: a file of records (`.jsonl`, `.csv`,
+`.json`, `.sqlite`, `.parquet`, `.xlsx`, from the project's directory when
+relative) or a table's or an object's URL (`postgresql://`, `mysql://`,
+`mongodb://`, `s3://`: [what `data` commands read](storage.md)). Its records
+are compared by their contents, whatever their order ("3 new records, 1
+gone": a record that changed is one gone and one new). The dataset is read
+whole at each check, except a file whose size and modification time did
+not change since.
+
+```yaml
+jobs:
+  report:
+    goal: laptops under $1000 on shop.example
+    watch: postgresql://crawler:${SHOP_DB_PASSWORD}@db.internal/shop?table=products
+    check: 1 hour
+```
+
+`${NAME}` in `watch:` is read from the environment when it is checked, in
+the scheduler's process: its value is never shown, logged or kept, nor is a
+password the URL holds itself (shown as `***`).
+
+`wintergrab schedule` checks a URL every `check`, with a conditional
 request when the site gave an `ETag` or `Last-Modified` (a `304` costs
 nothing). It obeys robots.txt unless the job says `no_robots: true`. The job
 runs when the URL changed, and the first time, when it has never run.
