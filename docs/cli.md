@@ -386,13 +386,14 @@ kept. See [runs.md](runs.md).
 
 ```bash
 wintergrab init [DIR] [--force]            # a wintergrab.yaml to start from, and the workspace
-wintergrab run [JOB...] [--list]           # the project's jobs, now
-wintergrab schedule [--list | --once]      # the jobs on their schedules, until stopped
+wintergrab run [PROJECT] [JOB...] [--list] # the project's jobs, now
+wintergrab schedule [PROJECT] [--list | --once]   # the jobs on their schedules, until stopped
 wintergrab schedule --listen [HOST:]PORT   # ... and when asked over HTTP (POST /jobs/NAME/run)
 ```
 
 A project file (`wintergrab.yaml`, `.toml` or `.json` in the current
-directory, or `--project FILE`) holds jobs: crawl, goal and spider command
+directory, or one named first, `wintergrab run shop.yaml`, or with
+`--project FILE`) holds jobs: crawl, goal and spider command
 lines written as mappings, each with a schedule (a cron expression, `every 2
 hours`, `daily at 06:00`), and webhooks for their events. `run` exits with 1
 when a job failed. `schedule --list` shows when each job runs next, and

@@ -1083,17 +1083,30 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def _project_file(given: str | None, first: str | None) -> tuple[str | None, bool]:
+    """The project file: ``--project FILE``, or a first argument naming one (``wintergrab run project.yaml``);
+    and whether that argument was it."""
+    if first and Path(first).suffix.lower() in (".yaml", ".yml", ".toml", ".json") and Path(first).is_file():
+        if given:
+            raise ConfigurationError(f"two projects: {first} and --project {given}")
+        return first, True
+    return given, False
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from .project import Scheduler, find_project
     from .redact import redact_argv
 
-    project = find_project(args.project)
-    jobs = project.select(args.jobs)
+    names = list(args.jobs or [])
+    path, named = _project_file(args.project, names[0] if names else None)
+    names = names[1:] if named else names
+    project = find_project(path)
+    jobs = project.select(names)
     if args.list:
         for job in project.jobs.values():
             print(f"{job.name:<16} wintergrab {' '.join(redact_argv(job.command()))}  ({job.trigger()})")
         return 0
-    if not args.jobs:  # every job: the ones that come after another run after it
+    if not names:  # every job: the ones that come after another run after it
         jobs = [job for job in jobs if not job.after]
     scheduler = Scheduler(project)
 
@@ -1120,7 +1133,10 @@ def cmd_schedule(args: argparse.Namespace) -> int:
     if args.listen and (args.list or args.once):
         print("error: --listen keeps the scheduler running: not with --list or --once", file=sys.stderr)
         return 2
-    project = find_project(args.project)
+    if args.file and args.project:
+        print(f"error: two projects: {args.file} and --project {args.project}", file=sys.stderr)
+        return 2
+    project = find_project(args.file or args.project)
     scheduler = Scheduler(project, webhooks=[] if args.list else None)  # listing needs no secrets
     plan = scheduler.plan()
     if args.list or (not plan and not args.listen):
@@ -3201,10 +3217,13 @@ def build_parser() -> argparse.ArgumentParser:
     rj = sub.add_parser(
         "run",
         help="run a project's jobs now (wintergrab.yaml)",
-        description="Run the jobs of a project (wintergrab.yaml in the current directory, or --project FILE) now: "
-        "all of them, or those named. Each runs in a process of its own; its run is kept in the workspace.",
+        description="Run the jobs of a project (wintergrab.yaml in the current directory, or a file named first, "
+        "or --project FILE) now: all of them, or those named. Each runs in a process of its own; its run is kept "
+        "in the workspace.",
     )
-    rj.add_argument("jobs", nargs="*", metavar="JOB", help="the jobs to run (default: all)")
+    rj.add_argument("jobs", nargs="*", metavar="[PROJECT] JOB",
+                    help="the jobs to run (default: all), after the project file if it is not wintergrab.yaml here "
+                    "(wintergrab run shop.yaml prices)")  # fmt: skip
     rj.add_argument("--project", metavar="FILE", help="the project file (default: wintergrab.yaml here)")
     rj.add_argument("--list", action="store_true", help="list the jobs and their command lines")
     rj.set_defaults(func=cmd_run)
@@ -3215,7 +3234,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run the jobs of a project on their schedules (cron, 'every 2 hours', 'daily at 06:00'), one "
         "after the other, until stopped. Their output goes to the workspace's logs/.",
     )
-    sc.add_argument("--project", metavar="FILE", help="the project file (default: wintergrab.yaml here)")
+    sc.add_argument("file", nargs="?", metavar="PROJECT", help="the project file (default: wintergrab.yaml here)")
+    sc.add_argument("--project", metavar="FILE", help="the project file, the same way")
     sc.add_argument("--list", action="store_true", help="the scheduled jobs and when they run next")
     sc.add_argument("--once", action="store_true", help="run the jobs due now, then stop (for cron or CI)")
     sc.add_argument("--listen", metavar="[HOST:]PORT",

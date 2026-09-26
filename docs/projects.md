@@ -91,6 +91,9 @@ job's name.
 - `wintergrab run` runs every job now, one after the other, their output
   shown.
 - `wintergrab run books rated` runs only those jobs.
+- `wintergrab run shop.yaml` (or `--project shop.yaml`) runs the jobs of
+  another project file than `wintergrab.yaml` here; `wintergrab run
+  shop.yaml prices` one of them. `wintergrab schedule shop.yaml` the same.
 - The exit status is 1 when a job failed.
 - `wintergrab dashboard` shows the jobs, when each runs next, and each run:
   see [the dashboard](dashboard.md).

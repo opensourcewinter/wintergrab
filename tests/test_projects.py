@@ -434,3 +434,20 @@ def test_the_listen_option(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setenv("WINTERGRAB_TRIGGER_TOKEN", "a-secret-of-some-length")
     assert main(["schedule", "--project", project, "--listen", "127.0.0.1:port"]) == 2
     assert "say [HOST:]PORT" in capsys.readouterr().err
+
+
+def test_a_project_file_named_first(tmp_path, capsys, monkeypatch) -> None:
+    from wintergrab.cli import main
+
+    named = tmp_path / "shop.yaml"
+    named.write_text("jobs:\n  prices:\n    crawl: https://s.example/\n    schedule: every 2 hours\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)  # (no wintergrab.yaml here)
+    assert main(["run", "shop.yaml", "--list"]) == 0  # wintergrab run project.yaml
+    assert "prices           wintergrab crawl https://s.example/" in capsys.readouterr().out
+    assert main(["schedule", "shop.yaml", "--list"]) == 0
+    assert "prices           every 2 hours" in capsys.readouterr().out
+    assert main(["run", "shop.yaml", "nothere"]) == 1
+    assert "no job nothere in shop.yaml" in capsys.readouterr().err
+    assert main(["run", "shop.yaml", "--project", "other.yaml"]) == 1
+    assert "two projects" in capsys.readouterr().err
+    assert main(["schedule", "shop.yaml", "--project", "other.yaml", "--list"]) == 2

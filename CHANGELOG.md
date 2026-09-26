@@ -885,6 +885,9 @@ an error that says so, not a setting silently ignored
   file that was not written since is not read again. `${NAME}` in `watch:`
   is read when it is checked, and neither its value nor a password in the
   URL is shown, logged or kept.
+- `wintergrab run shop.yaml [JOB...]` and `wintergrab schedule shop.yaml`
+  take the project file first, the same as `--project`: the file was taken
+  for a job's name.
 - `wintergrab schedule --listen [HOST:]PORT` (`wintergrab.triggers`) runs
   jobs when asked over HTTP too: `POST /jobs/NAME/run` puts the job in the
   scheduler's turn and answers `202` at once; `GET /jobs` lists the jobs and
