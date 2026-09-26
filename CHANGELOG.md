@@ -235,6 +235,26 @@
   6.9 ms per page for a site profile's full analysis, 2.3 ms after the
   first 500 pages (topology included).
 
+### Adaptive fetching (`wintergrab.fetchers.strategy`)
+
+- `Spider.adaptive_fetch = True` (or a file) fetches pages over HTTP first
+  and again in a browser when their HTML is not enough:
+  `Spider.needs_browser(response)`, by default a `render_if_missing`
+  selector that finds nothing or a JavaScript app shell
+  (`needs_javascript()`: an empty mount point such as `#root` or
+  `#__next`, or little text with several scripts or a `<noscript>` asking
+  for JavaScript; not when the data is embedded in the HTML). Rendered
+  pages wait for the network to be idle and record their API calls.
+- Outcomes are counted per URL pattern and host; a pattern whose pages
+  needed a browser 80% of the time (3 pages at least) goes to the browser
+  directly, with one page in ten still tried over HTTP. The counts can be
+  kept in a file for the next crawls (`result.fetch_strategy`). The
+  browser attempt is the same page (not a new one for `max_pages`), a
+  `browser_needed` event says why, and a crawl without a browser carries on
+  over HTTP. Blocked pages are never sent to the browser for being blocked.
+- CLI: `crawl --auto-browser [--fetch-stats FILE] [--render-if-missing SEL]`
+  and `get --auto-browser`.
+
 ### Fixes
 
 - Spiders with URL rules (`wintergrab crawl URL --sitemap ...`) skipped the

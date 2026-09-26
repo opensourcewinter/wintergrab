@@ -38,6 +38,7 @@ Or let the spider write them: `event_log = True` writes
 | `request_retried` | `url`, `reason`, `attempt`, `delay` |
 | `request_failed` | `url`, `error`, `category`, `kind`, `status` |
 | `blocked` | `url`, `status`, `domain` |
+| `browser_needed` | `url`, `pattern`, `reason` (with [`adaptive_fetch`](spiders.md#http-first-a-browser-when-needed): a page fetched again in the browser) |
 | `throttle_backoff` | `domain`, `delay`, `concurrency`, `retry_after` |
 | `policy_refused` | `url`, `reason`, `policy` |
 | `budget_exhausted` | `budget`, `used`, `limit` |

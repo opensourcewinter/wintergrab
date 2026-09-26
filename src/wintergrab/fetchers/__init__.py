@@ -10,6 +10,7 @@ from .cache import CacheMiss, HTTPCache
 from .http import DEFAULT_RETRY_STATUSES, AsyncFetcher, Fetcher
 from .resources import ResourceFilter
 from .response import Headers, Response
+from .strategy import FetchStrategy, needs_javascript
 
 __all__ = [
     "DEFAULT_RETRY_STATUSES",
@@ -18,6 +19,7 @@ __all__ = [
     "BrowserFetcher",
     "CacheMiss",
     "CapturedResponse",
+    "FetchStrategy",
     "Fetcher",
     "HTTPCache",
     "Headers",
@@ -29,6 +31,7 @@ __all__ = [
     "get",
     "has_challenge_markers",
     "looks_blocked",
+    "needs_javascript",
     "post",
     "render",
 ]

@@ -21,6 +21,7 @@ from ..fetchers.blocking import looks_blocked
 from ..fetchers.browser import AsyncBrowserFetcher
 from ..fetchers.cache import HTTPCache
 from ..fetchers.http import DEFAULT_RETRY_STATUSES, AsyncFetcher
+from ..fetchers.strategy import needs_javascript
 from ..netpolicy import NetworkPolicy
 from ..proxy import ProxyRotator
 from ..request import Request
@@ -59,6 +60,9 @@ class CrawlResult:
     changes: Any = None
     #: With ``profile``: the site's :class:`~wintergrab.intel.SiteProfile`.
     profile: Any = None
+    #: With ``adaptive_fetch``: the :class:`~wintergrab.fetchers.strategy.FetchStrategy`, with what it
+    #: learned about each URL pattern.
+    fetch_strategy: Any = None
 
     @property
     def paused(self) -> bool:
@@ -217,6 +221,13 @@ class Spider:
     proxies: Sequence[str] | ProxyRotator | None = None
     #: Make the default session a headless browser instead of plain HTTP.
     use_browser: bool = False
+    #: Fetch pages over HTTP first, and again in a browser when their HTML is not enough
+    #: (:meth:`needs_browser`), learning per URL pattern which pages need one: ``True``, a file
+    #: that keeps what was learned across crawls, or a :class:`~wintergrab.fetchers.strategy.FetchStrategy`.
+    adaptive_fetch: Any = False
+    #: With ``adaptive_fetch``: CSS selectors a usable page has; a page fetched over HTTP where
+    #: one of them finds nothing goes to the browser.
+    render_if_missing: Sequence[str] = ()
     #: Session to retry *blocked* requests with (e.g. ``"browser"``).
     fallback_session: str | None = None
     #: Copy cookies from browser responses into the HTTP sessions, so a session
@@ -373,7 +384,7 @@ class Spider:
         """Register the fetch sessions this spider uses.
 
         The default registers ``"http"`` (an :class:`AsyncFetcher` built from
-        the spider's settings) and, if :attr:`use_browser` or
+        the spider's settings) and, if :attr:`use_browser`, :attr:`adaptive_fetch` or
         :attr:`fallback_session` asks for it, ``"browser"``. Override to add
         your own, e.g. several logged-in accounts.
         """
@@ -391,7 +402,7 @@ class Spider:
             ),
             default=not self.use_browser,
         )
-        if self.use_browser or self.fallback_session == "browser":
+        if self.use_browser or self.adaptive_fetch or self.fallback_session == "browser":
             sessions.add(
                 "browser",
                 AsyncBrowserFetcher(
@@ -416,6 +427,19 @@ class Spider:
         """Decide whether a response is a block/challenge page (retried, and
         slows the domain down). Override for site-specific checks."""
         return looks_blocked(response)
+
+    def needs_browser(self, response: Response) -> str | bool | None:
+        """With :attr:`adaptive_fetch`: whether a page fetched over HTTP needs a browser to show
+        its content. Return why (or ``True``), or a false value.
+
+        By default: a :attr:`render_if_missing` selector finds nothing, or the page looks like a
+        JavaScript app shell (:func:`~wintergrab.fetchers.strategy.needs_javascript`). Override
+        for site-specific checks. Block pages are :meth:`is_blocked`'s business, never this one's.
+        """
+        for css in self.render_if_missing:
+            if not response.css(css):
+                return f"nothing matches {css!r}"
+        return needs_javascript(response)
 
     def on_error(self, request: Request, error: BaseException) -> Any:
         """Called when a request finally fails (after retries) and has no errback."""

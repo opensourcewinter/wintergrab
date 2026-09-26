@@ -125,6 +125,65 @@ Shortcuts:
   challenge page, 403 + bot-wall markers, 429) through that session.
   With the default sessions, setting it to `"browser"` also registers the
   browser session for you.
+- `adaptive_fetch = True` fetches over HTTP and uses the browser only for
+  the pages that need it (below).
+
+### HTTP first, a browser when needed
+
+```python
+class Shop(Spider):
+    adaptive_fetch = "shop.fetch.json"   # or True: learn, but keep nothing after the crawl
+    render_if_missing = [".price"]       # optional: what a usable page has
+```
+
+```bash
+wintergrab crawl https://shop.example --auto-browser --fetch-stats shop.fetch.json
+wintergrab get https://app.example/dashboard --auto-browser
+```
+
+Every page is fetched over HTTP first. When its HTML is not enough, the page
+is fetched again in the browser, which waits for the page's own requests to
+finish and records its API calls (`response.captured`). "Not enough" is
+`needs_browser(response)`, which you can override; by default:
+
+- a `render_if_missing` selector finds nothing, or
+- the page is a JavaScript app shell: an app's mount point (`#root`,
+  `#app`, `#__next`, `app-root`...) with next to no text (under 15
+  characters: nothing, or "Loading...") on a page with under 1,000
+  characters of text; or a page with under 200 characters of text and three
+  scripts or more, or a `<noscript>` asking for JavaScript. Pages whose data
+  is in the HTML anyway (`__NEXT_DATA__`, `window.__INITIAL_STATE__`,
+  JSON-LD, 2 KB or more) are enough as they are.
+
+What happens is counted per URL pattern (`shop.example/search?q`,
+`shop.example/p/{int}`, see `url_template()`) and per host. Once 80% of a
+pattern's pages or more needed the browser (3 pages at least), its pages go
+to the browser directly; one in ten is still tried over HTTP in case the
+site changed. A pattern not seen yet follows its host once nine of the
+host's pages have been tried. With a file, what was learned is saved at the
+end of the crawl and read at the start of the next one, so a later crawl
+wastes no HTTP request on the pages that need a browser. At the end of the
+crawl, `result.fetch_strategy.describe()` (also logged) says how each
+pattern did:
+
+```
+shop.example/search?q: HTTP enough for 0% of 3 page(s); browser: 8 page(s), 100% with content
+shop.example/p/{int}: HTTP enough for 100% of 120 page(s)
+```
+
+The page fetched again in the browser is the same page: it does not count
+as a new page for `max_pages`, it is one more of its attempts for
+`retries`, and `browser_needed` [events](observability.md) say which pages
+went and why. The stats have `adaptive/rendered` (pages fetched again in
+the browser) and `adaptive/browser_first` (pages sent to it directly). If no
+browser can be started, the crawl carries on over HTTP with a warning.
+Tune it with `adaptive_fetch = FetchStrategy("shop.fetch.json",
+threshold=0.8, min_pages=3, probe_every=10, capture=True,
+wait_until="networkidle")` (from `wintergrab.fetchers.strategy`).
+
+This is about how pages are built, not about access: a page that looks
+blocked (`is_blocked()`) is never sent to the browser because of it. It is
+retried and slows the crawl down as usual.
 
 ## Speed control (AutoThrottle)
 
@@ -408,6 +467,8 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `allowed_statuses` | `()` | Non-2xx statuses passed to callbacks anyway. |
 | `proxies` | `None` | Proxy list or `ProxyRotator`. |
 | `use_browser` | `False` | Headless browser as the default session. |
+| `adaptive_fetch` | `False` | [HTTP first, a browser for the pages that need one](#http-first-a-browser-when-needed), learned per URL pattern: `True`, a file to keep what was learned, or a `FetchStrategy`. |
+| `render_if_missing` | `()` | With `adaptive_fetch`: CSS selectors a usable page has. |
 | `fallback_session` | `None` | Session for retrying blocked requests. |
 | `obey_robots_txt` | `True` | Respect robots.txt. |
 | `robots_user_agent` | `"*"` | User agent used to match robots.txt rules. |

@@ -32,6 +32,7 @@ from ..events import JsonlEventSink
 from ..fetchers.cache import HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..fetchers.response import Response
+from ..fetchers.strategy import FetchStrategy
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
 from ..urls import URLNormalizer, URLRules
@@ -116,6 +117,7 @@ class Engine:
         self.proxies = ProxyRotator.coerce(spider.proxies)
         self.url_normalizer = URLNormalizer.coerce(spider.url_normalizer)
         self.url_rules = URLRules.coerce(spider.url_rules)
+        self.adaptive = FetchStrategy.coerce(spider.adaptive_fetch)
         self.network_policy = spider.get_network_policy()
         self._policy_warned: set[str] = set()
         self.priority_fn = spider.priority_fn
@@ -270,6 +272,9 @@ class Engine:
             spider.configure_sessions(self.sessions)
             if not len(self.sessions):
                 raise RuntimeError("configure_sessions() registered no sessions")
+            if self.adaptive is not None and not {"http", "browser"} <= set(self.sessions):
+                log.warning("adaptive_fetch needs an 'http' and a 'browser' session; fetching as configured")
+                self.adaptive = None
             if spider.obey_robots_txt:
                 self._robots_fetcher = AsyncFetcher(
                     impersonate=spider.impersonate,
@@ -764,6 +769,7 @@ class Engine:
             self.stats["dead_letters"] = self.dead_letters.added
         profile = self._close_profiler(status)
         changes = self._close_history(status)
+        strategy = self._close_adaptive()
         result = CrawlResult(
             items=self.items,
             stats=dict(self.stats),
@@ -773,6 +779,7 @@ class Engine:
             metrics=self.snapshot(),
             changes=changes,
             profile=profile,
+            fetch_strategy=strategy,
         )
         self._log_progress(final=True)
         try:
@@ -984,8 +991,9 @@ class Engine:
             fetched = response is None  # False: a middleware supplied the response
             started = time.monotonic()
             if response is None:
+                session = self._session_for(request)
                 try:
-                    fetcher = self.sessions.get(request.session)
+                    fetcher = self.sessions.get(session)
                 except LookupError as exc:
                     self._requeue(request)
                     self.fail(exc)
@@ -993,6 +1001,8 @@ class Engine:
                 proxy = request.proxy or (self.proxies.next() if self.proxies is not None else None)
                 rotated = request.proxy is None and self.proxies is not None
                 options = self._fetch_options(request)
+                if request.meta.get("adaptive") == "browser" and session == "browser" and self.adaptive is not None:
+                    options = {**self.adaptive.browser_options(), **options}  # for this attempt only
                 timeout = options.pop("timeout", spider.timeout)
                 started = time.monotonic()
                 try:
@@ -1015,6 +1025,9 @@ class Engine:
                 except asyncio.CancelledError:
                     raise
                 except BrowserNotAvailable as exc:
+                    if self.adaptive is not None and request.meta.get("adaptive") in ("browser", "rendered"):
+                        self._no_browser(request, exc)
+                        return
                     self._requeue(request)
                     self.fail(exc)
                     return
@@ -1057,7 +1070,9 @@ class Engine:
                 self.metrics.observe_latency(latency)
                 if response.source == "browser":
                     self.stats.inc("browser_pages")
-            if self.profiler is not None:
+            # adaptive fetching: a page whose HTML is not enough is fetched again in the browser
+            render = self._adaptive_check(request, response) if self.adaptive is not None else None
+            if self.profiler is not None and render is None:
                 self._profile_page(response, latency if live else None)
             if self._emit_response:
                 self.events.emit(
@@ -1108,6 +1123,9 @@ class Engine:
             if rotated:
                 bad = blocked or response.status in PROXY_FAILURE_STATUSES
                 (self.proxies.report_failure if bad else self.proxies.report_success)(proxy)  # type: ignore[union-attr]
+            if render is not None:
+                self._render(request, render)
+                return
 
             retryable = blocked or response.status in spider.retry_statuses
             if retryable:
@@ -1460,6 +1478,88 @@ class Engine:
                 f"Request for {request.url} cannot be saved for pause/resume ({describe(exc)}). "
                 "Keep meta, cb_kwargs and options picklable - e.g. pass a spider method name instead of a lambda."
             ) from exc
+
+    # ------------------------------------------------------------------ #
+    # adaptive fetching (see wintergrab.fetchers.strategy)
+    # ------------------------------------------------------------------ #
+    def _session_for(self, request: Request) -> str | None:
+        """The request's own session; with adaptive fetching, HTTP or (for the URL patterns whose
+        pages needed one) the browser."""
+        adaptive = self.adaptive
+        if request.session is not None or adaptive is None or not adaptive.available:
+            return request.session
+        if adaptive.browser_first(request.url):
+            request.meta["adaptive"] = "browser"
+            self.stats.inc("adaptive/browser_first")
+            return "browser"
+        request.meta.pop("adaptive", None)  # a retry of a browser-first page may be tried over HTTP
+        return "http"
+
+    def _adaptive_check(self, request: Request, response: Response) -> str | None:
+        """Count how the page came out; return why it should be fetched again in the browser, if
+        it came over HTTP without its content."""
+        adaptive = self.adaptive
+        assert adaptive is not None
+        via_browser = response.source == "browser"
+        if not adaptive.available or not (200 <= response.status < 300) or not response.is_html:
+            return None
+        if request.session is not None and not (via_browser and request.meta.get("adaptive") == "rendered"):
+            return None  # a session the spider chose itself
+        try:
+            if self.spider.is_blocked(response):
+                return None  # blocks are handled as blocks, never by switching to a browser
+            reason = self.spider.needs_browser(response)
+        except Exception as exc:
+            log.error("needs_browser() failed for %s: %s", request.url, describe(exc))
+            return None
+        adaptive.record(request.url, "browser" if via_browser else "http", not reason)
+        if via_browser:
+            if reason:
+                self.stats.inc("adaptive/browser_short")
+                log.debug("%s still lacks content in the browser (%s)", request.url, reason)
+            return None
+        if not reason:
+            return None
+        return reason if isinstance(reason, str) else "needs_browser() said so"
+
+    def _render(self, request: Request, reason: str) -> None:
+        """Fetch the page again in the browser: another attempt at the same page (like a retry, it
+        is not a new page for ``max_pages``, and it counts among the page's attempts)."""
+        assert self.adaptive is not None
+        new = request.replace(dont_filter=True, session="browser")
+        new.meta["adaptive"] = "rendered"
+        new.meta["retry_times"] = request.retries + 1
+        for key, value in self.adaptive.browser_options().items():
+            new.options.setdefault(key, value)
+        self.stats.inc("adaptive/rendered")
+        log.debug("%s needs a browser: %s", request.url, reason)
+        self.events.emit("browser_needed", url=request.url, pattern=self.adaptive.pattern(request.url), reason=reason)
+        self._schedule_later(new, 0.0, original=request)
+
+    def _no_browser(self, request: Request, error: BaseException) -> None:
+        """No browser here: adaptive fetching stops, and the page is fetched over HTTP after all."""
+        assert self.adaptive is not None
+        if self.adaptive.available:
+            self.adaptive.available = False
+            log.warning("adaptive_fetch: no browser available, so every page is fetched over HTTP (%s)", error)
+        new = request.replace(dont_filter=True, session=None)
+        new.meta["adaptive"] = "no-browser"
+        new.meta["retry_times"] = request.retries + 1
+        for key in self.adaptive.browser_options():
+            new.options.pop(key, None)
+        self._schedule_later(new, 0.0, original=request)
+
+    def _close_adaptive(self) -> Any:
+        adaptive = self.adaptive
+        if adaptive is None:
+            return None
+        if adaptive.patterns:
+            log.info("fetch strategy by URL pattern:\n%s", adaptive.describe())
+        try:
+            adaptive.save()
+        except OSError as exc:
+            log.error("could not save the fetch statistics to %s: %s", adaptive.path, exc)
+        return adaptive
 
     def _fetch_options(self, request: Request) -> dict[str, Any]:
         options = dict(request.options)

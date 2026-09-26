@@ -23,6 +23,7 @@ Event kinds emitted by wintergrab (see :data:`EVENT_KINDS`)::
     request_retried    url, reason, attempt, delay
     request_failed     url, error, category, kind, status
     blocked            url, status, domain
+    browser_needed     url, pattern, reason        (with ``adaptive_fetch``: fetched again in a browser)
     throttle_backoff   domain, delay, concurrency, retry_after
     policy_refused     url, reason, policy
     budget_exhausted   budget, used, limit
@@ -56,7 +57,8 @@ log = logging.getLogger("wintergrab.events")
 EVENT_KINDS: frozenset[str] = frozenset(
     {
         "crawl_started", "crawl_finished", "response", "item_scraped", "item_dropped", "request_retried",
-        "request_failed", "blocked", "throttle_backoff", "policy_refused", "budget_exhausted", "changes_detected",
+        "request_failed", "blocked", "browser_needed", "throttle_backoff", "policy_refused", "budget_exhausted",
+        "changes_detected",
         "record_created", "record_updated", "record_deleted", "extraction_failed", "schema_changed",
         "quality_degraded", "site_changed", "job_started", "job_finished", "job_failed",
     }

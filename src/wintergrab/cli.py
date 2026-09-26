@@ -225,6 +225,8 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
         if args.capture:
             options["capture"] = args.capture_filter or True
             options.setdefault("wait_until", "networkidle")
+        if getattr(args, "auto_browser", False):
+            options.setdefault("wait_until", "networkidle")  # the page's own requests fill it in
     else:
         impersonate = None if args.impersonate in ("none", "") else args.impersonate
         fetcher = AsyncFetcher(
@@ -252,6 +254,30 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
         await fetcher.aclose()
 
 
+def _render_where_needed(args: argparse.Namespace, urls: list[str], results: list[Any]) -> list[Any]:
+    """``--auto-browser``: fetch again in a browser the pages whose HTML is not enough."""
+    from .fetchers.blocking import looks_blocked
+    from .fetchers.strategy import needs_javascript
+
+    again: list[int] = []
+    for i, result in enumerate(results):
+        if not isinstance(result, Response) or not 200 <= result.status < 300 or looks_blocked(result):
+            continue
+        missing = [css for css in args.render_if_missing or () if not result.css(css)]
+        reason = f"nothing matches {missing[0]!r}" if missing else needs_javascript(result)
+        if reason:
+            again.append(i)
+            if args.verbose >= 0:
+                print(f"{result.url}: fetching it again in a browser ({reason})", file=sys.stderr)
+    if not again:
+        return results
+    args.browser = True
+    rendered = asyncio.run(_fetch_all(args, [urls[i] for i in again]))
+    for i, result in zip(again, rendered, strict=True):
+        results[i] = result
+    return results
+
+
 def cmd_get(args: argparse.Namespace) -> int:
     urls = [ensure_scheme(u) for u in args.urls]
     if args.capture_filter:
@@ -273,7 +299,11 @@ def cmd_get(args: argparse.Namespace) -> int:
     if fmt == "csv" and not records:
         raise SystemExit("error: CSV output needs --each/--field")
 
+    if args.render_if_missing:
+        args.auto_browser = True
     results = asyncio.run(_fetch_all(args, urls))
+    if args.auto_browser and not (args.browser or args.capture):
+        results = _render_where_needed(args, urls, results)
     failures = 0
     rows: list[dict[str, Any]] = []
     chunks: list[str] = []
@@ -674,10 +704,14 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         "event_log": args.events,
         "history": args.history,
         "profile": args.profile,
+        "adaptive_fetch": args.fetch_stats or (True if args.auto_browser else None),
     }
     if args.retry_failed:
         overrides["retry_dead_letters"] = True
     overrides.update({k: v for k, v in option_map.items() if v is not None})
+    if args.render_if_missing:
+        overrides["render_if_missing"] = list(args.render_if_missing)
+        overrides.setdefault("adaptive_fetch", True)
     if args.skip_fresh:
         overrides["skip_fresh"] = True
     if args.history_html:
@@ -741,6 +775,11 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         print(result.changes.summary(), file=sys.stderr)
     if result.profile is not None and args.profile:
         print(f"site profile saved to {args.profile}", file=sys.stderr)
+    rendered = stats.get("adaptive/rendered", 0) + stats.get("adaptive/browser_first", 0)
+    if result.fetch_strategy is not None and args.verbose >= 0:
+        print(f"adaptive fetching: {rendered} page(s) fetched in a browser", file=sys.stderr)
+        if result.fetch_strategy.patterns:
+            print(result.fetch_strategy.describe(5), file=sys.stderr)
     incomplete = getattr(spider, "incomplete", 0)
     if incomplete:
         print(f"{incomplete} page(s) had no complete record (a required field was missing)", file=sys.stderr)
@@ -1316,6 +1355,17 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--screenshot", metavar="FILE", help="(browser) save a full-page screenshot")
     g.add_argument("--capture", action="store_true", help="(browser) record the page's own JSON API calls")
     g.add_argument(
+        "--auto-browser",
+        action="store_true",
+        help="fetch over HTTP, and again in a browser if the page needs JavaScript to show its content",
+    )
+    g.add_argument(
+        "--render-if-missing",
+        action="append",
+        metavar="SELECTOR",
+        help="(implies --auto-browser) a page where this finds nothing is fetched again in a browser",
+    )
+    g.add_argument(
         "--capture-filter",
         metavar="URL_PATTERN",
         help="(browser) record the API calls whose URL matches this glob/substring (implies --capture)",
@@ -1355,6 +1405,22 @@ def build_parser() -> argparse.ArgumentParser:
         "--history", metavar="FILE", help="record page fingerprints here and report what changed since the last run"
     )
     c.add_argument("--history-html", action="store_true", help="keep every page's HTML in the history too")
+    c.add_argument(
+        "--auto-browser",
+        action="store_true",
+        help="fetch over HTTP, and in a browser the pages that need JavaScript, learning which URL patterns do",
+    )
+    c.add_argument(
+        "--fetch-stats",
+        metavar="FILE",
+        help="(implies --auto-browser) keep what was learned about each URL pattern here for the next crawls",
+    )
+    c.add_argument(
+        "--render-if-missing",
+        action="append",
+        metavar="SELECTOR",
+        help="(implies --auto-browser) a page where this finds nothing is fetched again in a browser",
+    )
     c.add_argument(
         "--profile",
         metavar="FILE",

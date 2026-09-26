@@ -115,6 +115,7 @@ Options for any crawl:
 | `--no-robots` | `obey_robots_txt = False` |
 | `--proxy URL`, `--proxy-file FILE` | `proxies` |
 | `-b/--browser` | `use_browser = True` |
+| `--auto-browser`, `--fetch-stats FILE`, `--render-if-missing SEL` | `adaptive_fetch`: HTTP first, a browser for the pages that [need one](spiders.md#http-first-a-browser-when-needed) |
 | `--public-only` | `network_policy = "public"` |
 | `--normalize-urls` | `url_normalizer = True` |
 | `--block-trackers` | `resource_filter = True` |
