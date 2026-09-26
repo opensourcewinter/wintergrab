@@ -48,6 +48,21 @@ def test_extract_to_csv(tmp_path) -> None:
     assert len(list(csv.DictReader(out.open(encoding="utf-8", newline="")))) == 20
 
 
+def test_templates_and_evidence() -> None:
+    record = load("11_templates_and_evidence").main()
+    assert record["name"] == "A Light in the Attic" and record["currency"] == "GBP" and record["price"] > 0
+
+
+def test_goal() -> None:
+    records = load("12_goal").main(limit=5)
+    assert 1 <= len(records) <= 5 and all(r.get("name") for r in records)
+
+
+def test_record_and_replay(tmp_path) -> None:
+    result = load("13_record_and_replay").main(workspace=str(tmp_path / "ws"))
+    assert not result.same and result.diff.counts["changed"] == 20  # the first page's 20 prices
+
+
 def test_async_many_pages() -> None:
     titles = asyncio.run(load("04_async_many_pages").main())
     assert len(titles) >= 20 and all(titles)

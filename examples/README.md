@@ -17,6 +17,11 @@ practising web scraping.
 | `08_sessions_and_fallback.py` | several sessions in one spider, escalating blocked pages to a browser |
 | `09_zero_selector.py` | `auto_extract`, learning a schema from examples, `next_page`, structured data |
 | `10_big_crawl.py` | sitemaps, disk frontier, revalidating cache + offline replay, SQLite upserts |
+| `11_templates_and_evidence.py` | a record from a template (`Extractor("product")`), with where each value came from and how sure it is |
+| `12_goal.py` | a goal in plain words: read, surveyed, planned with its cost, collected |
+| `13_record_and_replay.py` | recording a crawl, changing the spider, replaying it offline to see what changed in the data |
+| `project/wintergrab.yaml` | a project: crawl and goal jobs with schedules, a template, history, quality, a job that runs after another |
+| `plugin/` | a plugin package: a `.lines` output and a `count-lines` command (`pip install -e examples/plugin`) |
 
 The spiders also run from the command line:
 

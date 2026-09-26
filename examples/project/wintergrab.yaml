@@ -1,0 +1,38 @@
+# A project: what to crawl, when, and whom to tell (docs/projects.md).
+#
+#   wintergrab run --project examples/project/wintergrab.yaml --list    # the jobs' command lines
+#   wintergrab run --project examples/project/wintergrab.yaml           # run them now
+#   wintergrab schedule --project examples/project/wintergrab.yaml      # run them on their schedules
+
+defaults:
+  concurrency: 4
+
+# webhooks:                                  # events posted as JSON, signed
+#   - url: https://hooks.example/wintergrab
+#     events: [job_failed, record_updated, quality_degraded]
+#     secret: ${WINTERGRAB_WEBHOOK_SECRET}
+
+jobs:
+  quotes:
+    crawl: https://quotes.toscrape.com/
+    follow: [".next a"]
+    each: ".quote"
+    field: ["text=.text::text", "author=.author::text"]
+    output: data/quotes.jsonl
+    schedule: daily at 06:00
+
+  books:
+    crawl: https://books.toscrape.com/
+    follow: [".product_pod h3 a", ".next a"]
+    extract: product                         # a template: no schema to write
+    max_pages: 60
+    unique_key: url
+    output: data/books.jsonl
+    history: data/books.history              # what changed since the last run
+    quality: data/books.quality.json         # and whether the data got worse
+    schedule: every 12 hours
+
+  rated:
+    goal: books rated 4 stars or more on books.toscrape.com
+    output: data/rated.jsonl
+    after: books                             # runs after each successful run of books

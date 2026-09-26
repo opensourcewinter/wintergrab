@@ -135,3 +135,54 @@ def test_10_big_crawl(site, tmp_path) -> None:
     rows = sqlite3.connect(tmp_path / "shop.db").execute("SELECT url, title, stock, from_cache FROM items").fetchall()
     assert len(rows) == 12  # upserted, not duplicated
     assert all(row[3] == 1 for row in rows)  # the replay's rows replaced the live ones
+
+
+def test_11_templates_and_evidence(site, capsys) -> None:
+    record = load("11_templates_and_evidence").main(site.url + "/books/catalogue/book-1/index.html")
+    assert record["name"] == "Book number 1" and record["price"] == 11.5 and record["currency"] == "GBP"
+    assert "confidence" in capsys.readouterr().out
+
+
+def test_12_goal(site, capsys) -> None:
+    records = load("12_goal").main(site.url + "/books/", limit=5)
+    assert 1 <= len(records) <= 5 and all(r.get("name") for r in records)
+    assert "Understood:" in capsys.readouterr().out
+
+
+def test_13_record_and_replay(fresh_site, tmp_path) -> None:
+    before = sum(fresh_site.site.hits.values())
+    result = load("13_record_and_replay").main(fresh_site.url + "/books/", workspace=str(tmp_path / "ws"))
+    assert not result.same and result.diff.counts["changed"] == 4  # the prices became numbers
+    assert sum(fresh_site.site.hits.values()) - before == 2  # robots.txt and the page, once: the replay is offline
+
+
+def test_the_example_project() -> None:
+    from wintergrab.project import Project
+
+    project = Project(EXAMPLES / "project" / "wintergrab.yaml")
+    assert list(project.jobs) == ["quotes", "books", "rated"] and project.jobs["rated"].after == ("books",)
+    books = project.jobs["books"].command()
+    assert books[:2] == ["crawl", "https://books.toscrape.com/"] and "--extract" in books and "product" in books
+    assert project.jobs["quotes"].command()[-2:] == ["--output", "data/quotes.jsonl"]
+
+
+def test_the_example_plugin(tmp_path, capsys) -> None:
+    from wintergrab import plugins
+    from wintergrab.cli import main as cli
+    from wintergrab.spider import exporters
+
+    spec = importlib.util.spec_from_file_location(
+        "wintergrab_lines", EXAMPLES / "plugin" / "wintergrab_lines" / "__init__.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    info = plugins.PluginInfo("lines", "wintergrab_lines:plugin")
+    try:
+        module.plugin(plugins.Registry(info))
+        assert info.added == ["output .lines", "command count-lines"]
+        exporters.write_items(tmp_path / "quotes.lines", [{"text": "a", "author": "b"}, {"text": "c", "author": "d"}])
+        assert (tmp_path / "quotes.lines").read_text(encoding="utf-8").splitlines()[0] == "text=a\tauthor=b"
+        assert cli(["count-lines", str(tmp_path / "quotes.lines")]) == 0 and capsys.readouterr().out == "2\n"
+    finally:
+        exporters.EXPORTERS.pop(".lines", None)
+        plugins.COMMANDS.pop("count-lines", None)
