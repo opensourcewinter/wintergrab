@@ -20,6 +20,7 @@ selectors for a site from its pages.
 from __future__ import annotations
 
 from .engine import DEFAULT_PRIORS, ExtractedRecord, Extractor, FieldValue, value_key
+from .explain import FieldDiagnosis
 from .generate import GeneratedSchema, LearnedField, generate_schema
 from .healing import ExtractorVersion, ExtractorVersions, HealingExtractor, RepairResult
 from .model import ExtractionModel, ModelField, ModelRequest, grounding
@@ -52,6 +53,7 @@ __all__ = [
     "Extractor",
     "ExtractorVersion",
     "ExtractorVersions",
+    "FieldDiagnosis",
     "FieldValue",
     "GeneratedSchema",
     "HealingExtractor",

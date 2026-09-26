@@ -67,7 +67,8 @@ Options:
 | `--css SEL`, `--xpath XPATH` | Print what matches (repeatable). |
 | `--each SEL`, `--field NAME=SEL` | Build records (repeatable). |
 | `--extract SCHEMA`, `--all`, `--container SEL`, `--explain`, `--provenance` | Typed extraction with a [data schema](extraction.md). |
-| `--heal DIR`, `--review FILE`, `--why FIELD` | (`--extract`) A [self-healing extractor](healing.md) kept in DIR, a review queue for what needs a person, and why FIELD is what it is on the page. |
+| `--why FIELD` | (`--extract`) Why FIELD is what it is on the page, or empty: what each strategy saw, and the likely causes, each saying how sure it is ([extraction](extraction.md#why-is-this-field-empty)). |
+| `--heal DIR`, `--review FILE` | (`--extract`) A [self-healing extractor](healing.md) kept in DIR, and a review queue for what needs a person. |
 | `-f/--format`, `-o/--output FILE` | Output format and destination. |
 | `--main-content` | Markdown/text of the main content only. |
 | `--adaptive` | Use [adaptive selectors](adaptive-selectors.md). |

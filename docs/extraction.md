@@ -161,6 +161,45 @@ the schema's name and version), each field's method, source, raw value,
 confidence, agreement, alternatives, notes and validation, and the record's
 validation issues. [Quality monitoring](data.md#quality) reads `_confidence`.
 
+## Why is this field empty?
+
+`extractor.why("price", page)` (`wintergrab get URL --extract SCHEMA --why
+price`) says why a field is what it is on a page, or why it is empty. It
+lists what was **seen**:
+- what the field's selectors match;
+- what each strategy found, and how sure it was;
+- the value kept, and the ones not kept.
+
+It then lists **why**: causes, each saying how sure it is:
+
+- **certain**: what the extractor did. A value was found but was too unsure
+  to keep (under `min_confidence`), could not be read as the field's type,
+  or broke a rule; or the page answered an HTTP error.
+- **likely**: strong evidence:
+  - the page's layout changed: the field's selectors find nothing while
+    another strategy finds the value, and a selector that reads it on this
+    page is proposed;
+  - the page is a bot check or an access page;
+  - its content is drawn by JavaScript;
+  - it lists records rather than holding one.
+- **possibly**: what fits but is not shown: the page may not state the
+  value.
+
+```
+price (money) on https://shop.example/p/1: 12.99 USD
+  seen:
+    selector .price: 0 element(s) on this page
+    the page's layout: '$12.99' from dom:span.amount (confidence 0.63)
+    text patterns: '$12.99' from pattern:price (confidence 0.54)
+    kept: 12.99 USD from dom:span.amount (confidence 0.83, agreeing with text patterns)
+  why:
+    likely: the page's layout changed: the field's selectors find nothing, but the page's layout finds 12.99 USD; span.amount reads it on this page
+```
+
+`why()` returns a `FieldDiagnosis` (`status`, `seen`, `causes`, every
+candidate with its method, source and confidence; `to_dict()` for JSON). A
+[healing extractor](healing.md#why-is-this-field-empty) adds its repairs.
+
 ## Listing pages
 
 ```python

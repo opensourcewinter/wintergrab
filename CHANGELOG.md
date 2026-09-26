@@ -478,6 +478,24 @@
   read it, the rules do.
 - None is needed or called unless named.
 
+### Why a field is empty (`Extractor.why`)
+
+- `extractor.why(field, page)`, and `wintergrab get URL --extract SCHEMA
+  --why FIELD` (which needed `--heal` before), say why a field is what it
+  is on a page, or empty. They list what was seen: what the field's
+  selectors match, what each strategy found and how sure it was, and the
+  values kept and not kept. Then they give causes, each marked certain,
+  likely or possibly:
+  - a value too unsure to keep (under `min_confidence`), unreadable as the
+    field's type, or breaking a rule;
+  - an HTTP error, or a bot-check page;
+  - content drawn by JavaScript, or a page that lists records rather than
+    holding one;
+  - a layout that changed: the selectors find nothing while another
+    strategy finds the value, with a selector that reads it on this page.
+- A healing extractor's `why` builds on it and adds its repairs and
+  health.
+
 ### The visual builder (`wintergrab.builder`)
 
 - `wintergrab build URL -o FILE` fetches a page and serves a builder on

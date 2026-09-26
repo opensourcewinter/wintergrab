@@ -867,43 +867,39 @@ class HealingExtractor:
 
     # -- explaining ------------------------------------------------------------------------------ #
     def why(self, name: str, page: Any | None = None) -> str:
-        """Why ``name`` is what it is (or empty): its selectors on ``page``, the other strategies'
-        candidates, how the page differs from where the selectors worked, and repairs made or waiting."""
+        """Why ``name`` is what it is (or empty) on ``page``: what each strategy saw and the likely causes
+        (:meth:`Extractor.why`), then the extractor's own story: the element most like the one the
+        selectors used to match, how often they matched, and repairs made or waiting."""
         f = self.schema[name]
         lines = [f"{name} ({f.type}) in {self.name}, version {self.versions.active_number}"]
+        healing: list[str] = []
         if page is not None:
             ctx = PageContext(page)
-            for query in f.selectors:
-                try:
-                    count = len(ctx.root.select(query))
-                except Exception as exc:
-                    lines.append(f"  selector {query}: invalid ({exc})")
-                    continue
-                lines.append(f"  selector {query}: {count} element(s) on this page")
-            found = self._extractor.candidates(ctx).get(name, [])
-            if found:
-                for candidate in found[:5]:
-                    lines.append(f"  {candidate.method}: {candidate.raw!r} from {candidate.source}")
-            else:
-                lines.append("  no strategy found a value on this page")
+            diagnosis = self._extractor.why(name, ctx)  # what the page shows, and the likely causes
+            head, *rest = diagnosis.describe().splitlines()
+            lines[0] += head.split(f"{name} ({f.type})", 1)[1]  # " on URL: value"
+            lines.extend(rest)
             good = list(self._good.get(name, ()))
             if good and not any(ctx.root.select(q) for q in f.selectors):
                 element, score = _closest(ctx, good[-1]["fingerprint"])
                 if element is not None:
-                    lines.append(
-                        f"  the element most like the one the selectors used to match: {element} ({score:.0%} alike)"
+                    healing.append(
+                        f"the element most like the one the selectors used to match: {element} ({score:.0%} alike)"
                     )
         health = self._health.get(name)
         if health is not None and health.baseline is not None:
             rate = health.rate(min(len(health.recent), self.min_pages))
-            lines.append(f"  selectors matched on {health.baseline:.0%} of the first pages, {rate or 0:.0%} lately")
+            healing.append(f"selectors matched on {health.baseline:.0%} of the first pages, {rate or 0:.0%} lately")
         for entry in self.versions.history()[-20:]:
             if entry.get("field") == name and entry.get("event") == "repair":
-                lines.append(f"  repair ({entry['outcome']}): {entry.get('selector') or entry.get('reason')}")
+                healing.append(f"repair ({entry['outcome']}): {entry.get('selector') or entry.get('reason')}")
         if self.review is not None:
             for item in self.review.pending():
                 if item.field == name and item.details.get("extractor") == str(self.versions.directory):
-                    lines.append(f"  waiting for review: {item.id} ({item.kind})")
+                    healing.append(f"waiting for review: {item.id} ({item.kind})")
+        if healing:
+            lines.append("  healing:")
+            lines.extend(f"    {line}" for line in healing)
         return "\n".join(lines)
 
     def status(self) -> str:

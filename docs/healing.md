@@ -189,20 +189,25 @@ A decision is applied once. The log says which.
 
 ## Why is this field empty?
 
-`wintergrab get URL --heal DIR --why FIELD` prints the record, then on stderr
-what the field's selectors find on the page, what the other strategies
-found, the element most like the one the selectors used to match, the
-field's health, and the repairs made or waiting (`extractor.why(field,
-page)` in code):
+`wintergrab get URL --heal DIR --why FIELD` prints the record, then on
+stderr what the page shows and the likely causes, as for
+[any extractor](extraction.md#why-is-this-field-empty). It adds the healing
+extractor's own story: the element most like the one the selectors used to
+match, the field's health, and the repairs made or waiting
+(`extractor.why(field, page)` in code):
 
 ```
-seller (string) in product@3, version 3
-  selector .seller-name: 0 element(s) on this page
-  no strategy found a value on this page
-  the element most like the one the selectors used to match: <a class='vendor'> 'Globex' (70% alike)
-  selectors matched on 100% of the first pages, 0% lately
-  repair (queued): .vendor
-  waiting for review: r1 (repair)
+seller (string) in product@3, version 3 on https://shop.example/p/41: empty
+  seen:
+    selector .seller-name: 0 element(s) on this page
+    no strategy found a candidate value
+  why:
+    possibly: the page's layout changed (the field's selectors find nothing), or the page does not state its seller
+  healing:
+    the element most like the one the selectors used to match: <a class='vendor'> 'Globex' (70% alike)
+    selectors matched on 100% of the first pages, 0% lately
+    repair (queued): .vendor
+    waiting for review: r1 (repair)
 ```
 
 ## In code

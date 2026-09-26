@@ -360,6 +360,7 @@ checks that it is up to date.
   - `explain(self, page: Any, *, url: str | None = None) -> str`: :meth:`ExtractedRecord.explain` of the page's record.
   - `extract(self, page: Any, *, url: str | None = None) -> ExtractedRecord`: One record from a page (a :class:`~wintergrab.Response`, a :class:`~wintergrab.Selector` or HTML).
   - `extract_all(self, page: Any, *, container: str | None = None, min_records: int = 2, url: str | None = None) -> list[ExtractedRecord]`: Every record of a listing page.
+  - `why(self, name: str, page: Any, *, url: str | None = None) -> FieldDiagnosis`: Why field ``name`` is what it is on ``page``, or why it is empty: what each strategy saw, and the likely causes, each saying how sure it is (see :mod:`~wintergrab.extraction.explain`).
 - **`ExtractorVersion(number: int, reason: str, by: str, status: str, parent: int | None = None, created: float = ..., validation: dict[str, Any] = ...)`** (class). One version of an extractor's schema.
 - **`ExtractorVersions(directory: str | os.PathLike[str], schema: Schema | Mapping[str, Any] | str | Path | None = None)`** (class). An extractor's versions, repair log and fixtures, in a directory (see the module docs).
   - `activate(self, number: int, *, reason: str, by: str = 'human') -> ExtractorVersion`: Make version ``number`` the active one.
@@ -378,6 +379,9 @@ checks that it is up to date.
   - `rollback(self, *, reason: str, by: str = 'auto') -> ExtractorVersion`: Go back to the version the active one was made from (it is marked "rolled back").
   - `save_state(self, state: Mapping[str, Any])`
   - `schema(self, number: int | None = None) -> Schema`
+- **`FieldDiagnosis(field: str, type: str, url: str | None, value: Any, status: str, seen: list[str] = ..., causes: list[str] = ..., candidates: list[dict[str, Any]] = ...)`** (class). Why a field is what it is on a page (see the module docs).
+  - `describe(self) -> str`: The field and its value (or why it has none): what was seen, then why.
+  - `to_dict(self) -> dict[str, Any]`
 - **`FieldValue(name: str, value: Any = None, raw: Any = None, method: str | None = None, source: str | None = None, confidence: float = 0.0, agreed: list[str] = ..., alternatives: list[dict[str, Any]] = ..., notes: list[str] = ..., validation: str = 'absent')`** (class). One field of an extracted record, with where it came from and how sure we are.
   - `to_dict(self) -> dict[str, Any]`
 - **`GeneratedSchema(schema: Schema, base: Schema, fields: dict[str, LearnedField], urls: list[str | None], values: list[dict[str, Any]], methods: list[dict[str, str]], model: str | None = None, usage: dict[str, int] = ...)`** (class). A schema generated from sample pages (see the module docs).
@@ -392,7 +396,7 @@ checks that it is up to date.
   - `repair(self, name: str) -> RepairResult`: Look for a replacement of ``name``'s selectors, test it, and apply it, queue it, or give up.
   - `save(self)`: Keep what was learned (baselines, matched elements) for the next run; done every 50 pages, when a baseline is learned, and on :meth:`close`.
   - `status(self) -> str`: The versions, each watched field's health, and the last repairs.
-  - `why(self, name: str, page: Any | None = None) -> str`: Why ``name`` is what it is (or empty): its selectors on ``page``, the other strategies' candidates, how the page differs from where the selectors worked, and repairs made or waiting.
+  - `why(self, name: str, page: Any | None = None) -> str`: Why ``name`` is what it is (or empty) on ``page``: what each strategy saw and the likely causes (:meth:`Extractor.why`), then the extractor's own story: the element most like the one the selectors used to match, how often they matched, and repairs made or waiting.
 - **`LabelledValues()`** (class). Values next to a label named like the field: ``<dt>Weight</dt><dd>1.2 kg</dd>``, ``SKU: AB-12``, spec tables.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`LearnedField(name: str, status: str = 'not found', selector: str | None = None, found_by: str | None = None, pages: int = 0, reproduced: int = 0, extra: int = 0, tried: int = 0, note: str = '')`** (class). What :func:`generate_schema` did for one field.

@@ -370,8 +370,8 @@ def cmd_get(args: argparse.Namespace) -> int:
                 row = record.to_dict(provenance=args.provenance)
                 rows.append({"url": page.url, **row} if multi and "url" not in row else row)
             if getattr(args, "why", None):
-                if not hasattr(extractor, "why"):
-                    print("error: --why needs --heal DIR", file=sys.stderr)
+                if args.why not in extractor.schema:
+                    print(f"error: the schema has no field {args.why!r}", file=sys.stderr)
                     return 2
                 print(extractor.why(args.why, page), file=sys.stderr)
             continue
@@ -1928,7 +1928,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--headful", action="store_true", help="(browser) show the browser window")
     g.add_argument("--screenshot", metavar="FILE", help="(browser) save a full-page screenshot")
     g.add_argument("--capture", action="store_true", help="(browser) record the page's own JSON API calls")
-    g.add_argument("--why", metavar="FIELD", help="(--heal) say why FIELD is what it is (or empty) on the page")
+    g.add_argument(
+        "--why", metavar="FIELD", help="(--extract) say why FIELD is what it is (or empty) on the page, and how sure"
+    )
     g.add_argument(
         "--auto-browser",
         action="store_true",

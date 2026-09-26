@@ -219,8 +219,11 @@ def test_why_a_field_is_empty(site, tmp_path, capsys) -> None:
     assert (
         "seller (string) in product@1, version 1" in err and "selector .seller-name: 0 element(s) on this page" in err
     )
-    assert main(["get", site.url + "/product/3", "--extract", str(schema), "--why", "seller"]) == 2
-    assert "--why needs --heal DIR" in capsys.readouterr().err
+    assert main(["get", site.url + "/product/3", "--extract", str(schema), "--why", "seller"]) == 0  # any extractor
+    err = capsys.readouterr().err
+    assert "seller (string) on " in err and "possibly: the page's layout changed" in err
+    assert main(["get", site.url + "/product/3", "--extract", str(schema), "--why", "colour"]) == 2
+    assert "the schema has no field 'colour'" in capsys.readouterr().err
 
 
 def test_one_question_per_field(tmp_path) -> None:

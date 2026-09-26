@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..data.issues import Issue
 from ..data.normalize import Money, Quantity
@@ -48,6 +48,9 @@ from .model import ModelField, ModelRequest, call_model, grounding, model_name, 
 from .page import PageContext, schema_types
 from .schemaorg import target_types
 from .strategies import STRATEGIES, Candidate, DomHeuristics, RecordFields, Strategy, StructuredData, field_kind
+
+if TYPE_CHECKING:
+    from .explain import FieldDiagnosis
 
 __all__ = ["DEFAULT_PRIORS", "ExtractedRecord", "Extractor", "FieldValue"]
 
@@ -625,6 +628,13 @@ class Extractor:
     def explain(self, page: Any, *, url: str | None = None) -> str:
         """:meth:`ExtractedRecord.explain` of the page's record."""
         return self.extract(page, url=url).explain()
+
+    def why(self, name: str, page: Any, *, url: str | None = None) -> FieldDiagnosis:
+        """Why field ``name`` is what it is on ``page``, or why it is empty: what each strategy saw,
+        and the likely causes, each saying how sure it is (see :mod:`~wintergrab.extraction.explain`)."""
+        from .explain import diagnose
+
+        return diagnose(self, name, page, url=url)
 
     def calibrate(self, examples: Iterable[tuple[Any, Mapping[str, Any]]], *, min_samples: int = 5) -> dict[str, float]:
         """Measure how often each method is right on pages whose correct values you know.
