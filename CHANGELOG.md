@@ -141,6 +141,16 @@ an error that says so, not a setting silently ignored
   pipeline about 4,200 records/s, near-duplicate checks 158 µs per record,
   expressions 1 µs.
 
+- **Provenance you can trace.** A crawl stamps every record that carries
+  `_provenance` with `run` (its id in the run registry) and `output`; a
+  pipeline records under each field's `transforms` what every stage did to
+  it (the value before, the old name of a renamed field, whose evidence
+  follows it, added, dropped); records without provenance pay nothing.
+  `wintergrab data trace INPUT [FIELD...] --where FIELD=VALUE` (or
+  `describe_provenance(record)` and `find_records(path, where)` from
+  `wintergrab.data`) tells where a value came from: the page or API call,
+  when, the extractor, the run, the output, how it was read, what else was
+  found, and how it was changed.
 ### Extraction engine (`wintergrab.extraction`)
 
 - `Extractor(schema).extract(page)` finds every field of a data schema

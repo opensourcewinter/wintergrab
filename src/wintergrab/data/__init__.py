@@ -68,6 +68,7 @@ from .similarity import (
     simhash,
     simhash_similarity,
 )
+from .trace import describe_provenance, find_records
 from .validate import Rule, is_valid, validate_record
 from .versions import DatasetDiff, DatasetVersions, diff_records
 
@@ -120,9 +121,11 @@ __all__ = [
     "Validate",
     "compile_expression",
     "content_hash",
+    "describe_provenance",
     "diff_records",
     "distance_km",
     "explain_inference",
+    "find_records",
     "get_path",
     "group_records",
     "hamming",

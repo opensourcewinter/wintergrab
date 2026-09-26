@@ -1792,6 +1792,13 @@ class Engine:
         self.stats.inc(f"items_dropped/{pipeline}")
         self.events.emit("item_dropped", pipeline=pipeline, reason=reason)
 
+    def _stamp(self, where: dict[str, Any]) -> None:
+        """A record's provenance says the run it was collected in and the output it went to."""
+        if self.recorder is not None and self.recorder.run is not None:
+            where.setdefault("run", self.recorder.run.id)
+        if self.spider.output:
+            where.setdefault("output", redact_url(str(self.spider.output)))
+
     def _is_duplicate_item(self, item: Any) -> bool:
         data = to_dict(item)
         if not isinstance(data, dict) or data.get(self.spider.unique_key) is None:
@@ -1816,6 +1823,8 @@ class Engine:
             processed = await self._run_pipelines(processed)
             if processed is None:
                 return None
+        if isinstance(processed, dict) and isinstance(processed.get("_provenance"), dict):
+            self._stamp(processed["_provenance"])
         if spider.unique_key and self._is_duplicate_item(processed):
             self.stats.inc("items_duplicate")
             return None

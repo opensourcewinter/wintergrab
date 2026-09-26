@@ -2526,6 +2526,30 @@ def cmd_data_quality(args: argparse.Namespace) -> int:
     return 1 if any(issue.severity == "error" for issue in comparison) else 0
 
 
+def cmd_data_trace(args: argparse.Namespace) -> int:
+    from .data.trace import describe_provenance, find_records
+
+    where = _parse_pairs(args.where, "=", "--where")
+    shown = traced = 0
+    try:
+        for record in find_records(args.input, where, limit=args.limit):
+            shown += 1
+            if args.json:
+                print(json.dumps(record, ensure_ascii=False, default=str))
+            else:
+                if shown > 1:
+                    print()
+                print(describe_provenance(record, args.field))
+            traced += isinstance(record.get("_provenance"), dict)
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not shown:
+        print("no record matches" if where else "no records", file=sys.stderr)
+        return 1
+    return 0 if traced else 1
+
+
 # --------------------------------------------------------------------------- #
 # argument parsing
 # --------------------------------------------------------------------------- #
@@ -2953,6 +2977,20 @@ def build_parser() -> argparse.ArgumentParser:
     qual.add_argument("--json", action="store_true", help="print the report as JSON")
     qual.add_argument("--limit", type=int, metavar="N", help="only the first N records")
     qual.set_defaults(func=cmd_data_quality)
+    trace = actions.add_parser(
+        "trace",
+        help="where a record's values came from (records collected with --provenance)",
+        description="For records collected with --provenance: the page or API call, when, which extractor, the "
+        "run and the output; per field how it was read, what else was found, and what the pipeline did to it.",
+    )
+    trace.add_argument("input", metavar="INPUT")
+    trace.add_argument("field", nargs="*", metavar="FIELD", help="only these fields (default: every field)")
+    trace.add_argument(
+        "--where", action="append", metavar="FIELD=VALUE", help="the record(s) with this value (repeatable: all)"
+    )
+    trace.add_argument("--limit", type=int, default=5, metavar="N", help="records to show (default 5)")
+    trace.add_argument("--json", action="store_true", help="print the record(s), provenance included, as JSON")
+    trace.set_defaults(func=cmd_data_trace)
     ent = actions.add_parser("entities", help="find which names are the same company, brand, product, person or place")
     ent.add_argument("input", metavar="INPUT")
     ent.add_argument("--field", required=True, metavar="FIELD", help="the field holding the names (dotted paths work)")

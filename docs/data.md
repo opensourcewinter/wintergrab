@@ -316,6 +316,32 @@ sets the value to `None` and counts an error; `on_error="keep"` leaves the
 field as it was, `"drop"` drops the record, `"raise"` raises. Add operations
 with `register_operation(name, build)`.
 
+### Where a value came from
+
+A record that carries `_provenance` (collected with `--provenance`, see
+[extraction](extraction.md#provenance)) keeps what the pipeline did to it:
+under `_provenance.fields.NAME.transforms`, each stage that changed the
+value (with the value before), renamed the field (with its old name; the
+field's evidence follows it), added it, or dropped it. Records without
+provenance pay nothing. `wintergrab data trace` tells the story of a value:
+
+```bash
+wintergrab data trace items.jsonl price --where url=https://shop.example/p/1
+```
+
+```text
+from: https://shop.example/p/1, fetched 2026-09-26T19:04:11+00:00, extractor product@2, run run-7, output items.jsonl
+price: 1299
+  read by selector from selector:.price ('$1,299'), confidence 0.90, agreeing with json-ld
+  also found: 1399 (dom, 0.41)
+  rename (names): was named cost
+  transform: was '$1,299'
+```
+
+In code: `find_records(path, {"url": ...})` and
+`describe_provenance(record, ["price"])` from `wintergrab.data`. `--json`
+prints the records with their provenance instead.
+
 ### Pipelines in crawls
 
 A pipeline is an item pipeline, so it plugs into any spider:
@@ -512,6 +538,7 @@ wintergrab data graph job=jobs.jsonl company=companies.jsonl -o graph.graphml
 wintergrab data places jobs.jsonl --country US --by region --stats salary
 wintergrab data diff prices/@previous prices/@latest -o changes.jsonl
 wintergrab data diff yesterday.jsonl today.jsonl --key sku --exit-code
+wintergrab data trace items.jsonl price --where url=https://shop.example/p/1
 
 wintergrab crawl https://shop.example --field ... --pipeline pipeline.yaml -o items.jsonl
 ```

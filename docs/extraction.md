@@ -162,6 +162,16 @@ the schema's name and version), each field's method, source, raw value,
 confidence, agreement, alternatives, notes and validation, and the record's
 validation issues. [Quality monitoring](data.md#quality) reads `_confidence`.
 
+A crawl (`crawl`/`goal --provenance`) adds `run`, the run's id in the
+[run registry](runs.md), and `output`, where the record went; a record from
+a site's API names the call, its page and the field of the answer each
+value was read from. A [pipeline](data.md#pipelines) adds `transforms` to
+each field it touched: the stage, the value before, the name a renamed
+field had, or that it was added or dropped. `wintergrab data trace
+items.jsonl price --where url=URL` (or `describe_provenance(record)`) reads
+it all back as lines: where the record came from, and how each value was
+read and changed ([data.md](data.md#where-a-value-came-from)).
+
 ## Why is this field empty?
 
 `extractor.why("price", page)` (`wintergrab get URL --extract SCHEMA --why

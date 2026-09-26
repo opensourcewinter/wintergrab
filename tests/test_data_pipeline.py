@@ -688,3 +688,74 @@ def test_a_schema_inferred_from_records() -> None:
 
     schema = Schema.infer([{"price": 10.5, "name": "A"}, {"price": 12, "name": "B"}], name="products")
     assert schema.name == "products" and {f.name for f in schema.fields} >= {"price", "name"}
+
+
+# --------------------------------------------------------------------------- #
+# where a value came from
+# --------------------------------------------------------------------------- #
+def test_a_record_with_provenance_says_what_the_pipeline_did_to_it() -> None:
+    evidence = {"cost": {"method": "selector", "source": "selector:.price", "confidence": 0.9}}
+    record = {
+        "cost": "$1,299",
+        "title": "Laptop X ",
+        "note": "old",
+        "_provenance": {"url": "https://s.example/1", "fields": evidence},
+    }
+    pipeline = Pipeline(
+        [
+            Rename({"cost": "price", "title": "name"}, name="names"),
+            Transform("price", ["strip", {"regex": "[0-9.,]+"}, "number"]),
+            Transform("name", ["strip"]),
+            Exclude(["note"]),
+        ]
+    )
+    out = pipeline(record)
+    assert (out["price"], out["name"]) == (1299, "Laptop X") and "note" not in out
+    fields = out["_provenance"]["fields"]
+    assert "cost" not in fields and fields["price"]["method"] == "selector"  # the evidence follows the new name
+    assert fields["price"]["transforms"] == [
+        {"stage": "names", "kind": "rename", "from": "cost"},
+        {"stage": "transform", "kind": "transform", "before": "$1,299"},
+    ]
+    assert fields["name"]["transforms"] == [
+        {"stage": "names", "kind": "rename", "from": "title"},
+        {"stage": "transform#2", "kind": "transform", "before": "Laptop X "},  # (a second stage of a kind is numbered)
+    ]
+    assert fields["note"]["transforms"] == [{"stage": "exclude", "kind": "exclude", "dropped": True}]
+    assert pipeline({"cost": "$5", "title": "Y", "note": "n"}) == {"price": 5, "name": "Y"}  # no provenance: as before
+
+    from wintergrab.data import describe_provenance
+
+    assert describe_provenance(out, ["price"]).splitlines() == [
+        "from: https://s.example/1",
+        "price: 1299",
+        "  read by selector from selector:.price, confidence 0.90",
+        "  rename (names): was named cost",
+        "  transform: was '$1,299'",
+    ]
+    assert describe_provenance({"price": 5}).startswith("no provenance")
+
+
+def test_data_trace_says_where_a_value_came_from(site, tmp_path, capsys) -> None:
+    schema = tmp_path / "product.json"
+    fields = {"name": {"type": "string", "required": True}, "price": "money", "currency": "currency"}
+    schema.write_text(json.dumps({"name": "product", "fields": fields}), encoding="utf-8")
+    out, workspace = tmp_path / "items.jsonl", tmp_path / "ws"
+    assert main(["-q", "crawl", site.url + "/product/1", "--extract", str(schema), "--provenance", "--max-pages",
+                 "1", "--workspace", str(workspace), "-o", str(out), "--no-progress"]) == 0  # fmt: skip
+    row = json.loads(out.read_text(encoding="utf-8").splitlines()[0])
+    assert row["_provenance"]["run"] == "run-1" and row["_provenance"]["output"] == str(out)  # (the crawl's stamp)
+    capsys.readouterr()
+    assert main(["data", "trace", str(out), "price", "--where", f"url={site.url}/product/1"]) == 0
+    told = capsys.readouterr().out.splitlines()
+    fetched = row["_provenance"]["fetched_at"]
+    assert told[0] == f"from: {site.url}/product/1, fetched {fetched}, extractor product@1, run run-1, output {out}"
+    assert told[1] == "price: 6.25" and told[2].startswith("  read by ") and "confidence 0." in told[2]
+    assert main(["data", "trace", str(out), "--where", "url=nope"]) == 1
+    assert "no record matches" in capsys.readouterr().err
+    plain = tmp_path / "plain.jsonl"
+    plain.write_text('{"url": "u", "price": 5}\n', encoding="utf-8")
+    assert main(["data", "trace", str(plain)]) == 1  # (nothing to trace: collected without provenance)
+    assert capsys.readouterr().out.startswith("no provenance")
+    assert main(["data", "trace", str(out), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["_provenance"]["run"] == "run-1"

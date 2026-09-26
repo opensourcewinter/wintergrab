@@ -161,6 +161,44 @@ class RecordContext:
     reason: str = ""
 
 
+def _traced(before: Mapping[str, Any], after: dict[str, Any], stage: Stage) -> None:
+    """What ``stage`` did to a record that carries provenance, under ``_provenance["fields"][name]["transforms"]``:
+    the value before it changed it, the name a renamed field had (its provenance follows it), or that the stage
+    added or dropped the field."""
+    where = after.get("_provenance")
+    if not isinstance(where, dict) or stage.kind == "pipeline":  # (a nested pipeline's stages say it themselves)
+        return
+    fields = where.setdefault("fields", {})
+    if not isinstance(fields, dict):
+        return
+    step = {"stage": stage.name, "kind": stage.kind}
+    gone = [k for k in before if k not in after and not k.startswith("_")]
+    for name, value in after.items():
+        if name.startswith("_"):
+            continue
+        if name in before:
+            old = before[name]
+            if old is value or old == value:
+                continue
+            note = {**step, "before": old}
+        else:
+            source = next((k for k in gone if before[k] == value), None)
+            if source is None:
+                note = {**step, "added": True}
+            else:
+                gone.remove(source)
+                note = {**step, "from": source}
+                if source in fields and name not in fields:
+                    fields[name] = fields.pop(source)
+        evidence = fields.setdefault(name, {})
+        if isinstance(evidence, dict):
+            evidence.setdefault("transforms", []).append(note)
+    for name in gone:
+        evidence = fields.setdefault(name, {})
+        if isinstance(evidence, dict):
+            evidence.setdefault("transforms", []).append({**step, "dropped": True})
+
+
 def _item_result(record: dict[str, Any] | None, ctx: RecordContext) -> dict[str, Any]:
     if record is None:
         from ..spider.middleware import DropItem
@@ -2385,10 +2423,13 @@ class Pipeline:
         ctx = ctx if ctx is not None else RecordContext()
         current = record
         for stage in self.stages:
+            before = dict(current) if "_provenance" in current else None  # (a record with provenance: traced)
             result = stage.process(current, ctx)
             if result is None:
                 return None
             current = result
+            if before is not None:
+                _traced(before, current, stage)
         return current
 
     async def aprocess(self, record: dict[str, Any], ctx: RecordContext | None = None) -> dict[str, Any] | None:
@@ -2396,10 +2437,13 @@ class Pipeline:
         ctx = ctx if ctx is not None else RecordContext()
         current = record
         for stage in self.stages:
+            before = dict(current) if "_provenance" in current else None
             result = await stage.aprocess(current, ctx) if stage.is_async else stage.process(current, ctx)
             if result is None:
                 return None
             current = result
+            if before is not None:
+                _traced(before, current, stage)
         return current
 
     def __call__(self, record: Mapping[str, Any]) -> dict[str, Any] | None:

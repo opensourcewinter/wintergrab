@@ -192,6 +192,7 @@ wintergrab data graph [KIND=]INPUT... [--kind KIND] [--relation FIELD=RELATION:K
 wintergrab data places INPUT [--country C] [--in PLACE] [--near LAT,LON --within KM] [--remote]
                        [--by PART [--stats FIELD] [--top N] [--json]] [--add PARTS] [--field PART=NAME] [-o OUT]
 wintergrab data diff OLD NEW [--key FIELD] [--ignore FIELD] [-o CHANGES] [--json] [--exit-code]
+wintergrab data trace INPUT [FIELD...] [--where FIELD=VALUE] [--limit N] [--json]   # where a value came from
 ```
 
 Inputs are JSON Lines, JSON or CSV files (`-` reads JSON Lines from stdin);
@@ -209,8 +210,12 @@ versions (`DIR@v2`, `DIR@previous`, `DIR@latest`), prints the counts and the
 fields that changed, writes the details with `-o`, and with `--exit-code`
 exits with status 1 when they differ. `places` reads where each record is,
 normalized, keeps those in a country, region or city or near a point, and
-with `--by` prints them grouped by place. See [data.md](data.md),
-[entities.md](entities.md) and [places.md](places.md).
+with `--by` prints them grouped by place. `trace` tells where the values of
+a record collected with `--provenance` came from: the page or API call, the
+run and the output, how each field was read, and what the pipeline did to
+it; the exit status is 1 when no record matches or none has provenance.
+See [data.md](data.md), [entities.md](entities.md) and
+[places.md](places.md).
 
 ## `wintergrab extract`: records from a site
 
