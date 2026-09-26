@@ -10,7 +10,9 @@ tells you when a dataset's quality drops.
 - [Expressions](#expressions): a safe little language for filters and rules.
 - [Pipelines](#pipelines): rename, transform, normalize, validate, filter,
   de-duplicate, look up and enrich, in Python or in a config file.
-- [Duplicates](#duplicates): exact and near-duplicate records.
+- [Duplicates](#duplicates): exact and near-duplicate records; the same
+  company, brand, product, person or place under different names is
+  [entity resolution](entities.md).
 - [Quality](#quality): completeness, validity, drift and collapse detection.
 - [Command line](#command-line): `wintergrab data ...`.
 
@@ -369,6 +371,11 @@ Under the hood (`wintergrab.data.similarity`): content hashes, MinHash
 signatures with LSH (one-permutation hashing, about 0.1 ms per record) for
 records, and SimHash with an exact pigeonhole index for long documents.
 
+Records that describe the same thing with different names ("Apple Inc." in
+one directory, "APPLE INC" in another) are not duplicates to these checks:
+[entity resolution](entities.md) groups them, with evidence, and lists the
+uncertain cases for review.
+
 ## Quality
 
 `QualityMonitor` watches records stream by and reports:
@@ -424,6 +431,7 @@ wintergrab data validate product.schema.json items.jsonl -o clean.jsonl --reject
 wintergrab data run pipeline.yaml items.jsonl -o clean.csv
 wintergrab data quality items.jsonl --schema product.schema.json --save quality.json
 wintergrab data quality items.jsonl --baseline quality.json
+wintergrab data entities companies.jsonl --field name --attribute website -o entities.jsonl
 
 wintergrab crawl https://shop.example --field ... --pipeline pipeline.yaml -o items.jsonl
 ```

@@ -236,7 +236,8 @@ Not worth pursuing:
 
 `bench_data.py` measures the data layer on synthetic product records (no
 network): normalizers, schema normalization and validation, expressions, a
-five-stage pipeline, near-duplicate detection and quality monitoring.
+five-stage pipeline, near-duplicate detection, quality monitoring and entity
+resolution.
 
 ```bash
 .venv/bin/python benchmarks/bench_data.py --records 20000 --repeat 5
@@ -246,14 +247,20 @@ One core of a 4-vCPU cloud VM, Python 3.11.15, median of 5 runs:
 
 | Operation | Rate | Time per item |
 |---|---:|---:|
-| parse_money | 94,172 values/s | 10.6 µs |
-| parse_date | 164,860 values/s | 6.1 µs |
-| expression (3 comparisons) | 1,020,763 records/s | 1.0 µs |
-| Schema.normalize (10 fields) | 7,614 records/s | 131.3 µs |
-| Schema.validate (10 fields) | 41,901 records/s | 23.9 µs |
-| pipeline: normalize, validate, filter, compute, dedupe | 4,203 records/s | 237.9 µs |
-| Deduplicator near=True (40-word texts) | 6,325 records/s | 158.1 µs |
-| QualityMonitor.observe + report | 6,814 records/s | 146.8 µs |
+| parse_money | 94,924 values/s | 10.5 µs |
+| parse_date | 166,308 values/s | 6.0 µs |
+| expression (3 comparisons) | 1,053,321 records/s | 0.9 µs |
+| Schema.normalize (10 fields) | 7,879 records/s | 126.9 µs |
+| Schema.validate (10 fields) | 41,247 records/s | 24.2 µs |
+| pipeline: normalize, validate, filter, compute, dedupe | 4,169 records/s | 239.9 µs |
+| Deduplicator near=True (40-word texts) | 6,347 records/s | 157.6 µs |
+| QualityMonitor.observe + report | 6,970 records/s | 143.5 µs |
+| EntityResolver: add + resolve (company names) | 3,769 mentions/s | 265.4 µs |
+
+The entity resolution row resolves 20,000 generated company names (two words
+from 60, ten legal forms and generic suffixes, some in capitals, 30% with a
+website): 15,558 distinct mentions and about 300,000 comparisons, with the
+name caches cleared before each run.
 
 URL normalization is the largest single cost inside `Schema.normalize`
 (about a fifth of it for the benchmark's all-distinct URLs).

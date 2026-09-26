@@ -12,6 +12,8 @@
 * :mod:`~wintergrab.data.dedupe` and :mod:`~wintergrab.data.similarity` - exact and
   near-duplicate detection (content hashes, SimHash, MinHash/LSH).
 * :mod:`~wintergrab.data.quality` - dataset quality metrics and degradation alerts.
+* :mod:`~wintergrab.data.entities` - entity resolution: which names are the same company,
+  brand, product, person or place, with evidence.
 
 See ``docs/data.md`` for a guided tour.
 """
@@ -19,6 +21,7 @@ See ``docs/data.md`` for a guided tour.
 from __future__ import annotations
 
 from .dedupe import Deduplicator
+from .entities import Entity, EntityResolver, Match, Mention, Resolution
 from .expressions import FUNCTIONS, Expression, compile_expression, get_path
 from .inference import TypeGuess, explain_inference, infer_schema
 from .issues import Issue
@@ -69,6 +72,8 @@ __all__ = [
     "Deduplicate",
     "Deduplicator",
     "Enrich",
+    "Entity",
+    "EntityResolver",
     "Exclude",
     "Expression",
     "FieldQuality",
@@ -76,6 +81,8 @@ __all__ = [
     "Filter",
     "Issue",
     "Lookup",
+    "Match",
+    "Mention",
     "MinHashLSH",
     "Normalize",
     "NormalizeContext",
@@ -86,6 +93,7 @@ __all__ = [
     "QualityReport",
     "RecordContext",
     "Rename",
+    "Resolution",
     "Rule",
     "Schema",
     "SchemaField",

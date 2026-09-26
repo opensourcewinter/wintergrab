@@ -64,6 +64,8 @@ EPILOG_DATA = """examples:
   wintergrab data run pipeline.yaml items.jsonl -o clean.csv
   wintergrab data quality items.jsonl --schema product.schema.json --save quality.json
   wintergrab data quality items.jsonl --baseline quality.json    # exit status 1 if quality collapsed
+  wintergrab data entities companies.jsonl --field name --attribute website --attribute phone -o entities.jsonl
+  wintergrab data entities products.jsonl --field brand --kind brand --annotate products.resolved.jsonl
 
 Inputs are JSON Lines, JSON or CSV files ("-" reads JSON Lines from stdin).
 """
@@ -794,6 +796,66 @@ def cmd_data_infer(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data_entities(args: argparse.Namespace) -> int:
+    from .data.entities import EntityResolver
+    from .data.io import read_records
+
+    attributes: dict[str, str] = {}
+    for raw in args.attribute or ():
+        name, _, field = raw.partition("=")
+        attributes[name.strip()] = (field or name).strip()
+    try:
+        resolver = EntityResolver(args.kind, merge_threshold=args.merge, review_threshold=args.review)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    records = list(read_records(args.input, limit=args.limit))
+    source = args.source or ("url" if any("url" in r for r in records[:100] if isinstance(r, dict)) else None)
+    mentions = resolver.add_records(records, args.field, source_field=source, attributes=attributes)
+    result = resolver.resolve()
+    if args.output:
+        _write_records(result.records(), args.output)
+    if args.review_output:
+        _write_records((match.to_dict() for match in result.review), args.review_output)
+    if args.annotate:
+        prefix = args.field.replace(".", "_")
+
+        def annotated() -> Iterable[dict[str, Any]]:
+            for record, mention in zip(records, mentions, strict=True):
+                if mention is not None and isinstance(record, dict):
+                    entity = result.entity_of(mention)
+                    record = {**record, f"{prefix}_entity": entity.id, f"{prefix}_canonical": entity.name}
+                yield record
+
+        _write_records(annotated(), args.annotate)
+    if args.verbose >= 0:
+        print(result.summary(), file=sys.stderr)
+        for entity in result.entities[: args.show]:
+            others = len(entity.aliases) - 1
+            spelled = f", {others} other spelling(s)" if others else ""
+            print(
+                f"  {len(entity.mentions):>6,}  {entity.name}  ({entity.id}{spelled}, "
+                f"confidence {entity.confidence:.2f})",
+                file=sys.stderr,
+            )
+        if result.review:
+            print("to review:", file=sys.stderr)
+        for match in result.review[: args.show]:
+            note = f" [{match.note}]" if match.note else ""
+            print(
+                f"  {match.score:.2f}  {match.a.name!r} ~ {match.b.name!r}: {'; '.join(match.reasons)}{note}",
+                file=sys.stderr,
+            )
+        for label, path in (
+            ("entities", args.output),
+            ("pairs to review", args.review_output),
+            ("records", args.annotate),
+        ):
+            if path:
+                print(f"wrote the {label} to {path}", file=sys.stderr)
+    return 0
+
+
 def cmd_data_quality(args: argparse.Namespace) -> int:
     from .data import QualityMonitor, QualityReport, load_schema
     from .data.io import read_records
@@ -1061,6 +1123,32 @@ def build_parser() -> argparse.ArgumentParser:
     qual.add_argument("--json", action="store_true", help="print the report as JSON")
     qual.add_argument("--limit", type=int, metavar="N", help="only the first N records")
     qual.set_defaults(func=cmd_data_quality)
+    ent = actions.add_parser("entities", help="find which names are the same company, brand, product, person or place")
+    ent.add_argument("input", metavar="INPUT")
+    ent.add_argument("--field", required=True, metavar="FIELD", help="the field holding the names (dotted paths work)")
+    ent.add_argument(
+        "--kind",
+        default="company",
+        choices=("company", "organization", "brand", "product", "person", "location"),
+        help="what the names are (default: company)",
+    )
+    ent.add_argument(
+        "--attribute",
+        action="append",
+        metavar="ATTR[=FIELD]",
+        help="evidence to compare, e.g. website=company_url, phone, country, gtin, email (repeatable)",
+    )
+    ent.add_argument("--source", metavar="FIELD", help="the field saying where a record came from (default: url)")
+    ent.add_argument("--merge", type=float, default=0.95, metavar="P", help="merge pairs scoring at least P (0.95)")
+    ent.add_argument("--review", type=float, default=0.5, metavar="P", help="list pairs scoring at least P (0.5)")
+    ent.add_argument("-o", "--output", metavar="FILE", help="write one merged record per entity")
+    ent.add_argument("--review-output", metavar="FILE", help="write the pairs to review, with their evidence")
+    ent.add_argument(
+        "--annotate", metavar="FILE", help="write the input records with FIELD_entity and FIELD_canonical added"
+    )
+    ent.add_argument("--show", type=int, default=10, metavar="N", help="entities and review pairs to print (10)")
+    ent.add_argument("--limit", type=int, metavar="N", help="only the first N records")
+    ent.set_defaults(func=cmd_data_entities)
 
     s = sub.add_parser("shell", help="interactive Python shell with a page loaded")
     s.add_argument("url", nargs="?")

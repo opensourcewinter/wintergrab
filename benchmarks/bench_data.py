@@ -6,6 +6,7 @@ Every measurement runs ``--repeat`` times over the same records and reports
 the median rate. The records look like a product crawl's raw output: prices
 in several currencies and formats, dates, weights, ratings, availability
 text, URLs with tracking parameters, and a few duplicates and bad values.
+Entity resolution runs on as many generated company names.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from wintergrab.data import (
     Compute,
     Deduplicate,
     Deduplicator,
+    EntityResolver,
     Expression,
     Filter,
     Normalize,
@@ -31,6 +33,7 @@ from wintergrab.data import (
     Schema,
     Validate,
 )
+from wintergrab.data import entities as entity_caches
 from wintergrab.data.normalize import parse_date, parse_money
 
 SCHEMA = Schema.from_dict(
@@ -88,6 +91,84 @@ def make_records(n: int, seed: int = 0) -> list[dict[str, Any]]:
                 "description": " ".join(rng.choice(WORDS) for _ in range(40)),
                 "url": f"https://shop.example/p/{i if i % 50 else i - 1}?utm_source=feed",
             }
+        )
+    return out
+
+
+COMPANY_WORDS = [
+    "acme",
+    "alpha",
+    "apex",
+    "arrow",
+    "atlas",
+    "aurora",
+    "beacon",
+    "blue",
+    "bright",
+    "cedar",
+    "cobalt",
+    "crest",
+    "delta",
+    "eagle",
+    "echo",
+    "ember",
+    "falcon",
+    "forest",
+    "frontier",
+    "global",
+    "golden",
+    "granite",
+    "harbor",
+    "horizon",
+    "iron",
+    "jade",
+    "keystone",
+    "lake",
+    "legacy",
+    "liberty",
+    "lotus",
+    "maple",
+    "meridian",
+    "nova",
+    "oak",
+    "ocean",
+    "orbit",
+    "peak",
+    "pine",
+    "pioneer",
+    "prime",
+    "quantum",
+    "radiant",
+    "red",
+    "river",
+    "rock",
+    "sierra",
+    "silver",
+    "summit",
+    "sun",
+    "swift",
+    "terra",
+    "titan",
+    "union",
+    "vertex",
+    "vista",
+    "west",
+]
+COMPANY_FORMS = ["", " Inc.", " Inc", ", Inc.", " Corp.", " Ltd", " GmbH", " LLC", " Group", " Holdings"]
+
+
+def make_companies(n: int, seed: int = 0) -> list[tuple[str, str | None]]:
+    """Company names as directories write them: legal forms, capitals, sometimes a website."""
+    rng = random.Random(seed)
+    out = []
+    for _ in range(n):
+        first, second = rng.choice(COMPANY_WORDS), rng.choice(COMPANY_WORDS)
+        name = f"{first.title()} {second.title()}{rng.choice(COMPANY_FORMS)}"
+        out.append(
+            (
+                name.upper() if rng.random() < 0.1 else name,
+                f"https://www.{first}{second}.com" if rng.random() < 0.3 else None,
+            )
         )
     return out
 
@@ -162,6 +243,17 @@ def main() -> None:
             expression(record)
         return len(normalized)
 
+    companies = make_companies(args.records)
+
+    def entities() -> int:
+        entity_caches.normalize_name.cache_clear()  # measure cold, as a first run would be
+        entity_caches._similar_words.cache_clear()
+        resolver = EntityResolver("company")
+        for name, website in companies:
+            resolver.add(name, website=website)
+        resolver.resolve()
+        return len(companies)
+
     rows = [
         ("parse_money", money, "values"),
         ("parse_date", dates_, "values"),
@@ -171,6 +263,7 @@ def main() -> None:
         ("pipeline: normalize, validate, filter, compute, dedupe", pipeline, "records"),
         ("Deduplicator near=True (40-word texts)", dedupe_near, "records"),
         ("QualityMonitor.observe + report", quality, "records"),
+        ("EntityResolver: add + resolve (company names)", entities, "mentions"),
     ]
     print(f"wintergrab {__version__}, Python {platform.python_version()}, {platform.machine()}, "
           f"{args.records:,} records, median of {args.repeat} runs\n")  # fmt: skip

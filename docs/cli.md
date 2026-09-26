@@ -153,6 +153,8 @@ wintergrab data infer INPUT [-o SCHEMA] [--explain]         # guess a schema fro
 wintergrab data validate SCHEMA INPUT [-o VALID] [--rejects FILE]
 wintergrab data run PIPELINE INPUT [-o OUTPUT] [--allow-imports]
 wintergrab data quality INPUT [--schema SCHEMA] [--baseline REPORT] [--save REPORT] [--json]
+wintergrab data entities INPUT --field NAME [--kind KIND] [--attribute ATTR=FIELD] [-o ENTITIES]
+                         [--review-output FILE] [--annotate FILE] [--merge P] [--review P]
 ```
 
 Inputs are JSON Lines, JSON or CSV files (`-` reads JSON Lines from stdin);
@@ -162,7 +164,9 @@ records with the schema first (`--no-normalize` to skip; `--country`,
 issues, and exits with status 1 if any record is invalid. `quality` prints
 completeness, validity, consistency and anomalies per field; with
 `--baseline` it compares with an earlier report and exits with status 1 when
-quality collapsed. See [data.md](data.md).
+quality collapsed. `entities` groups the names in a field into companies,
+brands, products, people or places, with evidence, and prints the pairs it
+did not dare merge. See [data.md](data.md) and [entities.md](entities.md).
 
 ## `wintergrab shell`: explore interactively
 

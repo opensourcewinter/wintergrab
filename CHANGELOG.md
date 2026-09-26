@@ -139,6 +139,27 @@
   6.9 ms for a 13-field record from an 11 KB product page with JSON-LD,
   6.5 ms without structured data, 61 ms from a page with 480 KB of text.
 
+### Entity resolution (`wintergrab.data.entities`)
+
+- `EntityResolver(kind)` groups mentions of companies, organizations, brands,
+  products, people and places: "Apple Inc.", "APPLE INC" and "Apple" are one
+  company; "Apple Computer" is listed for review unless evidence (the same
+  website) supports the merge. Names are normalized for their kind (legal
+  forms, initials, "Last, First", generations, units and model numbers,
+  "St."/"Mt.", areas such as "Springfield, IL").
+- Pairs are scored from log-odds evidence (names and identifiers: website,
+  e-mail domain, phone, GTIN, MPN, LEI, VAT, Wikidata id, coordinates...),
+  merged above 0.95 and listed for review above 0.5. Merges are refused
+  between groups with conflicting identifiers, across mentions that compared
+  as different entities, and for mentions as close to two such groups.
+- Every entity keeps its mentions with sources and attributes, the matches
+  that merged them with their reasons, and a confidence; `records()` gives
+  one merged record per entity.
+- CLI: `wintergrab data entities FILE --field NAME [--kind ...] [--attribute
+  ...] [-o] [--review-output] [--annotate]`.
+- Measured: about 3,800 mentions per second on 20,000 generated company
+  names (`benchmarks/bench_data.py`).
+
 ### Page and site intelligence (`wintergrab.intel`)
 
 - `classify_page(page)`: product, category, listing, article, news, job,
