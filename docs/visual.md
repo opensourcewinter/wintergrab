@@ -120,6 +120,58 @@ The screenshot goes to the API you name, with the page's text; see
 [models](models.md#keys-and-what-leaves-your-machine). In a listing, the
 screenshot is sent only for the page's own record, not for each card.
 
+## PDFs
+
+A PDF is read the same way: with `pypdf` installed (`pip install
+"wintergrab[pdf]"`), a response holding a PDF has the PDF's text where it is
+drawn as its layout, and a simple HTML version of it as its page. Its
+headings come from font sizes, its lines are paragraphs, its tables are
+tables, and its links are links (a crawl follows them). So `get` prints it,
+`--visual-tables` reads its tables, and `--extract` reads its fields:
+
+```bash
+wintergrab get https://oak.example/prices.pdf
+```
+
+```
+# Price list 2026
+
+Invoice number: INV-0042
+
+Due date: 2026-10-31
+
+| Product | Unit | Price |
+|---|---|---|
+| Oak table | each | EUR 450.00 |
+| Pine chair | each | EUR 89.50 |
+| Walnut shelf | per metre | EUR 120.00 |
+
+[Questions? Write to sales@oak.example or see our site.](https://oak.example/contact)
+```
+
+(A PDF made by the test suite, `tests/test_pdf.py`. Read as plain text, as
+most tools do, its table is "Oak table each EUR 450.00".)
+
+```python
+page = wg.get("https://oak.example/prices.pdf")
+page.pdf.title, page.pdf.page_count        # from the PDF's metadata
+layout_tables(page.layout)[0].records()    # [{'Product': 'Oak table', 'Unit': 'each', 'Price': 'EUR 450.00'}, ...]
+Extractor(invoice).extract(page)["invoice_number"]   # 'INV-0042', from "Invoice number: INV-0042"
+```
+
+- A PDF is recognized by its type, or by its first bytes when the server
+  calls it something else.
+- Positions, font sizes and boldness come from the PDF. Widths are estimated
+  from the characters, since PDFs rarely give them.
+- Lines close together make a block, and a block of aligned lines is a
+  table. Pages sit one under the other in the layout.
+- At most 100 pages are read (`pdf.truncated` says when there were more).
+- A browser shows a PDF in its viewer, so a browser fetch asks for the file
+  itself, with the browser's cookies.
+- A damaged or password-protected PDF, or one read without `pypdf`, gives an
+  empty page, and a warning says why. A scanned PDF (pictures of text) has
+  no text to read.
+
 ## What it does not do
 
 - It reads what a browser drew; a page fetched over HTTP has no layout

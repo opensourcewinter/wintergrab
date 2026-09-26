@@ -526,6 +526,22 @@
   `wintergrab.extraction.model` (still importable from
   `wintergrab.models`). docs/visual.md.
 
+### PDFs (`wintergrab.parser.pdf`)
+
+- With `pypdf` (`pip install "wintergrab[pdf]"`), a response holding a PDF
+  (by its type, or its first bytes) is read: `response.pdf` (pages,
+  metadata, link annotations), `response.layout` (its text where it is
+  drawn, pages one under the other), and as its page, simple HTML. Headings
+  come from font sizes, lines are paragraphs, tables are tables (read from
+  the layout as a page's), and links are links a crawl follows. `get`
+  prints a PDF as Markdown, `--visual-tables` reads its tables, and
+  `--extract` its fields.
+- A browser fetch of a PDF asks for the file itself (the browser hands back
+  its viewer's page otherwise), with the browser's cookies and no redirect.
+- A damaged or locked PDF, or one read without `pypdf`, is an empty page
+  with a warning, not its bytes read as text. `wintergrab doctor` says
+  whether PDFs can be read.
+
 ### Places (`wintergrab.data.places`)
 
 - `place_of(record)` reads where a record is from the fields it has: an

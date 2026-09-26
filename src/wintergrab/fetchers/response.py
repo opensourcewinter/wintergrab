@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json as _json
+import logging
 import re
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from pathlib import Path
@@ -16,6 +17,8 @@ from ..parser.selector import Selector, SelectorList
 if TYPE_CHECKING:
     from ..adaptive.storage import AdaptiveStorage
     from ..request import Request
+
+log = logging.getLogger("wintergrab.fetch")
 
 
 class Headers(MutableMapping[str, str]):
@@ -157,8 +160,8 @@ class Response:
         self.blocked_resources: dict[str, int] = {}
         #: A browser fetch's full-page PNG screenshot (``screenshot=True``).
         self.screenshot: bytes | None = None
-        #: Where a browser fetch's text was drawn (``layout=True``): a :class:`~wintergrab.parser.layout.Layout`.
-        self.layout: Any = None
+        self._layout: Any = None
+        self._pdf: Any = None
 
     # ------------------------------------------------------------------ #
     # body
@@ -191,6 +194,47 @@ class Response:
     def content_type(self) -> str:
         """Media type without parameters, e.g. ``"text/html"``."""
         return self.headers.get("content-type", "").split(";")[0].strip().lower()
+
+    @property
+    def is_pdf(self) -> bool:
+        """Whether the body is a PDF (its type says so, or it starts like one)."""
+        from ..parser.pdf import is_pdf
+
+        return is_pdf(self.body, self.content_type)
+
+    @property
+    def pdf(self) -> Any:
+        """The PDF the body holds, read (a :class:`~wintergrab.parser.pdf.PdfDocument`), or ``None`` for other
+        bodies. Needs ``pypdf`` (``pip install 'wintergrab[pdf]'``)."""
+        if self._pdf is None and self.is_pdf:
+            from ..parser.pdf import read_pdf
+
+            self._pdf = read_pdf(self.body)
+        return self._pdf
+
+    @property
+    def layout(self) -> Any:
+        """Where the page's text is drawn (a :class:`~wintergrab.parser.layout.Layout`): recorded by a browser
+        fetch with ``layout=True``, or read from a PDF; ``None`` otherwise."""
+        if self._layout is None and self.is_pdf:
+            document = self._readable_pdf()
+            if document is not None:
+                self._layout = document.layout()
+        return self._layout
+
+    @layout.setter
+    def layout(self, value: Any) -> None:
+        self._layout = value
+
+    def _readable_pdf(self) -> Any:
+        """The PDF, read; ``None`` (said once) when it cannot be: no ``pypdf``, or a damaged or locked file."""
+        try:
+            return self.pdf
+        except (ImportError, ValueError) as exc:
+            if not getattr(self, "_pdf_warned", False):
+                self._pdf_warned = True
+                log.warning("%s: %s", self.url, exc)
+            return None
 
     @property
     def is_html(self) -> bool:
@@ -240,6 +284,11 @@ class Response:
         """The parsed document (built on first use)."""
         if self._selector is None:
             ctype = self.content_type
+            if self.is_pdf:  # its text, headings, tables and links, as HTML (or nothing when it cannot be read)
+                document = self._readable_pdf()
+                markup = document.html() if document is not None else "<html><body></body></html>"
+                self._selector = Selector(markup, url=self.url, adaptive_storage=self._adaptive_storage)
+                return self._selector
             kind = "xml" if ("xml" in ctype and "html" not in ctype) else "html"
             self._selector = Selector(self.text, url=self.url, type=kind, adaptive_storage=self._adaptive_storage)
         return self._selector

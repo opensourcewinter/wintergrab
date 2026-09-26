@@ -1458,6 +1458,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         check(dist, v is not None, v or f"not installed ({why})", 'pip install "wintergrab[speed]"')
     v = version("pyyaml")
     check("pyyaml", v is not None, v or "not installed (YAML schemas and pipelines)", 'pip install "wintergrab[yaml]"')
+    v = version("pypdf")
+    check("pypdf", v is not None, v or "not installed (reading PDFs)", 'pip install "wintergrab[pdf]"')
     check("adaptive db", True, str(default_storage_path()))
     width = max(len(r[1]) for r in rows)
     for status, name, detail in rows:

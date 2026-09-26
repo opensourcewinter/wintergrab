@@ -92,6 +92,7 @@ pip install wintergrab                 # HTTP fetching, parsing, spiders, CLI
 pip install "wintergrab[browser]"      # + headless browser support
 pip install "wintergrab[speed]"        # + uvloop and orjson
 pip install "wintergrab[parquet]"      # + Parquet output (also: [xlsx], [postgres])
+pip install "wintergrab[pdf]"          # + reading PDFs (their text, tables and links)
 playwright install chromium            # one-time browser download (browser extra only)
 wintergrab doctor                      # check what is installed
 ```

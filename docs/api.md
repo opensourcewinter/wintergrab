@@ -434,6 +434,16 @@ checks that it is up to date.
   - `within(self, path: str) -> Layout`: The boxes inside the element at ``path`` (a record's card).
 - **`element_path(element: Any) -> str`**. The CSS path of a parsed element (lxml) from ``body``, written as :data:`LAYOUT_SCRIPT` writes paths: a tag, with ``:nth-of-type(n)`` when its parent has other children of that tag.
 
+## `wintergrab.parser.pdf`: PDFs
+
+- **`MAX_PAGES`** = `100`
+- **`PdfDocument(pages: list[PdfPage], page_count: int, title: str | None = None, author: str | None = None, subject: str | None = None, truncated: bool = False)`** (class). A PDF, read (see the module docs).
+  - `html(self) -> str`: The document as simple HTML: a section per page, headings by font size, lines as paragraphs, the tables its lines are drawn as, and its links.
+  - `layout(self) -> Layout`: Every page's boxes on one layout, the pages one under the other.
+- **`PdfPage(number: int, width: float, height: float, boxes: list[Box] = ..., links: list[tuple[str, float, float, float, float]] = ...)`** (class). A page of a PDF: its size (points) and its text boxes (from the page's top left), and links.
+- **`is_pdf(body: bytes, content_type: str = '') -> bool`**. Whether a response holds a PDF: its type says so, or its body starts like one.
+- **`read_pdf(data: bytes, *, max_pages: int = 100) -> PdfDocument`**. Read a PDF's pages (at most ``max_pages``): their text where it is drawn, and their links.
+
 ## `wintergrab.data`: Schemas, normalizing, validating, pipelines, quality
 
 - **`FIELD_TYPES`**: a dict

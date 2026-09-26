@@ -795,6 +795,12 @@ class AsyncBrowserFetcher:
             if main is not None and ctype and "html" not in ctype and "xml" not in ctype:
                 body = await main.body()
                 encoding = None
+                if ctype.split(";")[0].strip().lower() == "application/pdf" and not body.lstrip().startswith(b"%PDF-"):
+                    # The browser shows a PDF in its viewer, and hands back the viewer's page: ask for the file
+                    # itself, with the browser's cookies (and no redirect: the address was checked already).
+                    direct = await context.request.get(main.url, max_redirects=0, timeout=timeout_ms)
+                    if direct.ok:
+                        body = await direct.body()
             else:
                 body = (await page.content()).encode("utf-8")
                 encoding = "utf-8"
