@@ -125,9 +125,89 @@ page = browser.get(
     wait_for=".item",       # CSS selector to wait for
     wait=1.0,               # extra seconds after loading
     scroll=True,            # scroll to the bottom (repeatedly, for infinite scroll)
+    actions=["click .more until-gone"],  # steps done on the page (below)
     page_action=load_more,  # your own automation (must be async)
-    screenshot="shot.png",  # full-page screenshot
+    screenshot="shot.png",  # full-page screenshot (True: in page.screenshot only)
+    layout=True,            # where the page draws its text (see visual.md)
 )
+```
+
+### Browser actions
+
+Many pages show their data only after something is done on them: a "Load
+more" button, a cookie dialog in the way, accordions, a search form, tabs
+that replace each other's content. `actions` lists the steps as data. They
+are done in order once the page has loaded, and the page is read after the
+last one:
+
+```python
+page = browser.get("https://shop.example/", actions=[
+    "dismiss #accept",                  # a dialog in the way, if there is one
+    "click .load-more until-gone",      # "Load more" until there is no more
+    "expand summary",                   # every accordion open
+    {"fill": {"#q": "parka"}},          # a form
+    "press #q => Enter",
+    "wait #results",
+    "tabs .tabs a",                     # each tab's content, kept
+    "download a.export",                # the file the page offers
+], downloads="files")
+page.actions     # [{'step': 'dismiss #accept', 'ok': True, 'detail': 'clicked'},
+                 #  {'step': 'click .load-more until-gone', 'ok': True, 'detail': 'clicked 3 time(s); it is gone'},
+                 #  {'step': 'expand summary', 'ok': True, 'detail': 'clicked 2 element(s)'}, ...]
+page.snapshots   # [{'after': '.tabs a #1: Specifications', 'html': '...'}, {'after': '.tabs a #2: Reviews', ...}]
+page.downloads   # [{'url': '.../report.csv', 'path': 'files/report.csv', 'name': 'report.csv', 'bytes': 47}]
+page.console     # [{'type': 'log', 'text': 'shop ready'}, {'type': 'warning', 'text': 'an old API'}]
+```
+
+(The page is `tests/data/actions/shop.html` from the test suite.)
+
+A step is a string, `"VERB [SELECTOR] [ARGUMENT]"`, or a mapping with one
+verb:
+
+| Step | What it does |
+|---|---|
+| `click S` | Click the first element matching `S`. `click S x5` clicks up to 5 times while it is there; `click S until-gone` until it is gone (50 times at most). |
+| `expand S` | Click every visible element matching `S` once: accordions, "read more" toggles. |
+| `dismiss S` | Click `S` if it is there (a cookie dialog, a modal); nothing if not. |
+| `hover S` | Move the pointer over `S` (menus that open on hover). |
+| `fill S => V` | Type `V` into the field `S`. `{"fill": {S: V, ...}}` fills several. |
+| `select S => V` | Choose the option `V` (its value or its label) of the list `S`. |
+| `check S`, `uncheck S` | Tick or clear a box. |
+| `press K`, `press S => K` | Press a key (`Enter`, `Escape`, `ArrowDown`...), in the field `S` if given. |
+| `wait S`, `wait 1.5` | Wait for `S` to show, or that many seconds (120 at most). |
+| `scroll N` | Scroll to the bottom, up to `N` times, while the page grows (lazy loading). |
+| `tabs S` | Click each element matching `S` in turn, keeping the page's HTML after each in `snapshots`. |
+| `snapshot` | Keep the page's HTML as it is now in `snapshots`. |
+| `screenshot F`, `pdf F` | Save a full-page PNG, or the page as a PDF (headless Chromium), to the file `F`. |
+| `download S` | Click `S` and keep the file it downloads, in the directory `downloads=` names (a temporary one otherwise). |
+
+A mapping can also say `"repeat": N`, `"until_gone": true` or
+`"optional": true`: `{"click": ".next", "repeat": 3}`. After a step that
+clicks or presses a key, the page gets up to a second for the requests it
+started to finish. Each step waits `timeout` seconds at most.
+
+- A step that cannot be done (nothing to click, a wait that runs out) stops
+  the page with a `BrowserFetchError` naming the step. It is not retried:
+  trying again would not make it possible. `dismiss` steps, and steps marked
+  `optional`, are noted in `page.actions` and passed over instead.
+- Steps are held to the [network policy](#network-policy-ssrf-protection): a
+  click or a download that leads where the policy refuses raises
+  `NetworkPolicyError`, naming the step and the address. A step that leads
+  to a page that does not load stops the page too, optional or not.
+- A download keeps only the file's name, with no directories from the site.
+  A file over 200 MB is deleted, and the step fails.
+- No step runs a script: steps do what a person could do on the page. For
+  anything else, `page_action` takes your own async function.
+
+The same steps work in a spider, per request:
+`Request(url, session="browser", options={"actions": [...]})` (see
+[spiders](spiders.md#sessions)). On the command line, `wintergrab get URL
+--do STEP` (repeatable) or `--actions steps.yaml` (a JSON or YAML list), and
+`--downloads DIR`; it prints what each step did, and after the page's
+Markdown, each kept snapshot's:
+
+```bash
+wintergrab get https://shop.example/ --do "click .load-more until-gone" --do "tabs .tabs a"
 ```
 
 ## The `Response` object
@@ -147,6 +227,9 @@ page = browser.get(
 | `request`, `meta`, `elapsed`, `source` | The request that made it, spider metadata, seconds taken, `"http"`/`"browser"`. |
 | `ip` | Address of the server that answered (`None` from the cache). |
 | `blocked_resources` | Browser sub-requests blocked while rendering, by reason (`"type:image"`, `"list"`, `"policy"`...). |
+| `actions`, `snapshots`, `downloads` | What [browser actions](#browser-actions) did, the HTML they kept, the files they downloaded. |
+| `console` | A browser page's console messages and uncaught script errors: `{"type", "text"}` (200 at most). |
+| `screenshot`, `layout`, `pdf` | A browser fetch's PNG, where its text is drawn ([visual](visual.md)); a PDF's pages, when the body is one. |
 
 ## Network policy (SSRF protection)
 
@@ -195,7 +278,7 @@ dict (URL, domain, field...). Fetch failures are `FetchError`s with `.url`,
 | `ProxyError` | The proxy failed (a `NetworkError`). |
 | `FetchTimeout` | The request timed out. |
 | `NetworkPolicyError`, `RobotsPolicyError` | A policy refused the request (`PolicyError`s: never retried). |
-| `BrowserFetchError` | The page failed in the browser (crash, navigation error). |
+| `BrowserFetchError` | The page failed in the browser (crash, navigation error), or a [browser action](#browser-actions) could not be done. |
 | `CacheMiss` | Offline cache mode and the page isn't cached. |
 | `HTTPStatusError` (alias `HTTPError`) | Raised by `raise_for_status()` (or with `raise_for_status=True`). A 404 or 500 is **not** an exception by default. |
 | `BrowserNotAvailable` | Playwright or a Chromium binary is missing. The message tells you what to install. |

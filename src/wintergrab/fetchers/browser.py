@@ -35,6 +35,7 @@ from ..parser.layout import LAYOUT_SCRIPT, MAX_BOXES, Layout
 from ..proxy import ProxyRotator, proxy_for_playwright, proxy_label
 from ..request import Request
 from ..utils import ensure_scheme, maybe_await
+from .actions import Action, parse_actions, run_actions
 from .blocking import has_challenge_markers
 from .cache import CacheLayer, HTTPCache
 from .http import DEFAULT_RETRY_STATUSES, PROXY_FAILURE_STATUSES
@@ -193,6 +194,18 @@ def _capture_matcher(capture: bool | str | Callable[[str], bool] | None) -> Call
         return lambda url, ctype: pattern in url
     func = capture
     return lambda url, ctype: bool(func(url))
+
+
+_CONSOLE_KEPT = 200  # console messages kept per page
+
+
+class _PageError:
+    """An uncaught error in the page's scripts, kept with its console messages."""
+
+    type = "pageerror"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
 
 
 class AsyncBrowserFetcher:
@@ -531,6 +544,8 @@ class AsyncBrowserFetcher:
         screenshot: str | Path | bool | None = None,
         capture: bool | str | Callable[[str], bool] | None = None,
         layout: bool = False,
+        actions: Any = None,
+        downloads: str | Path | None = None,
         request: Request | None = None,
         **_ignored: Any,
     ) -> Response:
@@ -549,6 +564,11 @@ class AsyncBrowserFetcher:
             layout: Record where the page's text was drawn in ``response.layout`` (a
                 :class:`~wintergrab.parser.layout.Layout`), for reading tables and labelled values
                 from what the page looks like (:mod:`wintergrab.extraction.visual`).
+            actions: What to do on the page before it is read: steps such as ``"click .more until-gone"``,
+                ``{"fill": {"#q": "parka"}}``, ``"tabs .tabs a"`` (see :mod:`wintergrab.fetchers.actions`).
+                What each did is in ``response.actions``; ``response.snapshots`` and
+                ``response.downloads`` hold what they kept.
+            downloads: The directory ``download`` steps save files in (a temporary one otherwise).
             capture: Record the page's own API calls (XHR/fetch) in
                 ``response.captured``: ``True`` for JSON responses, a URL glob or
                 substring (``"*/api/*"``, ``"graphql"``), or a function of the URL.
@@ -563,13 +583,14 @@ class AsyncBrowserFetcher:
         offline = layer is not None and layer.cache.mode == "offline"
         # Captures, screenshots and layouts need a live page, so they bypass the cache -
         # except offline, where the network is never used.
-        use_cache = layer is not None and (offline or (not capture and not screenshot and not layout))
+        steps = parse_actions(actions) if actions else []
+        use_cache = layer is not None and (offline or (not capture and not screenshot and not layout and not steps))
         if use_cache:
             assert layer is not None
             cached, _, _ = layer.before(req, self.adaptive_storage)
             if cached is not None:
-                if capture or screenshot or layout:
-                    log.warning("offline: %s served from cache without captures, screenshot or layout", url)
+                if capture or screenshot or layout or steps:
+                    log.warning("offline: %s served from cache without captures, screenshot, layout or actions", url)
                 return cached
         if self.network_policy is not None:
             await self.network_policy.check(url, proxied=self._proxied(proxy))
@@ -595,6 +616,8 @@ class AsyncBrowserFetcher:
                         screenshot,
                         _capture_matcher(capture),
                         layout,
+                        steps,
+                        downloads,
                     )
             except (asyncio.CancelledError, NetworkPolicyError):
                 raise
@@ -646,8 +669,11 @@ class AsyncBrowserFetcher:
             return NetworkError(url, message, kind="connect", **common)
         return BrowserFetchError(url, message, **common)
 
-    def _router(self, page: Any, blocked: Counter[str], proxied: bool) -> Callable[[Any], Awaitable[None]]:
-        """A route handler applying the resource filter and the network policy to every request of ``page``."""
+    def _router(
+        self, page: Any, blocked: Counter[str], proxied: bool, refused: list[str] | None = None
+    ) -> Callable[[Any], Awaitable[None]]:
+        """A route handler applying the resource filter and the network policy to every request of ``page``
+        (the addresses the policy refuses go in ``refused``, the last 20)."""
         resource_filter, policy = self.resource_filter, self.network_policy
 
         async def handle(route: Any) -> None:
@@ -663,6 +689,8 @@ class AsyncBrowserFetcher:
                     await policy.check(url, proxied=proxied)
                 except NetworkPolicyError:
                     reason = "policy"
+                    if refused is not None:
+                        refused[:] = [*refused[-19:], url]
                 except FetchError:
                     pass  # e.g. a name that does not resolve: let the browser report it
             if reason is None and resource_filter is not None:
@@ -712,6 +740,8 @@ class AsyncBrowserFetcher:
         screenshot: str | Path | bool | None,
         capture: Callable[[str, str], bool] | None = None,
         layout: bool = False,
+        steps: Sequence[Action] = (),
+        downloads: str | Path | None = None,
     ) -> Response:
         timeout_ms = (timeout or self.timeout) * 1000
         context_key, context = await self._acquire_context(proxy)
@@ -722,10 +752,11 @@ class AsyncBrowserFetcher:
             raise
         started = time.monotonic()
         blocked: Counter[str] = Counter()
+        refused: list[str] = []
         proxied = self._proxied(proxy)
         try:
             if self.resource_filter or self.network_policy is not None:
-                await page.route("**/*", self._router(page, blocked, proxied))
+                await page.route("**/*", self._router(page, blocked, proxied, refused))
             if headers:
                 await page.set_extra_http_headers(dict(headers))
             if isinstance(self.cookies, Mapping) and self.cookies:
@@ -772,6 +803,17 @@ class AsyncBrowserFetcher:
                     pass
 
             page.on("response", on_response)
+            console: list[dict[str, str]] = []
+
+            def on_console(message: Any) -> None:
+                if len(console) < _CONSOLE_KEPT:
+                    try:
+                        console.append({"type": message.type, "text": message.text[:2000]})
+                    except Exception:  # pragma: no cover - page may be closing
+                        pass
+
+            page.on("console", on_console)
+            page.on("pageerror", lambda error: on_console(_PageError(str(error))))
             nav = await page.goto(req.url, wait_until=wait_until or self.wait_until, timeout=timeout_ms)
             if self.wait_for_challenge:
                 await self._wait_out_challenge(page)
@@ -781,6 +823,20 @@ class AsyncBrowserFetcher:
                 await self._scroll(page, 10 if scroll is True else int(scroll))
             if page_action is not None:
                 await maybe_await(page_action(page))
+            done = None
+            if steps:
+                refused.clear()
+                try:
+                    done = await run_actions(page, steps, timeout=timeout or self.timeout, downloads=downloads)
+                except BrowserFetchError as exc:
+                    if refused and page.url.startswith("chrome-error:"):  # a step led where the policy refuses
+                        raise NetworkPolicyError(
+                            req.url,
+                            f"browser action {exc.context.get('action')!r} led to {refused[-1]}, which the"
+                            " network policy refuses",
+                            context={"action": exc.context.get("action"), "refused": refused[-1]},
+                        ) from None
+                    raise
             if wait:
                 await page.wait_for_timeout(wait * 1000)
             if grabbing:
@@ -835,6 +891,9 @@ class AsyncBrowserFetcher:
             response.captured = sorted(captured, key=lambda c: c.order)
             response.screenshot = png
             response.layout = drawn
+            response.console = console
+            if done is not None:
+                response.actions, response.snapshots, response.downloads = done.log, done.snapshots, done.downloads
             response.cookie_jar = [dict(c) for c in jar]
             response.blocked_resources = dict(blocked)
             response.ip = address

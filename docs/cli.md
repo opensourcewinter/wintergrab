@@ -58,6 +58,10 @@ wintergrab get https://example.com -o page.html
 # JavaScript page, in a headless browser
 wintergrab get https://quotes.toscrape.com/js/ --browser --wait-for .quote --css ".quote .text::text"
 wintergrab get https://example.com --browser --scroll --screenshot page.png
+
+# Do things on the page first: load everything, open every tab
+wintergrab get https://shop.example/ --do "dismiss #cookies button" --do "click .load-more until-gone" \
+    --do "tabs .tabs a"
 ```
 
 Options:
@@ -79,6 +83,7 @@ Options:
 | `-b/--browser` | Use a headless browser. |
 | `--wait-for SEL`, `--wait SEC`, `--scroll`, `--headful`, `--screenshot FILE` | Browser options. |
 | `--block-trackers` | (browser) Also block ads, analytics and tracker requests. |
+| `--do STEP`, `--actions FILE`, `--downloads DIR` | (browser) [Browser actions](fetching.md#browser-actions) done on the page before it is read: `"click .more until-gone"`, `"fill #q => parka"`, `"tabs .tabs a"`, `"download a.csv"`... (repeatable; or a JSON/YAML list in FILE). What each did is printed; the HTML kept by `tabs` and `snapshot` steps follows the page's Markdown. |
 | `--layout` | (browser) Record where the page draws its text: `--extract` then reads labelled values from it (a tile's number under its label). See [visual](visual.md). |
 | `--visual-tables` | (browser) The tables the page draws, whatever its HTML, as JSON with their records. |
 | `--vision` | (`--extract`, `--model`; browser) Show the model the page's screenshot too; what it reads only there is marked `image-only`. |

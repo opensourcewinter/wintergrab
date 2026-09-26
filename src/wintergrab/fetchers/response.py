@@ -160,6 +160,14 @@ class Response:
         self.blocked_resources: dict[str, int] = {}
         #: A browser fetch's full-page PNG screenshot (``screenshot=True``).
         self.screenshot: bytes | None = None
+        #: What a browser fetch's ``actions`` did, step by step: ``{"step", "ok", "detail"}``.
+        self.actions: list[dict[str, Any]] = []
+        #: The page's HTML kept by ``tabs`` and ``snapshot`` actions: ``{"after", "html"}``.
+        self.snapshots: list[dict[str, str]] = []
+        #: Files kept by ``download`` actions: ``{"url", "path", "name", "bytes"}``.
+        self.downloads: list[dict[str, Any]] = []
+        #: The page's console messages and uncaught script errors (browser fetches): ``{"type", "text"}``.
+        self.console: list[dict[str, str]] = []
         self._layout: Any = None
         self._pdf: Any = None
 

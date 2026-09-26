@@ -526,6 +526,28 @@
   `wintergrab.extraction.model` (still importable from
   `wintergrab.models`). docs/visual.md.
 
+### Browser actions (`wintergrab.fetchers.actions`)
+
+- `browser.get(url, actions=[...])` does steps on the page before it is
+  read, written as data: `"click .more until-gone"`, `"expand .faq
+  summary"`, `"dismiss #cookies button"`, `"fill #q => parka"`, `"select
+  #sort => price"`, `"press Enter"`, `"wait .results"`, `"scroll 5"`,
+  `"tabs .tabs a"`, `"snapshot"`, `"screenshot F"`, `"pdf F"`, `"download
+  a.csv"`. `response.actions` says what each did; `response.snapshots` keeps
+  the HTML after each tab, and `response.downloads` the files (their names
+  only, 200 MB at most). No step runs a script.
+- A step that cannot be done stops the page with a `BrowserFetchError`
+  naming it, not retried; `dismiss` and `optional` steps are passed over.
+  Steps are held to the network policy: one that leads where it refuses
+  raises `NetworkPolicyError` naming the step and the address, and one that
+  leads to a page that does not load stops the page.
+- The same steps in a spider (`Request(..., options={"actions": [...]})`)
+  and on the command line: `get --do STEP` (repeatable), `--actions FILE`
+  (JSON or YAML), `--downloads DIR`. `get` prints what each step did, and
+  after the page's Markdown, each tab's.
+- `response.console`: a browser page's console messages and uncaught script
+  errors.
+
 ### `wintergrab benchmark` and `wintergrab extract`
 
 - `wintergrab benchmark` (`wintergrab.bench`) measures WINTERGRAB on this

@@ -23,6 +23,7 @@ OUTPUT = ROOT / "docs" / "api.md"
 #: The modules documented, in order, with what each is for.
 MODULES = [
     ("wintergrab", "Fetching, parsing and the most used names"),
+    ("wintergrab.fetchers.actions", "Browser actions"),
     ("wintergrab.spider", "Crawling"),
     ("wintergrab.extraction", "Typed records from pages"),
     ("wintergrab.extraction.templates", "Ready-made schemas"),

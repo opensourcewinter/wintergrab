@@ -40,7 +40,18 @@ REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 # Per-request options that only make sense for browser fetchers.
 BROWSER_ONLY_OPTIONS = frozenset(
-    {"wait_for", "wait", "wait_until", "scroll", "page_action", "screenshot", "capture", "layout"}
+    {
+        "wait_for",
+        "wait",
+        "wait_until",
+        "scroll",
+        "page_action",
+        "screenshot",
+        "capture",
+        "layout",
+        "actions",
+        "downloads",
+    }
 )
 
 

@@ -119,6 +119,17 @@ class ShopSpider(Spider):
 Sessions start lazily, so a browser session costs nothing until a request
 uses it.
 
+A browser request can do things on its page before the callback reads it:
+the [browser actions](fetching.md#browser-actions) of `wintergrab get --do`.
+
+```python
+yield Request(url, session="browser", options={"actions": ["dismiss #cookies button", "click .more until-gone"]})
+
+def parse(self, response):
+    response.actions     # what each step did
+    response.snapshots   # the HTML kept by "tabs" and "snapshot" steps
+```
+
 Shortcuts:
 
 - `use_browser = True` makes a headless browser the default session.

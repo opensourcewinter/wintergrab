@@ -12,7 +12,7 @@ checks that it is up to date.
   - `export_cookies(self, url: str | None = None, *, proxy: str | None = None) -> list[dict[str, Any]]`: Cookies of the browser session (optionally only those sent to ``url``).
   - `get(self, url: str, **kwargs: Any) -> Response`
   - `get_many(self, urls: Iterable[str], *, concurrency: int | None = None, return_exceptions: bool = True, **kwargs: Any) -> list[Response | FetchError]`: Render many pages concurrently (bounded by ``max_pages``).
-  - `request(self, method: str, url: str, *, proxy: str | None = None, headers: Mapping[str, str] | None = None, timeout: float | None = None, retries: int | None = None, wait_for: str | None = None, wait: float = 0.0, wait_until: str | None = None, scroll: bool | int = False, page_action: Callable[[Any], Any] | None = None, screenshot: str | Path | bool | None = None, capture: bool | str | Callable[[str], bool] | None = None, layout: bool = False, request: Request | None = None, **_ignored: Any) -> Response`: Open ``url`` in a new tab and return the rendered page.
+  - `request(self, method: str, url: str, *, proxy: str | None = None, headers: Mapping[str, str] | None = None, timeout: float | None = None, retries: int | None = None, wait_for: str | None = None, wait: float = 0.0, wait_until: str | None = None, scroll: bool | int = False, page_action: Callable[[Any], Any] | None = None, screenshot: str | Path | bool | None = None, capture: bool | str | Callable[[str], bool] | None = None, layout: bool = False, actions: Any = None, downloads: str | Path | None = None, request: Request | None = None, **_ignored: Any) -> Response`: Open ``url`` in a new tab and return the rendered page.
   - `start(self)`: Launch the browser (done automatically on the first request).
 - **`AsyncFetcher(*, max_connections: int = 64, **kwargs: Any)`** (class). Asynchronous version of :class:`Fetcher` for fetching many pages at once.
   - `aclose(self)`
@@ -267,6 +267,15 @@ checks that it is up to date.
 - **`render(url: str, **kwargs: Any) -> Response`**. Load a page in a headless browser and return the rendered HTML::
 - **`sitemap(url: str, *, follow: bool = True, max_sitemaps: int = 200, since: str | datetime | None = None, **fetch_options: object) -> list[SitemapEntry]`**. Every page URL listed in a sitemap (following sitemap indexes).
 - **`url_template(url: str, *, include_host: bool = True, include_query: bool = True) -> str`**. The route pattern of a URL.
+
+## `wintergrab.fetchers.actions`: Browser actions
+
+- **`VERBS`**: a dict
+- **`Action(verb: str, target: str = '', value: str | None = None, repeat: int = 1, until_gone: bool = False, optional: bool = False)`** (class). One step (see the module docs).
+- **`ActionsResult(log: list[dict[str, Any]] = ..., snapshots: list[dict[str, str]] = ..., downloads: list[dict[str, Any]] = ...)`** (class). What the steps did: a log, and what they kept.
+- **`load_actions(path: str | Path) -> list[Action]`**. Steps from a JSON or YAML file holding a list of them.
+- **`parse_actions(steps: Iterable[str | Mapping[str, Any]] | str | Mapping[str, Any]) -> list[Action]`**. Steps (strings or one-key mappings; see the module docs) as :class:`Action` s.
+- **`run_actions(page: Any, actions: Sequence[Action], *, timeout: float = 30.0, downloads: str | Path | None = None) -> ActionsResult`**. Do ``actions`` on a Playwright page, in order (see the module docs); ``timeout`` in seconds per step.
 
 ## `wintergrab.spider`: Crawling
 

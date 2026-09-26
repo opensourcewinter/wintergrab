@@ -270,6 +270,10 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             options["screenshot"] = args.screenshot or True
         if getattr(args, "layout", False) or getattr(args, "visual_tables", False):
             options["layout"] = True
+        if getattr(args, "steps", None):
+            options["actions"] = args.steps
+            if args.downloads:
+                options["downloads"] = args.downloads
         if args.capture:
             options["capture"] = args.capture_filter or True
             options.setdefault("wait_until", "networkidle")
@@ -348,6 +352,18 @@ def cmd_get(args: argparse.Namespace) -> int:
         return 2
     if args.layout or args.visual_tables or args.vision:
         args.browser = True  # what a page looks like needs a browser to draw it
+    args.steps = []
+    try:
+        from .fetchers.actions import load_actions, parse_actions
+
+        if args.actions:
+            args.steps += load_actions(args.actions)
+        args.steps += parse_actions(args.do or [])
+    except (WintergrabError, OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.steps:
+        args.browser = True  # actions are done in a browser
     fields = _fields(args)
     if fields and not args.each:
         args.each = ["html"]  # one record for the whole page
@@ -384,6 +400,8 @@ def cmd_get(args: argparse.Namespace) -> int:
         page = result
         if args.verbose >= 0:
             print(f"{page.status} {page.url} ({len(page.body):,} bytes, {page.elapsed:.2f}s)", file=sys.stderr)
+            for done in page.actions:
+                print(f"  {'ok' if done['ok'] else '--'} {done['step']}: {done['detail']}", file=sys.stderr)
         if page.status >= 400:
             failures += 1
         multi = len(urls) > 1
@@ -484,6 +502,11 @@ def cmd_get(args: argparse.Namespace) -> int:
                 )
             else:
                 chunks.append(page.markdown(main_content=args.main_content))
+                for kept in page.snapshots:  # tabs: each one's content, as it was shown
+                    shown = Response(page.url, body=kept["html"].encode(), headers={"content-type": "text/html"})
+                    chunks.append(
+                        f"\n<!-- after {kept['after']} -->\n\n" + shown.markdown(main_content=args.main_content)
+                    )
 
     if extractor is not None and hasattr(extractor, "close"):
         extractor.close()  # a healing extractor keeps what it learned
@@ -2411,6 +2434,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="(--extract, --model; implies --browser) show the model the page's screenshot too",
     )
+    g.add_argument(
+        "--do",
+        action="append",
+        metavar="STEP",
+        help='(implies --browser) do this on the page first: "click .more until-gone", "expand .faq button", '
+        '"dismiss #cookies button", "fill #q => parka", "press Enter", "wait .results", "scroll 5", '
+        '"tabs .tabs a", "pdf page.pdf", "download a.csv" (repeatable; see docs/fetching.md)',
+    )
+    g.add_argument("--actions", metavar="FILE", help="(implies --browser) the steps, from a JSON or YAML list")
+    g.add_argument("--downloads", metavar="DIR", help="(download steps) where to keep the files")
     g.add_argument("--capture", action="store_true", help="(browser) record the page's own JSON API calls")
     g.add_argument(
         "--why", metavar="FIELD", help="(--extract) say why FIELD is what it is (or empty) on the page, and how sure"
