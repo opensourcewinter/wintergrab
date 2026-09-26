@@ -16,12 +16,14 @@ import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import __version__
 from .errors import ConfigurationError, FetchError, WintergrabError, describe
 from .fetchers import AsyncBrowserFetcher, AsyncFetcher, Response
 from .parser import Selector
 from .proxy import ProxyRotator
+from .request import Request
 from .spider import Spider
 from .spider.exporters import dumps, to_dict
 from .utils import configure_logging, ensure_scheme, host_of
@@ -57,6 +59,12 @@ EPILOG_CRAWL = """examples:
 
 Press Ctrl+C once to pause (state is saved when --crawl-dir is set); run the
 same command again to resume. Press Ctrl+C twice to force quit.
+"""
+
+EPILOG_INSPECT = """examples:
+  wintergrab inspect https://shop.example                 # 30 pages, robots.txt and sitemaps
+  wintergrab inspect https://shop.example --pages 100 -o shop.profile.json
+  wintergrab inspect https://app.example --browser        # render pages, record their XHR/fetch calls
 """
 
 EPILOG_HISTORY = """examples:
@@ -451,6 +459,121 @@ class QuickSpider(Spider):
                 links.append(next_url)
         for link in dict.fromkeys(links):
             yield response.follow(link)
+
+
+class InspectSpider(QuickSpider):
+    """The spider behind ``wintergrab inspect``: wander a few pages, record the site's API calls."""
+
+    name = "inspect"
+    capture_api = False
+
+    def _capturing(self, outputs: Any) -> Any:
+        for output in outputs:
+            if isinstance(output, Request) and self.capture_api:
+                output.options["capture"] = True
+            yield output
+
+    def start_requests(self) -> Any:
+        yield from self._capturing(Request(url, dont_filter=False) for url in self.start_urls)
+
+    def parse(self, response: Response) -> Any:
+        yield from self._capturing(super().parse(response))
+
+
+def _sitemap_sample(
+    profiler: Any, origin: str, robots_text: str | None, sample: int, **fetch_options: Any
+) -> list[str]:
+    """Read the site's sitemaps (a bounded number) into the profile; return up to ``sample`` page URLs
+    spread across them, to profile more than the pages linked from the start page."""
+    from .fetchers import Fetcher
+    from .sitemaps import parse_sitemap, robots_sitemaps
+
+    queue = robots_sitemaps(robots_text, origin + "/robots.txt") if robots_text else []
+    queue = queue or [origin + "/sitemap.xml"]
+    seen: set[str] = set()
+    indexes = sitemaps = 0
+    entries: list[Any] = []
+    with Fetcher(**fetch_options) as fetcher:
+        while queue and len(seen) < 10 and len(entries) < 50_000:
+            url = queue.pop(0)
+            if url in seen:
+                continue
+            seen.add(url)
+            try:
+                response = fetcher.get(url)
+            except WintergrabError:
+                continue
+            if not response.ok:
+                continue
+            _, found = parse_sitemap(response.body, response.url)
+            if not found:
+                continue
+            sitemaps += 1
+            children = [e.loc for e in found if e.kind == "sitemap"]
+            if children:
+                indexes += 1
+                queue.extend(children)
+            entries.extend(e for e in found if e.kind == "url")
+    if sitemaps:
+        profiler.add_sitemaps(sitemaps, indexes, entries)
+    host = host_of(origin)
+    pages = [e.loc for e in entries if host_of(e.loc) == host]
+    step = max(1, len(pages) // sample) if sample else 0
+    return pages[::step][:sample] if step else []
+
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+    from .fetchers import Fetcher
+    from .intel.profile import SiteProfiler
+
+    start = ensure_scheme(args.url)
+    parts = urlsplit(start)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    profiler = SiteProfiler()
+    robots_text: str | None = None
+    try:
+        with Fetcher(timeout=args.timeout) as fetcher:
+            robots = fetcher.get(origin + "/robots.txt")
+        robots_text = robots.text if robots.status == 200 else None
+        profiler.add_robots(robots_text, found=robots_text is not None)
+    except WintergrabError as exc:
+        print(f"note: could not read robots.txt ({exc})", file=sys.stderr)
+    samples: list[str] = []
+    if not args.no_sitemaps:
+        samples = _sitemap_sample(profiler, origin, robots_text, max(0, args.pages // 3), timeout=args.timeout)
+    spider = InspectSpider(
+        start_urls=list(dict.fromkeys([start, *samples])),
+        allowed_domains=[host_of(start)],
+        max_pages=args.pages,
+        profile=profiler,
+        obey_robots_txt=not args.no_robots,
+        use_browser=args.browser,
+        capture_api=args.browser,
+        timeout=args.timeout,
+        output=None,
+        keep_items=False,
+        progress=False,
+        log_level="DEBUG" if args.verbose > 0 else "WARNING",
+    )
+    try:
+        result = spider.run(resume=False)
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    profile = result.profile
+    if profile is None:
+        print("error: no profile could be built", file=sys.stderr)
+        return 1
+    data = json.dumps(profile.to_dict(), indent=2, ensure_ascii=False, default=str)
+    if args.output:
+        Path(args.output).write_text(data, encoding="utf-8")
+    if args.json:
+        print(data)
+    else:
+        print(profile.describe(args.show))
+        if args.output:
+            print(f"saved the full profile to {args.output}", file=sys.stderr)
+    return 0
 
 
 def load_spider_class(target: str) -> type[Spider]:
@@ -1377,6 +1500,24 @@ def build_parser() -> argparse.ArgumentParser:
     log = actions.add_parser("log", help="list the versions saved in a versions directory")
     log.add_argument("directory", metavar="DIR")
     log.set_defaults(func=cmd_data_log)
+
+    ins = sub.add_parser(
+        "inspect",
+        help="profile a website: technologies, page types, templates, APIs, crawlability",
+        description="Read a site's robots.txt and sitemaps, visit a sample of its pages, and describe the site.",
+        epilog=EPILOG_INSPECT,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ins.add_argument("url", metavar="URL")
+    ins.add_argument("--pages", type=int, default=30, metavar="N", help="pages to visit (default 30)")
+    ins.add_argument("--browser", "-b", action="store_true", help="render pages and record their API calls")
+    ins.add_argument("--no-robots", action="store_true", help="do not obey robots.txt (it is still read)")
+    ins.add_argument("--no-sitemaps", action="store_true", help="do not read the sitemaps")
+    ins.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (default 20)")
+    ins.add_argument("-o", "--output", metavar="FILE", help="save the full profile as JSON")
+    ins.add_argument("--json", action="store_true", help="print the profile as JSON")
+    ins.add_argument("--show", type=int, default=8, metavar="N", help="entries per section (8)")
+    ins.set_defaults(func=cmd_inspect)
 
     h = sub.add_parser(
         "history",

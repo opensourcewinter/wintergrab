@@ -57,6 +57,8 @@ class CrawlResult:
     metrics: dict[str, Any] = field(default_factory=dict)
     #: With ``history``: what changed since the previous run (a :class:`~wintergrab.history.ChangeReport`).
     changes: Any = None
+    #: With ``profile``: the site's :class:`~wintergrab.intel.SiteProfile`.
+    profile: Any = None
 
     @property
     def paused(self) -> bool:
@@ -274,6 +276,10 @@ class Spider:
     #: With ``history``: don't fetch pages that have probably not changed since they were last
     #: seen, judging by how often they changed before. Start URLs are always fetched.
     skip_fresh: bool = False
+    #: Profile the site while crawling (``result.profile``): technologies, page types, templates,
+    #: API endpoints, crawlability... ``True``, a path to also save it as JSON, or a
+    #: :class:`~wintergrab.intel.SiteProfiler`.
+    profile: Any = False
     #: Log level for the ``wintergrab`` logger (``None`` leaves logging alone).
     log_level: str | None = "INFO"
     #: Seconds between progress log lines.

@@ -176,6 +176,19 @@ fields that changed, writes the details with `-o`, and with `--exit-code`
 exits with status 1 when they differ. See [data.md](data.md) and
 [entities.md](entities.md).
 
+## `wintergrab inspect`: profile a website
+
+```bash
+wintergrab inspect URL [--pages N] [--browser] [--no-robots] [--no-sitemaps] [-o PROFILE.json] [--json]
+```
+
+Reads the site's robots.txt and sitemaps, visits `--pages` pages (30): the
+start page and a sample spread across the sitemaps, obeying robots.txt. It
+prints the site's technologies, languages, page types, templates, structured
+data, links, API endpoints, sitemaps and crawlability. `--browser` renders
+the pages and records their XHR/fetch calls. See
+[intelligence.md](intelligence.md#site-profiles).
+
 ## `wintergrab history`: what changed between crawls
 
 ```bash

@@ -62,7 +62,7 @@ _REFINES = {"news": "article", "category": "listing", "search": "listing", "arch
 _NAVIGATION = frozenset({"nav", "header", "footer", "aside"})
 
 _URL_RULES: list[tuple[str, float, re.Pattern[str]]] = [
-    ("product", 2.0, re.compile(r"/(?:products?|p|dp|item|items|sku|pd|gp/product)/[^/]+|[-_/]p[-_]?\d{3,}(?:\.html?)?$|/\d{5,}\.html?$")),
+    ("product", 2.0, re.compile(r"/(?:products?|p|dp|item|items|sku|pd|gp/product)/(?!page(?:/|$))[^/]+|[-_/]p[-_]?\d{3,}(?:\.html?)?$|/\d{5,}\.html?$")),
     ("category", 2.0, re.compile(r"/(?:category|categories|c|collections?|shop|department|departments|catalog|catalogue|browse)(?:/|$)")),
     ("news", 2.0, re.compile(r"/(?:news|press|press-releases?|newsroom)(?:/|$)")),
     ("article", 2.0, re.compile(r"/(?:blog|article|articles|post|posts|stories|story|insights|magazine)/[^/]+|/\d{4}/\d{2}/(?:\d{2}/)?[^/]+")),
@@ -130,6 +130,7 @@ def _path_of(url: str | None) -> tuple[str, dict[str, list[str]]]:
     return parts.path or "/", parse_qs(parts.query)
 
 
+_PAGE_PATH = re.compile(r"/page/\d+/?$")
 _HOME = re.compile(r"/(?:index\.\w+|home|[a-z]{2}(?:-[a-z]{2})?/?)")
 
 
@@ -142,8 +143,8 @@ def _url_evidence(path: str, query: dict[str, list[str]]) -> list[tuple[str, flo
         out.append(("homepage", 4.0, "site root"))
     if _SEARCH_PARAMS & set(query):
         out.append(("search", 3.0, "search query in the URL"))
-    if _PAGE_PARAMS & set(query):
-        out.append(("listing", 0.5, "page number in the URL"))
+    if _PAGE_PARAMS & set(query) or _PAGE_PATH.search(path):
+        out.append(("listing", 1.0, "page number in the URL"))
     return out
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import inspect
+import json
 import logging
 import pickle
 import random
@@ -170,6 +171,7 @@ class Engine:
         self.history: Any = None  # a PageHistory while recording
         self._history_run: int | None = None
         self._own_history = False
+        self.profiler: Any = None  # a SiteProfiler with ``profile``
 
     # ------------------------------------------------------------------ #
     # control (thread-safe entry points)
@@ -279,6 +281,7 @@ class Engine:
             await maybe_await(spider.on_start())
             await self._open_pipelines()
             self._open_history(state)
+            self._open_profiler()
             if state is not None:
                 self._restore(state)
             elif spider.retry_dead_letters:
@@ -510,6 +513,42 @@ class Engine:
         else:
             self._history_run = self.history.start_run(self.spider.name)
 
+    def _open_profiler(self) -> None:
+        setting = self.spider.profile
+        if not setting:
+            return
+        from ..intel.profile import SiteProfiler
+
+        self.profiler = setting if isinstance(setting, SiteProfiler) else SiteProfiler()
+
+    def _profile_page(self, response: Response, latency: float | None) -> None:
+        try:
+            self.profiler.observe(response, latency=latency)
+        except Exception as exc:  # profiling must never break a crawl
+            self.stats.inc("profile_errors")
+            log.error("could not profile %s: %s", response.url, describe(exc))
+
+    def _close_profiler(self) -> Any:
+        if self.profiler is None:
+            return None
+        try:
+            if self.profiler.robots is None and self.robots is not None and self.spider.start_urls:
+                origin = RobotsPolicy.origin(str(self.spider.start_urls[0]))
+                if origin in self.robots.texts:
+                    text = self.robots.texts[origin]
+                    self.profiler.add_robots(text, found=text is not None)
+            if self.history is not None and self._history_run is not None and self.profiler.change_frequency is None:
+                self.profiler.change_frequency = self.history.change_frequency(self._history_run)
+            profile = self.profiler.profile()
+            if isinstance(self.spider.profile, (str, Path)):
+                Path(self.spider.profile).write_text(
+                    json.dumps(profile.to_dict(), indent=2, ensure_ascii=False, default=str), encoding="utf-8"
+                )
+            return profile
+        except Exception as exc:
+            log.error("could not build the site profile: %s", describe(exc))
+            return None
+
     # The history must never break a crawl: its errors are counted and logged.
     def _history_failed(self, what: str, exc: Exception) -> None:
         self.stats.inc("history_errors")
@@ -718,6 +757,7 @@ class Engine:
         self.stats["status"] = status
         if self.dead_letters is not None and self.dead_letters.added:
             self.stats["dead_letters"] = self.dead_letters.added
+        profile = self._close_profiler()
         changes = self._close_history(status)
         result = CrawlResult(
             items=self.items,
@@ -727,6 +767,7 @@ class Engine:
             failures=self.failures.diagnose(self.throttle),
             metrics=self.snapshot(),
             changes=changes,
+            profile=profile,
         )
         self._log_progress(final=True)
         try:
@@ -1011,6 +1052,8 @@ class Engine:
                 self.metrics.observe_latency(latency)
                 if response.source == "browser":
                     self.stats.inc("browser_pages")
+            if self.profiler is not None:
+                self._profile_page(response, latency if live else None)
             if self._emit_response:
                 self.events.emit(
                     "response",

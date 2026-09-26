@@ -345,3 +345,105 @@ def test_builtin_markers_have_literals() -> None:
     for rule in TechDetector().rules:
         for pattern in rule.html:
             assert _literals(pattern)[1], (rule.name, pattern)
+
+
+# ---------------------------------------------------------------------------------------------- site profiles
+
+
+def _wp_product(i: int) -> Response:
+    head = (
+        f'<meta name="generator" content="WordPress 6.4.2"><link rel="canonical" href="/p/{i}">'
+        f'<link rel="alternate" hreflang="de-DE" href="https://shop.example/de/p/{i}">'
+        f'<link rel="alternate" type="application/json" href="/wp-json/wp/v2/product/{i}">'
+        '<meta property="og:locale" content="en_GB">'
+    )
+    head += ld({"@context": "https://schema.org", "@type": "Product", "name": f"P{i}",
+                "offers": {"@type": "Offer", "price": "9.99", "priceCurrency": "GBP"}})  # fmt: skip
+    body = (
+        f"<h1>Product {i}</h1><p class='price'>£9.99</p><button>Add to cart</button>"
+        "<a href='/category/phones'>Phones</a><a href='https://facebook.com/shop'>fb</a>"
+        "<div data-endpoint='/api/stock?sku=1'></div>"
+        "<script>fetch('/api/reviews?product=1&page=2').then(r => r.json());"
+        "axios.post('/api/cart', {id: 1}); $.getJSON('https://shop.example/api/prices');"
+        "var img = '/static/logo.png'; var q = '/graphql';</script>"
+    )
+    html = f"<!doctype html><html lang='en-GB'><head>{head}</head><body>{body}</body></html>"
+    headers = {"content-type": "text/html", "server": "nginx", "content-language": "en"}
+    response = Response(f"https://shop.example/p/{i}", body=html.encode(), headers=headers, elapsed=0.2)
+    return response
+
+
+def test_site_profile() -> None:
+    from wintergrab.fetchers.browser import CapturedResponse
+    from wintergrab.intel import SiteProfiler
+
+    profiler = SiteProfiler()
+    for i in (101, 102, 103):
+        profiler.observe(_wp_product(i))
+    shell = Response(
+        "https://shop.example/app",
+        body=b"<html><head><script src='/a.js'></script></head><body><div id='root'></div></body></html>",
+        headers={"content-type": "text/html"},
+    )
+    shell.captured = [
+        CapturedResponse(
+            "https://shop.example/api/v2/items?page=1", "GET", 200, {"content-type": "application/json"}, b"[]"
+        )
+    ]
+    profiler.observe(shell)
+    profiler.observe(Response("https://shop.example/gone", status=404, body=b"<h1>Not found</h1>"))
+    profiler.observe(Response("https://shop.example/slow", status=429, body=b"slow down"))
+    profiler.add_robots("User-agent: *\nDisallow: /admin\nCrawl-delay: 2\nSitemap: https://shop.example/sitemap.xml\n")
+    profile = profiler.profile()
+
+    assert profile.domains == ["shop.example"] and profile.pages == 6
+    assert profile.statuses == {200: 4, 404: 1, 429: 1} and profile.error_rate == round(2 / 6, 4)
+    assert profile.average_latency == 0.2
+    names = {tech["name"]: tech for tech in profile.technologies}
+    assert names["WordPress"]["version"] == "6.4.2" and names["WordPress"]["pages"] == 3
+    assert profile.languages == {"en": 3} and profile.regions[:2] == ["GB", "DE"]
+    assert profile.page_types["product"] == 3
+    [products, *_] = profile.templates
+    assert (products.pattern, products.pages, products.page_type) == ("/p/{id}", 3, "product")
+    assert profile.structured_data["Product"] == 3 and profile.structured_data["OpenGraph"] == 3
+    assert profile.external_domains == {"facebook.com": 1} and profile.internal_links == 1
+    endpoints = {(e.method, e.url): e for e in profile.endpoints}
+    assert endpoints[("GET", "https://shop.example/api/v2/items?page=")].source == "captured"
+    linked = endpoints[("GET", "https://shop.example/wp-json/wp/v2/product/{id}")]  # ids generalized
+    assert (linked.source, linked.pages) == ("link", 3)
+    assert endpoints[(None, "https://shop.example/api/reviews?page=&product=")].pages == 3  # fetch(): method unknown
+    assert endpoints[("POST", "https://shop.example/api/cart")].source == "script"
+    assert ("GET", "https://shop.example/api/prices") in endpoints
+    assert (None, "https://shop.example/api/stock?sku=") in endpoints  # a data- attribute
+    assert (None, "https://shop.example/graphql") in endpoints
+    assert not any("logo.png" in url for _, url in endpoints)  # assets are not APIs
+    platform = endpoints[("GET", "https://shop.example/wp-json/")]
+    assert platform.source == "platform" and platform.note == "WordPress REST API"
+    crawl = profile.crawlability
+    assert crawl["canonical_pages"] == 3 and crawl["js_required_pages"] == 1 and crawl["blocked_pages"] == 1
+    assert crawl["robots"] == {"found": True, "disallow_all": False, "crawl_delay": 2.0, "sitemaps": 1}
+    text = profile.describe()
+    assert "technologies: WordPress 6.4.2 (cms)" in text and "/p/{id}" in text and "crawl-delay 2" in text
+    assert "POST https://shop.example/api/cart" in text
+    assert profile.to_dict()["templates"][0]["pattern"] == "/p/{id}"
+
+
+def test_spiders_and_inspect_build_profiles(site, tmp_path, capsys) -> None:
+    from wintergrab.cli import QuickSpider, main
+
+    saved = tmp_path / "profile.json"
+    spider = QuickSpider(start_urls=[site.url + "/"], max_pages=8, profile=str(saved), log_level=None, progress=False,
+                         autothrottle=False, output=None, keep_items=False)  # fmt: skip
+    result = spider.run(resume=False)
+    profile = result.profile
+    assert profile.pages >= 8 and profile.crawlability["robots"]["found"] is True
+    assert any(t.pattern == "/products/page/{id}" for t in profile.templates)
+    assert json.loads(saved.read_text(encoding="utf-8"))["pages"] == profile.pages
+
+    assert main(["inspect", site.url + "/", "--pages", "12", "-o", str(tmp_path / "inspect.json")]) == 0
+    out = capsys.readouterr().out
+    assert "templates:" in out and "sitemaps:" in out and "robots.txt allows crawling" in out
+    data = json.loads((tmp_path / "inspect.json").read_text(encoding="utf-8"))
+    assert data["sitemaps"]["pages"] > 0 and data["pages"] <= 12
+    assert main(["inspect", site.url + "/", "--pages", "3", "--json", "--no-sitemaps"]) == 0
+    assert json.loads(capsys.readouterr().out)["sitemaps"] is None

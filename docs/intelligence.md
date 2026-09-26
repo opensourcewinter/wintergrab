@@ -165,6 +165,75 @@ it (any header can be set), and technologies that leave no trace in the
 page (databases, most back ends) are only inferred. Treat results as
 evidence with a confidence, which is how they are reported.
 
+## Site profiles
+
+A `SiteProfile` sums up a whole site from its pages:
+
+```bash
+wintergrab inspect https://shop.example                 # robots.txt, sitemaps, and 30 pages
+wintergrab inspect https://shop.example --pages 100 -o shop.profile.json
+wintergrab inspect https://app.example --browser        # render pages, record their XHR/fetch calls
+```
+
+```
+shop.example: 11 pages (10 ok, errors: 404 x1), 0.21 s per response
+technologies: WordPress 6.4.2 (cms), MySQL (database), PHP (language), nginx (web-server)
+languages: en (10); regions: GB, DE
+page types: product 8, category 2
+templates:
+  /p/{id}                         8 pages  product
+  /category/phones/page/{id}      2 pages  category
+structured data: Offer 8, Product 8, OpenGraph 8
+links: 15 internal, 1 external (facebook.com 1)
+APIs:
+  GET https://shop.example/wp-json/wp/v2/product/{id}  (link, 8 page(s))
+  POST https://shop.example/api/cart  (script, 8 page(s))
+  GET https://shop.example/api/prices  (script, 8 page(s))
+  https://shop.example/api/reviews?page=&product=  (script, 8 page(s))
+  https://shop.example/api/stock?sku=  (script, 8 page(s))
+  https://shop.example/graphql  (script, 8 page(s))
+  GET https://shop.example/wp-json/  (platform, WordPress REST API)
+sitemaps: 3 (1 index), 1,000 pages listed, 90% with lastmod
+crawlability: robots.txt allows crawling, crawl-delay 1; 8 page(s) with a canonical link
+```
+
+(The profile of eleven generated pages of a WordPress shop, with a
+robots.txt and sitemaps. On a live site, `inspect` visits the start page and
+a sample spread across the sitemaps, so that more templates show up.)
+
+| Part | From |
+|---|---|
+| technologies | [detection](#technologies) on every page, with the number of pages each was seen on |
+| languages, regions | `<html lang>`, `Content-Language`, `hreflang` alternates, `og:locale`, a country-code domain |
+| page types | [classification](#page-types) of every page |
+| templates | pages grouped by layout (a SimHash of their tag structure), each with its URL pattern (`/p/{id}`) and main page type |
+| structured data | schema.org types, and OpenGraph, per page |
+| links | distinct internal and external links, and the external domains linked most |
+| APIs | calls in inline scripts (`fetch(...)`, axios, jQuery, `xhr.open(...)`), API-looking paths (`/api/`, `/graphql`, `/wp-json/`...), `data-endpoint`-style attributes, JSON alternate links, calls recorded by a browser (`--browser`), and the detected platform's conventional endpoints (marked `platform`: not requested). Ids in paths and query values are generalized (`/product/{id}`, `?page=`) |
+| sitemaps | how many, how many indexes, pages listed, share with `lastmod` |
+| crawlability | robots.txt (allowed, crawl-delay), `noindex` pages, canonical links, pages that need JavaScript (little text and an app shell), 403/429 answers, bot protection seen (reCAPTCHA, hCaptcha, Turnstile) |
+| latency, errors | average response time, statuses, error rate |
+| change frequency | with a [history](history.md): the median change rate of the pages |
+
+In code:
+
+```python
+from wintergrab.intel import SiteProfiler
+
+profiler = SiteProfiler()                 # SiteProfiler(detailed=500): full analysis for the first 500 pages
+for response in responses:
+    profiler.observe(response)
+profiler.add_robots(robots_txt)           # optional: what robots.txt says
+profile = profiler.profile()
+profile.to_dict()                         # everything, as JSON-ready data
+```
+
+A spider builds one with `profile = True` (`result.profile`), or
+`profile = "site.json"` to save it too. Every page counts for statuses,
+latency, links and endpoints; the full analysis (page type, technologies,
+layout, structured data) runs on the first `detailed` pages (500) and
+costs about 6.3 ms per page on one core, 1.9 ms per page after that.
+
 ## Speed
 
 `benchmarks/bench_pages.py` (one core of a 4-vCPU cloud VM, Python 3.11,

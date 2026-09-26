@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+import statistics
 import time
 import zlib
 from collections import Counter
@@ -457,6 +458,16 @@ class PageHistory:
         return Freshness(
             url, first_seen, last_seen, last_changed, observations, changes, rate, round(recrawl, 1), round(fresh, 4)
         )
+
+    def change_frequency(self, run: int | None = None) -> float | None:
+        """The median change rate (changes per day) of the pages of ``run`` (all pages when ``None``)
+        that were fetched at least twice."""
+        if run is None:
+            urls: Iterable[str] = self.urls()
+        else:
+            urls = [row[0] for row in self._db.execute("SELECT url FROM pages WHERE run = ?", (run,))]
+        rates = [info.rate for url in urls if (info := self.freshness(url)) is not None and info.rate is not None]
+        return round(statistics.median(rates), 4) if rates else None
 
     def due(self, url: str, now: float | None = None) -> bool:
         """Whether ``url`` should be fetched again now (always, for a page never seen)."""

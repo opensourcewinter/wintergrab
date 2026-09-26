@@ -208,8 +208,19 @@
   over headers, cookie names, meta tags, asset URLs, HTML markers and the
   URL, with versions, implied technologies and evidence-based confidence.
   Add fingerprints with `TechDetector(extra=[TechRule(...)])`.
+- Site profiles: `SiteProfiler` (and `Spider.profile`, `wintergrab inspect
+  URL`) sums up a site: technologies, languages and regions, page types,
+  template clusters with URL patterns, structured data, links, API
+  endpoints (script calls, API paths, JSON links, browser captures,
+  platform conventions), sitemaps, crawlability (robots.txt, noindex,
+  JavaScript-only pages, bot protection), latency, errors and, with a
+  history, change frequency. `inspect` reads robots.txt and the sitemaps
+  and visits a sample of pages spread across them.
+- Paths ending in `/page/N` count as listing pages, and `/products/page/N`
+  is no longer taken for a product.
 - Measured: 3.0 ms to classify and 0.9 ms to profile an 11 KB product page;
-  20 ms and 12 ms for a page with 480 KB of text; `classify_url` 11 µs.
+  20 ms and 12 ms for a page with 480 KB of text; `classify_url` 11 µs;
+  6.3 ms per page for a site profile's full analysis.
 
 ## 0.2.0
 
