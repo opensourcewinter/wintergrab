@@ -278,7 +278,7 @@ shown, for you to pick one. See [goals.md](goals.md#records-from-the-sites-api).
 ## `wintergrab search`: search results, and what they say
 
 ```bash
-wintergrab search QUERY [QUERY...] [--provider brave|google|searxng] [--endpoint URL] [--pages N] [--delay SEC] [-o FILE [--append]]
+wintergrab search QUERY [QUERY...] [--provider brave|google|searxng] [--endpoint URL] [--pages N] [--param NAME=VALUE] [--delay SEC] [-o FILE [--append]]
 wintergrab search --report FILE [FILE...] [--domain DOMAIN] [--before FILE] [--depth N] [--show N]
 ```
 
@@ -286,7 +286,9 @@ Asks a search API, with your own key (`BRAVE_SEARCH_API_KEY`;
 `GOOGLE_API_KEY` and `GOOGLE_CSE_ID`; `SEARXNG_URL` for your SearXNG), for
 each query's results and the rest of its page (news, videos, local results,
 questions people ask, related searches...): printed, or saved as records
-with `-o` (`--append` adds them to the output, for a history). Requests go
+with `-o` (`--append` adds them to the output, for a history). `--param`
+passes the API's own parameters, such as where and in what language to
+search (`country=de`, `search_lang=de` for Brave). Requests go
 one at a time, `--delay` seconds apart; search engines' own pages are never
 fetched. `--report` reads collected results for the competitors, the
 queries one page can answer and the boxes the pages have, and with

@@ -87,6 +87,7 @@ EPILOG_SEARCH = """examples:
   wintergrab search "budget laptop" --provider searxng --endpoint https://searx.example
   wintergrab search --report serp.jsonl --domain shop.example --before last-week.jsonl
   wintergrab search "budget laptop" -o history.jsonl --append     # each week: --report shows the history
+  wintergrab search "günstiger laptop" --param country=de --param search_lang=de   # where, in what language
 
 Only search APIs are asked, with your own access; search engines' result pages are not fetched.
 Requests go one at a time, a second apart. See docs/search.md.
@@ -844,8 +845,8 @@ def cmd_search(args: argparse.Namespace) -> int:
     show = args.show if args.show is not None else 15
     if args.report:
         searching = (("QUERY", args.query), ("-o", args.output), ("--append", args.append), ("--provider", args.provider),
-                     ("--endpoint", args.endpoint), ("--pages", args.pages), ("--delay", args.delay is not None),
-                     ("--timeout", args.timeout is not None))  # fmt: skip
+                     ("--endpoint", args.endpoint), ("--pages", args.pages), ("--param", args.param),
+                     ("--delay", args.delay is not None), ("--timeout", args.timeout is not None))  # fmt: skip
         misplaced = [name for name, given in searching if given]
         if misplaced:
             print(f"error: {', '.join(misplaced)}: for searching; --report reads results collected", file=sys.stderr)
@@ -865,7 +866,7 @@ def cmd_search(args: argparse.Namespace) -> int:
             return 1
         collections: dict[str, set[str]] = defaultdict(set)
         for result in web:
-            collections[result.query].add(result.fetched)
+            collections[result.searched].add(result.fetched)
         queries = len(collections)
         searched = max(len(times) for times in collections.values())
         dated = sorted(t for times in collections.values() for t in times if t)
@@ -934,6 +935,13 @@ def cmd_search(args: argparse.Namespace) -> int:
     if args.append and not args.output:
         print("error: --append adds to an output: say which with -o FILE", file=sys.stderr)
         return 2
+    params: dict[str, str] = {}
+    for given in args.param or ():
+        name, equals, value = given.partition("=")
+        if not equals or not name.strip():
+            print(f"error: --param {given!r}: say NAME=VALUE (--param country=de)", file=sys.stderr)
+            return 2
+        params[name.strip()] = value
     exporter = open_exporter(args.output, append=args.append) if args.output else None
     delay = args.delay if args.delay is not None else 1.0
     found = others = 0
@@ -942,14 +950,16 @@ def cmd_search(args: argparse.Namespace) -> int:
             if n:
                 time.sleep(delay)
             answer = search(query, provider=args.provider or "brave", endpoint=args.endpoint, pages=args.pages or 1,
-                            delay=delay, timeout=args.timeout or 20)  # fmt: skip
+                            params=params, delay=delay, timeout=args.timeout or 20)  # fmt: skip
             found, others = found + len(answer.results), others + len(answer.modules)
             if exporter is not None:
                 for record in answer.records():
                     exporter.write(record)
             elif args.verbose >= 0:
                 print(
-                    f"{query}  ({len(answer.results)} results" + (f" of {answer.total:,}" if answer.total else "") + ")"
+                    f"{answer.searched}  ({len(answer.results)} results"
+                    + (f" of {answer.total:,}" if answer.total else "")
+                    + ")"
                 )
                 for result in answer.results:
                     print(f"  {result.position:>3}. {result.domain:<28} {result.title[:70]}")
@@ -3049,6 +3059,9 @@ def build_parser() -> argparse.ArgumentParser:
                     "GOOGLE_CSE_ID), searxng (SEARXNG_URL)")  # fmt: skip
     se.add_argument("--endpoint", metavar="URL", help="the API's URL (your SearXNG instance: https://searx.example)")
     se.add_argument("--pages", type=int, metavar="N", help="pages of results per query (1; 10 at most)")
+    se.add_argument("--param", action="append", metavar="NAME=VALUE",
+                    help="one of the API's own parameters, such as where and in what language to search: "
+                    "country=de, search_lang=de (Brave), gl=de, hl=de (Google), language=de (SearXNG); repeatable")  # fmt: skip
     se.add_argument("--delay", type=float, metavar="SEC", help="between requests (1)")
     se.add_argument("--timeout", type=float, metavar="SEC", help="per request (20)")
     se.add_argument("-o", "--output", metavar="FILE", help="save the results as records (.jsonl, .csv, a database...)")

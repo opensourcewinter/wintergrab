@@ -658,6 +658,17 @@ an error that says so, not a setting silently ignored
   search share their `fetched` time), and `ranking_history()` gives a
   domain's position in each, shown by `--report --domain`. The analyses read
   web results only.
+- `--param NAME=VALUE` (`search(params=...)`) passes the API's own
+  parameters: where and in what language to search (Brave's `country` and
+  `search_lang`, Google's `gl` and `hl`, SearXNG's `language`), what to
+  search (SearXNG's `categories`)... Those wintergrab sets (the query, its
+  pages, the key) are refused. Results keep them (`params`), and the
+  analyses tell a query searched with others apart (`SearchResult.searched`:
+  `budget laptop [country=de]`).
+- A page after the first that failed lost the pages read before it: the
+  search now stops there with a note and keeps them. Google documents an
+  error when `start` + `num` passes 100, which the tenth page's did (91 +
+  10): it asks for nine results now.
 - Related searches and questions were printed but not saved with `-o`: they
   are records now. An option of the other mode (`--domain` when searching,
   `--pages` when reading a report, `--before` without `--domain`, `--append`

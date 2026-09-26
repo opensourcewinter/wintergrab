@@ -32,11 +32,12 @@ their order on the page (Brave's ``mixed``, one list's order), each result has i
 The analyses read any records with a query, a position and a URL, however collected (a rank tracker's export,
 a crawl of a site's own search pages): ``read_records`` gives them. They read the web results of each query's
 latest collection (the results of one search share their ``fetched`` time); :func:`ranking_history` reads them
-all.
+all. A query asked with other parameters (``params={"country": "de"}``) is another search to them.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections import Counter, defaultdict
@@ -88,6 +89,8 @@ class Provider:
         modules: Where its answer keeps the page's other results and boxes, by type (``{"news":
             "news.results[]"}``): a list (``[]``), or one value (``"query.altered"``).
         order_path: Where its answer gives the order of the results and boxes on the page (Brave's ``mixed``).
+        limit: How far the page parameter and the page's size may reach together (Google's ``start`` + ``num``:
+            100, beyond which it answers an error): the last page asks for fewer.
     """
 
     name: str
@@ -107,6 +110,7 @@ class Provider:
     type_field: str | None = None
     modules: Mapping[str, str] = field(default_factory=dict)
     order_path: str | None = None
+    limit: int | None = None
 
     def page_value(self, index: int) -> int:
         """The page parameter's value for page ``index`` (0 first)."""
@@ -130,7 +134,7 @@ PROVIDERS: dict[str, Provider] = {
     "google": Provider(
         "google", endpoint="https://www.googleapis.com/customsearch/v1", key_variable="GOOGLE_API_KEY",
         key_param="key", variables={"cx": "GOOGLE_CSE_ID"}, size_param="num", size=10, page_param="start",
-        page_by="first", results_path="items[]",
+        page_by="first", results_path="items[]", limit=100,
         modules={"promotion": "promotions[]", "correction": "spelling.correctedQuery"},
     ),
     "searxng": Provider(
@@ -204,10 +208,18 @@ class SearchResult:
     #: ``latitude``, ``longitude``, ``price_range``; a video's ``duration``, ``creator``, ``publisher``,
     #: ``views``; a discussion's ``forum`` and ``answers``; a news result's ``publisher`` and ``breaking``.
     details: dict[str, Any] = field(default_factory=dict)
+    #: The API's parameters its search was asked with besides the query (``{"country": "de"}``).
+    params: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.domain and self.url:
             self.domain = registrable_domain(urlsplit(self.url).hostname or "")
+
+    @property
+    def searched(self) -> str:
+        """What was searched: the query, with the parameters it was asked with (``budget laptop [country=de]``).
+        The analyses tell searches apart by it."""
+        return _searched(self.query, self.params)
 
     def to_dict(self) -> dict[str, Any]:
         """The result as a record: its fields, then its details (the empty ones left out)."""
@@ -216,7 +228,7 @@ class SearchResult:
             "domain": self.domain, "title": self.title, "snippet": self.snippet, "date": self.date,
         }  # fmt: skip
         record.update({k: v for k, v in self.details.items() if k not in record})
-        record.update(source=self.source, fetched=self.fetched)
+        record.update(params=dict(self.params) or None, source=self.source, fetched=self.fetched)
         return {k: v for k, v in record.items() if v is not None and v != ""}
 
 
@@ -239,6 +251,13 @@ class SearchAnswer:
     total: int | None = None
     #: Why fewer pages were read than asked for, when that happened.
     notes: list[str] = field(default_factory=list)
+    #: The API's parameters it was asked with besides the query.
+    params: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def searched(self) -> str:
+        """The query, with the parameters it was asked with (see :attr:`SearchResult.searched`)."""
+        return _searched(self.query, self.params)
 
     def records(self) -> list[dict[str, Any]]:
         """Its results and modules as records (:meth:`SearchResult.to_dict`), the web results first."""
@@ -252,23 +271,35 @@ def search(
     pages: int = 1,
     endpoint: str | None = None,
     key: str | None = None,
+    params: Mapping[str, Any] | None = None,
     delay: float = 1.0,
     timeout: float = 20.0,
     network_policy: Any = None,
     fetcher: Any = None,
 ) -> SearchAnswer:
-    """Ask a search API for ``query`` (see the module docs): ``pages`` pages of it, ``delay`` seconds apart.
+    """Ask a search API for ``query`` (see the module docs): ``pages`` pages of it, ``delay`` seconds apart. A
+    page after the first that fails ends the search with a note, the pages before it kept.
 
     Args:
         provider: ``"brave"``, ``"google"``, ``"searxng"`` or a :class:`Provider`.
         endpoint: The API's URL, instead of the provider's (a SearXNG instance: ``https://searx.example``).
         key: The key, instead of the environment's.
+        params: More of the API's own parameters: where and in what language to search (Brave's ``country`` and
+            ``search_lang``, Google's ``gl`` and ``hl``, SearXNG's ``language``), what to search
+            (SearXNG's ``categories``)... Those wintergrab sets (the query, its pages, the key) are refused.
+            The results keep them, and the analyses tell searches with different ones apart
+            (:attr:`SearchResult.searched`).
         network_policy: Where requests may go (see :class:`~wintergrab.NetworkPolicy`).
         fetcher: A :class:`~wintergrab.Fetcher` to ask with (by default one of its own).
     """
     spec = PROVIDERS.get(provider) if isinstance(provider, str) else provider
     if spec is None:
         raise ConfigurationError(f"no search provider {provider!r} (known: {', '.join(PROVIDERS)})")
+    extra = {str(k): str(v) for k, v in (params or {}).items()}
+    own_names = {spec.query_param, spec.page_param, spec.size_param, spec.key_param, *spec.variables, *spec.params}
+    taken = sorted(set(extra) & own_names)
+    if taken:
+        raise ConfigurationError(f"{spec.name}: {', '.join(taken)}: set by wintergrab (the query, its pages, the key)")
     url = endpoint or spec.endpoint or (os.environ.get(spec.endpoint_variable) if spec.endpoint_variable else None)
     if not url:
         raise ConfigurationError(f"{spec.name}: say where it is: set {spec.endpoint_variable} (or give endpoint=)")
@@ -278,25 +309,25 @@ def search(
         key = key or os.environ.get(spec.key_variable)
         if not key:
             raise ConfigurationError(f"{spec.name}: set {spec.key_variable} to your API key")
-    params: dict[str, Any] = {spec.query_param: query, **spec.params}
+    asked: dict[str, Any] = {spec.query_param: query, **spec.params, **extra}
     for name, variable in spec.variables.items():
         value = os.environ.get(variable)
         if not value:
             raise ConfigurationError(f"{spec.name}: set {variable}")
-        params[name] = value
+        asked[name] = value
     if spec.size_param:
-        params[spec.size_param] = spec.size
+        asked[spec.size_param] = spec.size
     headers = {"Accept": "application/json"}
     if key and spec.key_header:
         headers[spec.key_header] = key
     elif key and spec.key_param:
-        params[spec.key_param] = key
+        asked[spec.key_param] = key
     own = fetcher is None
     if own:
         from ..fetchers import Fetcher
 
         fetcher = Fetcher(timeout=timeout, retries=1, network_policy=network_policy)
-    answer = SearchAnswer(query=query, provider=spec.name)
+    answer = SearchAnswer(query=query, provider=spec.name, params=extra)
     fetched = datetime.now(timezone.utc).isoformat(timespec="seconds")
     counts: Counter[str] = Counter()  # results so far, by type
     placed = 0  # places on the page given so far
@@ -304,29 +335,24 @@ def search(
         for index in range(max(1, min(pages, _MAX_PAGES))):
             if index:
                 time.sleep(delay)
-            params[spec.page_param] = spec.page_value(index)
+            asked[spec.page_param] = spec.page_value(index)
+            if spec.limit is not None and spec.size_param:  # (Google's: start + num at most 100)
+                room = spec.limit - spec.page_value(index)
+                if room < 1:
+                    answer.notes.append(f"{spec.name} gives no results past its first {spec.limit}")
+                    break
+                asked[spec.size_param] = min(spec.size, room)
             try:
-                response = fetcher.get(url, params=params, headers=headers)
-            except WintergrabError as exc:
-                if key and (key in str(exc) or key in repr(getattr(exc, "context", ""))):
-                    # (a key in the URL: Google's) the error as text, the key left out
-                    raise WintergrabError(f"{spec.name}: {_without(describe(exc), key)}") from None
-                raise
-            if response.status in (401, 403):
-                check = f"check the key in {spec.key_variable}" if spec.key_variable else "check the instance"
-                if spec.name == "searxng":
-                    check += " answers JSON (its settings: search: formats: [json])"
-                raise ConfigurationError(f"{spec.name} refused the request (HTTP {response.status}): {check}")
-            if response.status == 429:
+                data = _ask(fetcher, url, asked, headers, spec, key)
+            except _RateLimited:
                 answer.notes.append(f"the provider's rate limit (HTTP 429) stopped the search at page {index + 1}")
                 break
-            if not 200 <= response.status < 300:
-                raise WintergrabError(f"{spec.name} answered HTTP {response.status}")
-            try:
-                data = response.json()
-            except ValueError:
-                raise WintergrabError(f"{spec.name} answered something that is not JSON") from None
-            listed, boxes, placed = _read_page(data, query, spec, fetched, counts, placed, first=index == 0)
+            except WintergrabError as exc:
+                if not index:
+                    raise
+                answer.notes.append(f"page {index + 1} failed, and the search stopped there: {exc}")
+                break
+            listed, boxes, placed = _read_page(data, query, spec, fetched, counts, placed, extra, first=index == 0)
             answer.results.extend(r for r in listed if r.type == "web")
             answer.modules.extend([*(r for r in listed if r.type != "web"), *boxes])
             if index == 0:
@@ -343,6 +369,37 @@ def search(
         if m.type == "question"
     ]
     return answer
+
+
+class _RateLimited(Exception):
+    """The API's rate limit said no (HTTP 429), after the fetcher waited it out once."""
+
+
+def _ask(
+    fetcher: Any, url: str, params: dict[str, Any], headers: dict[str, str], spec: Provider, key: str | None
+) -> Any:
+    """One page of the API's answer, as JSON: a refusal, a failure or an answer that is not JSON raised, and
+    no key in what is raised."""
+    try:
+        response = fetcher.get(url, params=params, headers=headers)
+    except WintergrabError as exc:
+        if key and (key in str(exc) or key in repr(getattr(exc, "context", ""))):
+            # (a key in the URL: Google's) the error as text, the key left out
+            raise WintergrabError(f"{spec.name}: {_without(describe(exc), key)}") from None
+        raise
+    if response.status in (401, 403):
+        check = f"check the key in {spec.key_variable}" if spec.key_variable else "check the instance"
+        if spec.name == "searxng":
+            check += " answers JSON (its settings: search: formats: [json])"
+        raise ConfigurationError(f"{spec.name} refused the request (HTTP {response.status}): {check}")
+    if response.status == 429:
+        raise _RateLimited
+    if not 200 <= response.status < 300:
+        raise WintergrabError(f"{spec.name} answered HTTP {response.status}")
+    try:
+        return response.json()
+    except ValueError:
+        raise WintergrabError(f"{spec.name} answered something that is not JSON") from None
 
 
 def _without(text: str, key: str | None) -> str:
@@ -407,7 +464,15 @@ def _main_list(data: Any, spec: Provider) -> list[Mapping[str, Any]]:
 
 
 def _read_page(
-    data: Any, query: str, spec: Provider, fetched: str, counts: Counter[str], placed: int, *, first: bool
+    data: Any,
+    query: str,
+    spec: Provider,
+    fetched: str,
+    counts: Counter[str],
+    placed: int,
+    params: dict[str, str],
+    *,
+    first: bool,
 ) -> tuple[list[SearchResult], list[SearchResult], int]:
     """One answer's list of results (web results, and SearXNG's of other categories) and, on the first page,
     its boxes; numbered on from ``counts`` (the results so far, by type) and ``placed`` (the places given)."""
@@ -433,7 +498,7 @@ def _read_page(
         counts[kind] += 1
         return SearchResult(
             query=query, position=counts[kind], url=url, title=title, snippet=snippet, date=date, source=spec.name,
-            fetched=fetched, type=kind, details=details,
+            fetched=fetched, type=kind, details=details, params=dict(params),
         )  # fmt: skip
 
     listed = []
@@ -535,15 +600,26 @@ def read_results(records: Iterable[Mapping[str, Any]]) -> list[SearchResult]:
         title = _text(record.get("title"))
         if position < 1 or not query or not (url if kind == "web" else url or title):
             continue
+        params = record.get("params")
+        if isinstance(params, str) and params.startswith("{"):  # (as CSV keeps it)
+            try:
+                params = json.loads(params)
+            except ValueError:
+                params = None
         out.append(
             SearchResult(
                 query=str(query), position=position, url=url, title=title, snippet=_text(record.get("snippet")),
                 domain=str(record.get("domain") or ""), date=record.get("date"), source=str(record.get("source") or ""),
                 fetched=str(record.get("fetched") or ""), type=kind, rank=rank,
                 details={k: record[k] for k in _DETAIL_NAMES if record.get(k) not in (None, "")},
+                params={str(k): str(v) for k, v in params.items()} if isinstance(params, Mapping) else {},
             )
         )  # fmt: skip
     return out
+
+
+def _searched(query: str, params: Mapping[str, str]) -> str:
+    return f"{query} [{', '.join(f'{k}={v}' for k, v in sorted(params.items()))}]" if params else query
 
 
 def _when(fetched: str) -> tuple[int, float, str]:
@@ -563,16 +639,16 @@ def _latest(results: Iterable[SearchResult], *, web: bool = True) -> list[Search
     times = {fetched: _when(fetched) for fetched in {r.fetched for r in listed}}
     newest: dict[str, tuple[int, float, str]] = {}
     for result in listed:
-        if result.query not in newest or times[result.fetched] > newest[result.query]:
-            newest[result.query] = times[result.fetched]
-    return [r for r in listed if times[r.fetched] == newest[r.query]]
+        if result.searched not in newest or times[result.fetched] > newest[result.searched]:
+            newest[result.searched] = times[result.fetched]
+    return [r for r in listed if times[r.fetched] == newest[r.searched]]
 
 
 def _by_query(results: Iterable[SearchResult], depth: int) -> dict[str, list[SearchResult]]:
     grouped: dict[str, list[SearchResult]] = defaultdict(list)
     for result in _latest(results):
         if result.position <= depth:
-            grouped[result.query].append(result)
+            grouped[result.searched].append(result)
     for listed in grouped.values():
         listed.sort(key=lambda r: r.position)
     return dict(grouped)
@@ -733,16 +809,16 @@ def modules(results: Iterable[SearchResult], *, domain: str | None = None, top: 
         ranks: dict[str, int] = {}
         for result in listed:
             if result.rank is not None:
-                ranks[result.query] = min(ranks.get(result.query, result.rank), result.rank)
-        domains = Counter(name for name, _ in {(r.domain, r.query) for r in listed if r.domain})
+                ranks[result.searched] = min(ranks.get(result.searched, result.rank), result.rank)
+        domains = Counter(name for name, _ in {(r.domain, r.searched) for r in listed if r.domain})
         out.append(
             Module(
                 type=kind,
-                queries=len({r.query for r in listed}),
+                queries=len({r.searched for r in listed}),
                 results=len(listed),
                 average_rank=round(sum(ranks.values()) / len(ranks), 1) if ranks else None,
                 domains=dict(sorted(domains.items(), key=lambda kv: (-kv[1], kv[0]))[:top]),
-                own=len({r.query for r in listed if r.domain == own}) if own else None,
+                own=len({r.searched for r in listed if r.domain == own}) if own else None,
             )
         )
     out.sort(key=lambda m: (-m.queries, m.type))
@@ -769,9 +845,9 @@ def ranking_changes(
         found: dict[str, int] = {}
         queries = set()
         for result in _latest(results):
-            queries.add(result.query)
+            queries.add(result.searched)
             if result.domain == own and result.position <= depth:
-                found[result.query] = min(found.get(result.query, result.position), result.position)
+                found[result.searched] = min(found.get(result.searched, result.position), result.position)
         return found, queries
 
     old, old_queries = best(before)
@@ -798,7 +874,7 @@ def ranking_history(results: Iterable[SearchResult], domain: str, *, depth: int 
     for result in results:
         if result.type != "web":
             continue
-        found = seen[result.query]
+        found = seen[result.searched]
         if result.domain == own and result.position <= depth:
             known = found.get(result.fetched)
             found[result.fetched] = result.position if known is None else min(known, result.position)

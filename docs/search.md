@@ -26,8 +26,31 @@ Search engines' own result pages are not fetched: their terms forbid it.
 Each provider's terms and quotas are yours to keep. Requests go one at a
 time, a second apart (`--delay`). A 429 is waited out once, as the answer
 asks, and then the search stops with a note. A refused key (401, 403) is an
-error that names the variable to check. A key never appears in a message:
-Google's travels as a parameter, and is replaced by `***` in errors.
+error that names the variable to check. A page after the first that fails
+stops the search with a note, and the pages before it are kept. A key never
+appears in a message: Google's travels as a parameter, and is replaced by
+`***` in errors.
+
+## Where, and in what language
+
+Rankings differ from one country and language to another. `--param
+NAME=VALUE` (repeatable; `params=` in Python) passes the API's own
+parameters:
+
+| Provider | Where | Language | More |
+|---|---|---|---|
+| Brave | `country=de` | `search_lang=de`, `ui_lang=de-DE` | `freshness=pw` (the past week), `safesearch=off` |
+| Google | `gl=de` | `hl=de`, `lr=lang_de` | `cr=countryDE`, `dateRestrict=w1` |
+| SearXNG | | `language=de` | `categories=news`, `time_range=month`, `safesearch=0` |
+
+```bash
+wintergrab search "günstiger laptop" --param country=de --param search_lang=de -o serp-de.jsonl
+```
+
+Those wintergrab sets itself (the query, its pages, the key) are refused.
+Each result keeps the parameters it was searched with (`params`), and the
+analyses below tell apart a query searched with others: `budget laptop
+[country=de]` and `budget laptop` are two searches.
 
 An answer is read without a fixed schema. Its results are the provider's
 list (`web.results[]`, `items[]`, `results[]`), or, for another API, the
@@ -209,5 +232,8 @@ pick one: wintergrab goal 'budget laptop' --site laptops.example
   engines your instance asks.
 - Brave's and Google's APIs have quotas and prices; SearXNG's results are
   those of the engines your instance asks.
+- Google's API gives 100 results at most for a query (its `start` plus
+  `num` may not pass 100, the documented limit): ten pages give 99, the
+  last asking for nine.
 - Two searches of one query in the same second are one collection: keep
   `--delay` at a second or more when a query comes twice.

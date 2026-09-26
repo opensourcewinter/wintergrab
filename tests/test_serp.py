@@ -116,10 +116,17 @@ class Api(BaseHTTPRequestHandler):
             size, offset = int(q.get("count", 20)), int(q.get("offset", 0))
             if query == "rate limited" and offset:
                 return self._send(429, {"type": "ErrorResponse", "error": {"code": "RATE_LIMITED"}})
+            if query == "flaky" and offset:
+                return self._send(400, {"type": "ErrorResponse", "error": {"code": "INVALID"}})
             size = 2  # (a small page, to see pages go)
-            asked = {"rate limited": "budget laptop", "budget laptopp": "budget laptop"}.get(query, query)
+            asked = {"rate limited": "budget laptop", "budget laptopp": "budget laptop", "flaky": "budget laptop"}.get(
+                query, query
+            )
             results = [{"title": t, "url": u, "description": d, "extra_snippets": [d], "page_age": "2026-09-01"}
                        for u, t, d in _page(asked, offset * size, size)]  # fmt: skip
+            if q.get("country") == "de" and offset == 0:  # searched from Germany
+                results.insert(0, {"title": "Laptops im Preisvergleich", "url": "https://preise.example.de/laptops",
+                                   "description": "Günstige Laptops."})  # fmt: skip
             faq = {"type": "faq", "results": [{"question": "Is 8 GB enough?", "answer": "For most.", "title": "FAQ",
                                                "url": "https://faq.example/8gb"}]}  # fmt: skip
             answer = {"type": "search", "query": {"original": query}, "web": {"type": "search", "results": results},
@@ -134,6 +141,14 @@ class Api(BaseHTTPRequestHandler):
             if q.get("key") != "google-key" or q.get("cx") != "engine-1":
                 return self._send(403, {"error": {"code": 403, "message": "The request is missing a valid API key."}})
             start, num = int(q.get("start", 1)), int(q.get("num", 10))
+            if start + num > 100:  # as documented: "setting the sum of start + num to a number greater than 100
+                # will produce an error"
+                return self._send(400, {"error": {"code": 400, "message": "Request contains an invalid argument."}})
+            if query == "laptop":  # a query with more results than the API gives
+                items = [
+                    {"title": f"Laptops {n}", "link": f"https://site{n}.example/"} for n in range(start, start + num)
+                ]
+                return self._send(200, {"kind": "customsearch#search", "items": items})
             items = [{"kind": "customsearch#result", "title": t, "link": u, "snippet": d,
                       "displayLink": urlsplit(u).hostname} for u, t, d in _page(query, start - 1, num)]  # fmt: skip
             answer = {"kind": "customsearch#search", "items": items,
@@ -232,6 +247,36 @@ def test_brave(api, monkeypatch) -> None:
     monkeypatch.delenv("BRAVE_SEARCH_API_KEY")
     with pytest.raises(ConfigurationError, match="set BRAVE_SEARCH_API_KEY to your API key"):
         search("budget laptop")
+
+
+def test_where_and_in_what_language(api, monkeypatch) -> None:
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "brave-key")
+    brave = api + "/res/v1/web/search"
+    german = search("budget laptop", endpoint=brave, params={"country": "de", "search_lang": "de"}, delay=0)
+    first = german.results[0]
+    assert (first.domain, first.params) == ("example.de", {"country": "de", "search_lang": "de"})
+    assert first.searched == german.searched == "budget laptop [country=de, search_lang=de]"
+    assert first.to_dict()["params"] == {"country": "de", "search_lang": "de"}
+    plain = search("budget laptop", endpoint=brave, delay=0)
+    # one query searched from two places: two searches to the analyses, not one
+    assert visibility_score([*plain.results, *german.results], "example.de") == 0.5
+    as_csv = {**first.to_dict(), "params": '{"country": "de", "search_lang": "de"}'}  # (a CSV keeps it as JSON)
+    assert read_results([as_csv])[0].searched == first.searched
+    with pytest.raises(ConfigurationError, match="offset: set by wintergrab"):
+        search("budget laptop", endpoint=brave, params={"offset": 3})
+    # a page after the first that fails: the pages before it kept, and said why the search stopped
+    flaky = search("flaky", endpoint=brave, pages=3, delay=0)
+    assert len(flaky.results) == 2 and flaky.notes == [
+        "page 2 failed, and the search stopped there: brave answered HTTP 400"
+    ]
+
+
+def test_google_gives_100_results_at_most(api, monkeypatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+    monkeypatch.setenv("GOOGLE_CSE_ID", "engine-1")
+    answer = search("laptop", provider="google", endpoint=api + "/customsearch/v1", pages=10, delay=0)
+    assert len(answer.results) == 99 and not answer.notes  # the tenth page asks for 9: start 91 + num 9 = 100
+    assert answer.results[-1].url == "https://site99.example/"
 
 
 def test_google(api, monkeypatch) -> None:
@@ -412,6 +457,11 @@ def test_the_search_command(api, monkeypatch, tmp_path, capsys) -> None:
     assert main(["search", "budget laptop", "--domain", "shop.example", "--depth", "5"]) == 2
     assert "--domain, --depth: for --report" in capsys.readouterr().err
     assert main(["search", "budget laptop", "--append"]) == 2 and "with -o FILE" in capsys.readouterr().err
+    assert main(["search", "budget laptop", "--param", "country"]) == 2 and "say NAME=VALUE" in capsys.readouterr().err
+    assert main(["search", "--report", str(out), "--param", "country=de"]) == 2
+    assert "--param: for searching" in capsys.readouterr().err
+    assert main(["search", "budget laptop", "--provider", "searxng", "--param", "language=de", "--delay", "0"]) == 0
+    assert "budget laptop [language=de]  (4 results)" in capsys.readouterr().out
     assert main(["search"]) == 2
 
 
