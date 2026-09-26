@@ -87,6 +87,11 @@ def _read(source: str) -> Iterator[dict[str, Any]]:
         yield from _json_lines(iter(sys.stdin), "stdin")
         return
     scheme = _SCHEME.match(source)
+    key = scheme.group(1).lower() if scheme else Path(source).suffix.lower()
+    if key not in (URL_READERS if scheme else (*READERS, ".jsonl", ".ndjson", ".json", ".csv")):
+        from ..plugins import load_plugins
+
+        load_plugins()  # a plugin may add it
     if scheme:
         entry = URL_READERS.get(scheme.group(1).lower())
         if entry is None:
@@ -95,7 +100,7 @@ def _read(source: str) -> Iterator[dict[str, Any]]:
         return
     target = Path(source)
     suffix = target.suffix.lower()
-    if suffix not in RECORD_SUFFIXES:
+    if suffix not in (*RECORD_SUFFIXES, *READERS):
         raise ConfigurationError(f"unsupported input {target.name!r}; use {', '.join(RECORD_SUFFIXES)}")
     if suffix in READERS:
         if not target.is_file():

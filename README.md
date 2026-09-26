@@ -265,7 +265,9 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Projects](https://github.com/opensourcewinter/wintergrab/blob/main/docs/projects.md) | Jobs in one file, run on schedules (cron, `every 2 hours`), with signed webhooks for their events and for changed records (`wintergrab init`, `run`, `schedule`) |
 | [Dashboard](https://github.com/opensourcewinter/wintergrab/blob/main/docs/dashboard.md) | A local page over the runs: numbers, failures, domains, extraction, changes, live while a crawl runs; JSON too (`wintergrab dashboard`) |
 | [Healing](https://github.com/opensourcewinter/wintergrab/blob/main/docs/healing.md) | Extractors that repair their selectors when a site changes, with versions, rollback and a review queue (`wintergrab heal`, `wintergrab review`) |
-| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `run`, `schedule`, `init`, `runs`, `replay`, `dashboard`, `fixture`, `test`, `heal`, `review`, `history`, `data`, `shell` and `doctor` reference |
+| [Models](https://github.com/opensourcewinter/wintergrab/blob/main/docs/models.md) | Optional language models (OpenAI-compatible, Anthropic, Ollama) for the fields a page's own data does not give, checked against the page |
+| [Plugins](https://github.com/opensourcewinter/wintergrab/blob/main/docs/plugins.md) | Packages that add outputs, inputs, field types, stages, strategies, model providers and commands |
+| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `run`, `schedule`, `init`, `runs`, `replay`, `dashboard`, `fixture`, `test`, `heal`, `review`, `history`, `data`, `shell`, `doctor` and `plugins` reference |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly

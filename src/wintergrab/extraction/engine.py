@@ -338,6 +338,10 @@ class Extractor:
         decimal: str | None = None,
     ) -> None:
         self.schema = _schema_of(schema)
+        if strategies is None:
+            from ..plugins import load_plugins
+
+            load_plugins()  # plugins may add strategies
         self.strategies: list[Strategy] = [s() if isinstance(s, type) else s for s in (strategies or STRATEGIES)]
         self.model = model
         self.model_threshold = model_threshold

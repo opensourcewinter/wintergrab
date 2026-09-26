@@ -36,6 +36,7 @@ from .strategies import (
     Strategy,
     StructuredData,
     field_kind,
+    register_strategy,
 )
 
 __all__ = [
@@ -66,6 +67,7 @@ __all__ = [
     "StructuredData",
     "field_kind",
     "grounding",
+    "register_strategy",
     "schema_types",
     "value_key",
 ]

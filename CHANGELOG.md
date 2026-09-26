@@ -427,6 +427,36 @@
   `quality_degraded` (price completeness 98% → 41%) and `schema_changed`
   without writing a data pipeline.
 
+### Plugins (`wintergrab.plugins`)
+
+- Installed packages with a `wintergrab.plugins` entry point add to
+  wintergrab without changing it:
+  - outputs and inputs (`registry.exporter`, `registry.reader`);
+  - schema field types and data pipeline stages;
+  - extraction strategies, tried by every extractor;
+  - model providers, and commands (`wintergrab NAME`).
+  `"module:name"` targets are imported only when used.
+- Plugins load once, when first needed. A plugin that fails is reported
+  and skipped, and never stops wintergrab. `wintergrab plugins` lists what
+  each added, and `WINTERGRAB_PLUGINS=0` turns them off.
+- `register_stage()` and `register_strategy()` join `register_exporter()`,
+  `register_reader()`, `register_type()` and `register_operation()`.
+  `STRATEGIES` is now a list.
+
+### Language models (`wintergrab.models`)
+
+- Adapters for OpenAI-compatible chat completions APIs (OpenAI, and
+  self-hosted servers such as vLLM, llama.cpp or LM Studio), the Anthropic
+  Messages API, and a local Ollama. They use only the standard library,
+  keep keys in the environment, retry on 429, 5xx and network errors, take
+  images, and count tokens.
+- `get`/`crawl --extract SCHEMA --model PROVIDER:NAME [--model-url URL]`
+  asks a model for the fields a page's own data does not give, in one
+  request per page. Its answers are checked against the page like any
+  value: a value the page does not contain is kept aside, never taken. A
+  crawl logs the requests and tokens it used.
+- None is needed or called unless named.
+
 ### Jobs that run when something changes (`wintergrab.watch`)
 
 - A project job's `watch: URL` runs it when a sitemap (its URLs and their

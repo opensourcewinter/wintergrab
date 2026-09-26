@@ -8,7 +8,8 @@ stdout, so you can pipe the output anywhere.
 wintergrab [-v | -q] [--version] COMMAND ...
 
 COMMAND: get, crawl, data, inspect, goal, review, fixture, test, run, schedule, init,
-         runs, replay, dashboard, heal, history, shell, doctor
+         runs, replay, dashboard, heal, history, shell, doctor, plugins
+         (and the commands of installed plugins)
 ```
 
 `-v` shows debug logs; `-q` keeps only warnings.
@@ -128,6 +129,7 @@ Options for any crawl:
 | `--normalize-urls` | `url_normalizer = True` |
 | `--block-trackers` | `resource_filter = True` |
 | `--extract SCHEMA` | (URL mode) extract typed records with [the extractor](extraction.md) (`--all`, `--container`, `--provenance`) |
+| `--model PROVIDER:NAME`, `--model-url URL` | (with `--extract`) ask a [language model](models.md) for the fields the page's own data does not give: `openai:NAME`, `anthropic:NAME`, `ollama:NAME` |
 | `--heal DIR`, `--review FILE` | (with `--extract`) a [self-healing extractor](healing.md): versions in DIR, selectors repaired when the site changes, questions in FILE |
 | `--quality FILE` | measure the items' [quality](data.md#quality) and compare it with the last run's report, kept in FILE (events `quality_degraded`, `schema_changed`) |
 | `--pipeline FILE` | appends a [data pipeline](data.md#pipelines-as-configuration) to `pipelines` (`--allow-imports` if it names Python functions) |
@@ -349,3 +351,14 @@ ok  pyyaml       6.0.3
 
 Lists the optional parts wintergrab can use (browser, faster event loop and
 JSON, YAML) and whether each is there.
+
+## `wintergrab plugins`: what installed plugins add
+
+```
+$ wintergrab plugins
+kafka (wintergrab-kafka 0.3.0): output kafka://, input .avro, command kafka-tail
+```
+
+Lists the installed [plugins](plugins.md) and what each adds (`--json`).
+Exits with 1 when one could not load. `WINTERGRAB_PLUGINS=0` turns them
+off.

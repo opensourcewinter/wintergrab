@@ -107,6 +107,7 @@ __all__ = [
     "Transform",
     "Validate",
     "register_operation",
+    "register_stage",
 ]
 
 log = logging.getLogger("wintergrab.pipeline")
@@ -2001,6 +2002,16 @@ STAGES: dict[str, type[Stage]] = {
 }
 
 
+def register_stage(stage: type[Stage]) -> None:
+    """Add a stage class, used in pipeline files by its ``kind`` (``{geocode: {...}}``)."""
+    if not (isinstance(stage, type) and issubclass(stage, Stage)) or not getattr(stage, "kind", ""):
+        raise ConfigurationError(f"a stage is a Stage subclass with a kind, not {stage!r}")
+    known = STAGES.get(stage.kind)
+    if known is not None and known is not stage:
+        raise ConfigurationError(f"there is already a stage {stage.kind!r} ({known.__qualname__})")
+    STAGES[stage.kind] = stage
+
+
 def _as_stage(obj: Any) -> Stage:
     if isinstance(obj, Stage):
         return obj
@@ -2304,6 +2315,10 @@ class Pipeline:
             if not isinstance(entry, Mapping) or len(entry) != 1:
                 raise ConfigurationError("each stage is a one-entry mapping like {filter: 'price > 0'}", key=where)
             kind, options = next(iter(entry.items()))
+            if str(kind) not in STAGES:
+                from ..plugins import load_plugins
+
+                load_plugins()  # a plugin may add it
             stage_cls = STAGES.get(str(kind))
             if stage_cls is None:
                 raise ConfigurationError(f"unknown stage {kind!r}; known: {', '.join(sorted(STAGES))}", key=where)

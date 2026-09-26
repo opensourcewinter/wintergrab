@@ -454,6 +454,9 @@ class QuickSpider(Spider):
     heal: str | None = None
     #: A review queue file for what the healing extractor wants a person to decide (--review).
     review: str | None = None
+    #: A language model for the fields the page's own data does not give (--model PROVIDER:NAME).
+    model: str | None = None
+    model_url: str | None = None
     #: Pages where --extract found no complete record (a required field missing).
     incomplete: int = 0
     #: Follow every same-domain link when no --follow/--paginate is given.
@@ -464,14 +467,20 @@ class QuickSpider(Spider):
     def _records(self, response: Response) -> Any:
         extractor = self.__dict__.get("_extractor")
         if extractor is None:
+            model = None
+            if self.model:
+                from .models import load_model
+
+                model = self.__dict__["_model"] = load_model(self.model, base_url=self.model_url)
             if self.heal:
                 from .extraction.healing import HealingExtractor
 
-                extractor = HealingExtractor(self.heal, self.extract, review=self.review, provenance=self.provenance)
+                extractor = HealingExtractor(self.heal, self.extract, review=self.review, provenance=self.provenance,
+                                             model=model)  # fmt: skip
             else:
                 from .extraction import Extractor
 
-                extractor = Extractor(self.extract, provenance=self.provenance)  # type: ignore[arg-type]
+                extractor = Extractor(self.extract, provenance=self.provenance, model=model)  # type: ignore[arg-type]
             self.__dict__["_extractor"] = extractor
         if self.extract_all or self.container:
             found = extractor.extract_all(response, container=self.container)
@@ -493,6 +502,13 @@ class QuickSpider(Spider):
         extractor = self.__dict__.get("_extractor")
         if extractor is not None and hasattr(extractor, "close"):
             extractor.close()  # a healing extractor keeps what it learned for the next run
+        model = self.__dict__.get("_model")
+        if model is not None and model.usage["requests"]:
+            used = model.usage
+            logging.getLogger("wintergrab.models").info(
+                "%s: %s request(s), %s input and %s output tokens", model.name, f"{used['requests']:,}",
+                f"{used['input']:,}", f"{used['output']:,}",
+            )  # fmt: skip
 
     def parse(self, response: Response) -> Any:
         if self.extract or self.heal:
@@ -1028,6 +1044,8 @@ def _crawl_settings(args: argparse.Namespace) -> tuple[type[Spider], dict[str, A
             provenance=args.provenance,
             heal=args.heal,
             review=args.review,
+            model=args.model,
+            model_url=args.model_url,
         )
         if args.sitemap:
             overrides["sitemap_urls"] = list(args.sitemap)
@@ -1717,6 +1735,23 @@ def _add_typed_extract_options(p: Any) -> None:
         help="(--extract) keep versions of the extractor in DIR and repair its selectors when the site changes",
     )
     p.add_argument("--review", metavar="FILE", help="(--heal) queue what needs a person in FILE (wintergrab review)")
+    p.add_argument(
+        "--model",
+        metavar="PROVIDER:NAME",
+        help="(--extract) ask a language model for the fields the page's own data does not give: openai:NAME, "
+        "anthropic:NAME, ollama:NAME (see docs/models.md)",
+    )
+    p.add_argument("--model-url", metavar="URL", help="(--model) where the model's API is (a server of your own)")
+
+
+def _model(args: argparse.Namespace) -> Any:
+    """``--model PROVIDER:NAME [--model-url URL]``: a model provider, or ``None``."""
+    spec = getattr(args, "model", None)
+    if not spec:
+        return None
+    from .models import load_model
+
+    return load_model(spec, base_url=getattr(args, "model_url", None))
 
 
 def _extractor(args: argparse.Namespace) -> Any:
@@ -1725,10 +1760,11 @@ def _extractor(args: argparse.Namespace) -> Any:
     if getattr(args, "heal", None):
         from .extraction.healing import HealingExtractor
 
-        return HealingExtractor(args.heal, args.extract, review=args.review, provenance=args.provenance)
+        return HealingExtractor(args.heal, args.extract, review=args.review, provenance=args.provenance,
+                                model=_model(args))  # fmt: skip
     from .extraction import Extractor
 
-    return Extractor(args.extract, provenance=args.provenance)
+    return Extractor(args.extract, provenance=args.provenance, model=_model(args))
 
 
 def _add_extract_options(p: argparse.ArgumentParser) -> None:
@@ -2258,7 +2294,45 @@ def build_parser() -> argparse.ArgumentParser:
 
     d = sub.add_parser("doctor", help="check the installation and optional features")
     d.set_defaults(func=cmd_doctor)
+
+    pl = sub.add_parser(
+        "plugins",
+        help="the installed plugins and what they add",
+        description="List the installed plugins (packages with a 'wintergrab.plugins' entry point) and what each "
+        "adds: outputs, inputs, field types, stages, strategies, model providers, commands. WINTERGRAB_PLUGINS=0 "
+        "loads none.",
+    )
+    pl.add_argument("--json", action="store_true", help="print JSON")
+    pl.set_defaults(func=cmd_plugins)
+
+    from .plugins import COMMANDS
+
+    for name, (help_text, add_arguments, handler) in sorted(COMMANDS.items()):
+        if name in sub.choices:
+            logging.getLogger("wintergrab.plugins").warning("a plugin's command %r is a built-in one: skipped", name)
+            continue
+        plugin_parser = sub.add_parser(name, help=help_text)
+        add_arguments(plugin_parser)
+        plugin_parser.set_defaults(func=handler)
     return parser
+
+
+def cmd_plugins(args: argparse.Namespace) -> int:
+    from dataclasses import asdict
+
+    from .plugins import load_plugins
+
+    found = load_plugins()
+    if args.json:
+        print(json.dumps([asdict(info) for info in found], indent=2))
+        return 0
+    if not found:
+        disabled = os.environ.get("WINTERGRAB_PLUGINS", "1").strip().lower() in ("0", "false", "no", "off")
+        print("plugins are turned off (WINTERGRAB_PLUGINS)" if disabled else "no plugin installed")
+        return 0
+    for info in found:
+        print(info.describe())
+    return 1 if any(info.error for info in found) else 0
 
 
 def _print_help(parser: argparse.ArgumentParser) -> int:
@@ -2286,6 +2360,9 @@ def _utf8_output() -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     _utf8_output()
+    from .plugins import load_plugins
+
+    load_plugins()  # (commands of their own among them)
     parser = build_parser()
     args = parser.parse_args(argv)
     args.argv = list(argv) if argv is not None else sys.argv[1:]  # kept with recorded runs

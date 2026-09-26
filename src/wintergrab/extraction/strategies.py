@@ -44,6 +44,7 @@ __all__ = [
     "Strategy",
     "StructuredData",
     "field_kind",
+    "register_strategy",
 ]
 
 _MAX_CANDIDATES = 5  # distinct values one strategy may propose for a field
@@ -869,7 +870,9 @@ class RecordFields(Strategy):
 
 
 #: The default strategies, in hierarchy order.
-STRATEGIES: tuple[type[Strategy], ...] = (
+#: The strategies extractors use by default, in priority order (plugins add theirs with
+#: :func:`register_strategy`).
+STRATEGIES: list[type[Strategy]] = [
     StructuredData,
     MetaTags,
     Selectors,
@@ -877,7 +880,24 @@ STRATEGIES: tuple[type[Strategy], ...] = (
     LabelledValues,
     DomHeuristics,
     Patterns,
-)
+]
+
+
+def register_strategy(strategy: type[Strategy], *, before: str | None = None) -> None:
+    """Add a strategy extractors use by default: last, or before the one whose ``method`` is ``before``.
+
+    A strategy's :meth:`Strategy.candidates` gives candidate values for a field; its ``method``
+    names it in provenance, and its confidence comes from ``Extractor(priors={method: ...})``
+    (0.5 when not given).
+    """
+    if not (isinstance(strategy, type) and issubclass(strategy, Strategy)):
+        raise TypeError(f"a strategy is a Strategy subclass, not {strategy!r}")
+    if strategy in STRATEGIES:
+        return
+    methods = [s.method for s in STRATEGIES]
+    if before is not None and before not in methods:
+        raise ValueError(f"no strategy {before!r} (strategies: {', '.join(methods)})")
+    STRATEGIES.insert(methods.index(before) if before is not None else len(STRATEGIES), strategy)
 
 
 def numbers_in(text: str) -> set[str]:

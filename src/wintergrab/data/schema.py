@@ -363,6 +363,10 @@ class SchemaField:
             raise SchemaError(f"invalid field name {self.name!r}")
         self.type = _ALIASES.get(str(self.type).lower(), str(self.type).lower())
         if self.type not in FIELD_TYPES:
+            from ..plugins import load_plugins
+
+            load_plugins()  # a plugin may add it
+        if self.type not in FIELD_TYPES:
             raise SchemaError(
                 f"field {self.name!r}: unknown type {self.type!r}; known: {', '.join(sorted(FIELD_TYPES))}"
             )

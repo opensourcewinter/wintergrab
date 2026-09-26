@@ -289,6 +289,12 @@ class ExtractionError(WintergrabError):
     category = "extraction"
 
 
+class ModelError(WintergrabError):
+    """A language model could not be asked, or gave no usable answer (see :mod:`wintergrab.models`)."""
+
+    category = "model"
+
+
 class ValidationError(WintergrabError, ValueError):
     """A record or dataset failed validation.
 

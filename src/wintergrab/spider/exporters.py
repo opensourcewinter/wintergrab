@@ -434,6 +434,10 @@ def open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_
     if text == "-":
         return StdoutExporter(Path("-"), append=append)
     scheme = output_scheme(text)
+    if (scheme or Path(text).suffix.lower()) not in (URL_EXPORTERS if scheme else EXPORTERS):
+        from ..plugins import load_plugins
+
+        load_plugins()  # a plugin may add it
     if scheme is not None:
         entry = URL_EXPORTERS.get(scheme)
         if entry is None:

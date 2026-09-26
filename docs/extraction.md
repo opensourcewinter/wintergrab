@@ -138,11 +138,16 @@ a record only record-level strategies run.
 
 ## Extraction models
 
-wintergrab calls no model by default and ships no API client in the core.
-Plug in any function (or object with an `extract` method, optionally `async`)
-that takes a `ModelRequest` and returns `{field: value}` or a JSON string:
+wintergrab calls no model unless you name one. [Adapters](models.md) for
+OpenAI-compatible APIs (self-hosted servers too), Anthropic and a local
+Ollama come with it (`--model ollama:NAME`, `load_model("openai:NAME")`). Or
+plug in any function (or object with an `extract` method, optionally
+`async`) that takes a `ModelRequest` and returns `{field: value}` or a JSON
+string:
 
 ```python
+extractor = Extractor(schema, model=load_model("ollama:NAME"))
+
 def ask_my_model(request):
     return call_your_llm(request.prompt())     # request.fields, .text (Markdown), .url, .known
 
