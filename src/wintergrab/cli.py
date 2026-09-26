@@ -617,9 +617,12 @@ def cmd_goal(args: argparse.Namespace) -> int:
         log_level="DEBUG" if args.verbose > 0 else ("WARNING" if args.verbose < 0 else "INFO"),
         progress=False if output == "-" else None,
         optimize=not args.no_optimize,
+        **_workspace_settings(args, None),  # a goal run's recipe is its plan
     )
     if args.verbose >= 0:
         print(result.summary(), file=sys.stderr)
+        if result.crawl is not None and result.crawl.run_id:
+            print(f"kept as {result.crawl.run_id}", file=sys.stderr)
         if plan.goal.monitor:
             again = f"wintergrab goal --plan {args.save_plan or args.plan or 'PLAN.json'} --yes -o {args.output or 'OUT.jsonl'}"
             print(f"to watch for changes ({plan.goal.monitor}), run this again on a schedule: {again}", file=sys.stderr)
@@ -660,6 +663,44 @@ def cmd_review(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     return 0
+
+
+def cmd_runs(args: argparse.Namespace) -> int:
+    from .runs import DEFAULT_WORKSPACE, RunRegistry
+
+    registry = RunRegistry(args.workspace or DEFAULT_WORKSPACE)
+    if args.remove:
+        run = registry.remove(args.remove)
+        print(f"removed {run.id}")
+        return 0
+    if args.run:
+        run = registry.get(args.run)
+        print(json.dumps(run.to_dict(), indent=2, default=str) if args.json else run.details())
+        return 0
+    runs = registry.runs(limit=args.limit)
+    if args.json:
+        print(json.dumps([r.to_dict() for r in runs], indent=2, default=str))
+    elif not runs:
+        print(f"no runs in {registry.runs_dir} yet: add --record to a crawl (or create the directory to keep them all)")
+    else:
+        for run in runs:
+            print(run.describe())
+    return 0
+
+
+def cmd_replay(args: argparse.Namespace) -> int:
+    from .runs import DEFAULT_WORKSPACE, RunRegistry, load_spider, replay
+
+    registry = RunRegistry(args.workspace or DEFAULT_WORKSPACE)
+    spider = load_spider(args.spider) if args.spider else None
+    result = replay(registry.get(args.run), spider, registry=registry, output=args.output, key=args.key)
+    if args.json:
+        print(json.dumps({"run": result.run.id, "same": result.same, "output": str(result.output),
+                          "missing": result.missing, **result.diff.to_dict()}, indent=2, default=str))  # fmt: skip
+    else:
+        print(result.summary())
+        print(f"the replay's items: {result.output}", file=sys.stderr)
+    return 0 if result.same else 1
 
 
 def _choice(text: str | None) -> int | None:
@@ -757,7 +798,8 @@ def _coerce(value: str) -> Any:
         return value
 
 
-def cmd_crawl(args: argparse.Namespace) -> int:
+def _crawl_settings(args: argparse.Namespace) -> tuple[type[Spider], dict[str, Any]]:
+    """The spider class and settings a ``crawl`` command line makes."""
     overrides: dict[str, Any] = {k: _coerce(v) for k, v in _parse_pairs(args.set, "=", "--set").items()}
     is_url = args.target.startswith(("http://", "https://")) or (
         not args.target.endswith(".py") and ".py:" not in args.target and not Path(args.target).exists()
@@ -860,6 +902,45 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         # JSON Lines on stdout, written after pipelines and de-duplication.
         overrides["output"] = "-"
         overrides["keep_items"] = False
+    return cls, overrides
+
+
+def spider_from_command(command: Sequence[str]) -> tuple[type[Spider], dict[str, Any]]:
+    """The spider class and settings of a ``wintergrab crawl ...`` command line, as runs keep it (what
+    :func:`wintergrab.runs.replay` crawls with). A healing extractor is replaced by its active version,
+    as it is: a replay changes nothing in it."""
+    args = build_parser().parse_args(list(command))
+    if getattr(args, "command", None) != "crawl":
+        raise ConfigurationError(f"only crawl commands can be replayed, not {getattr(args, 'command', None)!r}")
+    cls, settings = _crawl_settings(args)
+    if settings.get("heal"):
+        from .extraction.healing import ExtractorVersions
+
+        versions = ExtractorVersions(settings["heal"])
+        settings["extract"] = str(versions.directory / f"v{versions.active_number}.json")
+        settings["heal"] = settings["review"] = None
+    return cls, settings
+
+
+def _workspace_settings(args: argparse.Namespace, recipe: dict[str, Any] | None) -> dict[str, Any]:
+    """``--record`` / ``--workspace``: settings that keep the run (always, once a workspace exists)."""
+    from .runs import DEFAULT_WORKSPACE
+
+    workspace = getattr(args, "workspace", None)
+    settings: dict[str, Any] = {}
+    if getattr(args, "record", False):
+        settings["record"] = True
+        settings["run_registry"] = workspace or True
+    elif workspace or Path(DEFAULT_WORKSPACE).is_dir():
+        settings["run_registry"] = workspace or True  # a workspace keeps every run's record
+    if settings and recipe is not None:
+        settings["run_recipe"] = recipe
+    return settings
+
+
+def cmd_crawl(args: argparse.Namespace) -> int:
+    cls, overrides = _crawl_settings(args)
+    overrides.update(_workspace_settings(args, {"command": list(getattr(args, "argv", None) or [])}))
     try:
         spider = cls(**overrides)
     except TypeError as exc:
@@ -894,6 +975,9 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         print(f"{incomplete} page(s) had no complete record (a required field was missing)", file=sys.stderr)
     if result.paused:
         print("paused - run the same command again to resume", file=sys.stderr)
+    if result.run_id and args.verbose >= 0:
+        replay = f"; replay it with: wintergrab replay {result.run_id}" if overrides.get("record") else ""
+        print(f"kept as {result.run_id}{replay}", file=sys.stderr)
     if stats.get("dead_letters") and spider.crawl_dir:
         print(
             f"{stats['dead_letters']} failed request(s) recorded; retry just those with --retry-failed",
@@ -1547,6 +1631,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="save the site's profile and topology (sections, dead ends, orphans...) here as JSON",
     )
     c.add_argument(
+        "--record",
+        action="store_true",
+        help="keep this run's pages, items and events, to replay it without the network (wintergrab replay)",
+    )
+    c.add_argument(
+        "--workspace",
+        metavar="DIR",
+        help="where runs are kept (default .wintergrab; once it exists, every crawl's run is kept)",
+    )
+    c.add_argument(
         "--optimize",
         nargs="?",
         const=True,
@@ -1746,6 +1840,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gp.add_argument("--sample", type=int, default=30, metavar="N", help="pages to survey per site (30)")
     gp.add_argument("--max-pages", type=int, metavar="N", help="stop after N pages")
+    gp.add_argument("--record", action="store_true", help="keep the run's pages and items, to replay it")
+    gp.add_argument("--workspace", metavar="DIR", help="where runs are kept (default .wintergrab)")
     gp.add_argument(
         "--no-optimize",
         action="store_true",
@@ -1771,6 +1867,32 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--note", metavar="TEXT", help="why (kept with the decision)")
     rv.add_argument("--json", action="store_true", help="print the items as JSON")
     rv.set_defaults(func=cmd_review)
+
+    ru = sub.add_parser(
+        "runs",
+        help="the runs kept in the workspace (crawl --record)",
+        description="List the runs kept in the workspace (.wintergrab), show one, or remove one.",
+    )
+    ru.add_argument("run", nargs="?", metavar="RUN", help="show this run (run-7, 7, or last)")
+    ru.add_argument("--limit", type=int, metavar="N", help="the N latest runs")
+    ru.add_argument("--remove", metavar="RUN", help="delete a run and what it kept")
+    ru.add_argument("--workspace", metavar="DIR", help="where runs are kept (default .wintergrab)")
+    ru.add_argument("--json", action="store_true", help="print JSON")
+    ru.set_defaults(func=cmd_runs)
+
+    rp = sub.add_parser(
+        "replay",
+        help="crawl a recorded run again from its pages, offline, and compare the items",
+        description="Crawl a recorded run (crawl --record) again from its recorded pages, without the network, "
+        "and compare the items with the recorded ones. Exit status 1 when they differ.",
+    )
+    rp.add_argument("run", metavar="RUN", help="the run (run-7, 7, or last)")
+    rp.add_argument("-o", "--output", metavar="FILE", help="the replay's items (default: in the run's directory)")
+    rp.add_argument("--key", metavar="FIELD", help="the field identifying an item (default: unique_key, or url)")
+    rp.add_argument("--spider", metavar="FILE.py:Class", help="replay with this spider instead of the run's own")
+    rp.add_argument("--workspace", metavar="DIR", help="where runs are kept (default .wintergrab)")
+    rp.add_argument("--json", action="store_true", help="print the differences as JSON")
+    rp.set_defaults(func=cmd_replay)
 
     he = sub.add_parser(
         "heal",
@@ -1841,6 +1963,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
+    args.argv = list(argv) if argv is not None else sys.argv[1:]  # kept with recorded runs
     if not getattr(args, "command", None):
         parser.print_help()
         return 2

@@ -117,6 +117,7 @@ Options for any crawl:
 | `--proxy URL`, `--proxy-file FILE` | `proxies` |
 | `-b/--browser` | `use_browser = True` |
 | `--auto-browser`, `--fetch-stats FILE`, `--render-if-missing SEL` | `adaptive_fetch`: HTTP first, a browser for the pages that [need one](spiders.md#http-first-a-browser-when-needed) |
+| `--record`, `--workspace DIR` | `record`, `run_registry`: keep the run, its pages and items, to [replay](runs.md) it without the network |
 | `--optimize [FILE]` | `optimize`: [learn what to crawl](spiders.md#learning-what-to-crawl) (promising URL patterns first, barren ones skipped, parameters that change nothing dropped); FILE keeps what was learned for the next crawls |
 | `--public-only` | `network_policy = "public"` |
 | `--normalize-urls` | `url_normalizer = True` |
@@ -201,7 +202,7 @@ See [intelligence.md](intelligence.md#site-profiles).
 
 ```bash
 wintergrab goal "REQUEST" [--site URL] [--sample N] [--plan-only] [--save-plan FILE] [--explain] [--json]
-                          [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-optimize] [-o FILE]
+                          [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-optimize] [--record] [-o FILE]
 wintergrab goal --plan FILE [-y] [-o FILE]
 ```
 
@@ -242,6 +243,21 @@ values with their candidates, selector repairs waiting for a person, and
 fields whose selectors broke. Decisions are kept in the file. The extractor
 applies them the next time it runs: repairs become versions, and confirmed
 values become regression fixtures.
+
+## `wintergrab runs` and `wintergrab replay`: recorded crawls
+
+```bash
+wintergrab crawl URL ... --record [--workspace DIR]    # keep the run: settings, events, pages, items
+wintergrab runs [RUN] [--limit N] [--json] [--remove RUN] [--workspace DIR]
+wintergrab replay RUN [-o FILE] [--key FIELD] [--spider FILE.py:Class] [--json] [--workspace DIR]
+```
+
+`runs` lists the runs kept in the workspace (`.wintergrab`), newest first,
+or shows one (`run-7`, `7`, `last`). `replay` crawls a recorded run again
+from its recorded pages, without the network. It compares the items with
+the recorded ones, and exits with 1 when they differ. `goal --record` keeps
+goal runs the same way. Once `.wintergrab` exists, every crawl's run is
+kept. See [runs.md](runs.md).
 
 ## `wintergrab history`: what changed between crawls
 

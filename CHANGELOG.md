@@ -345,8 +345,38 @@
   --no-optimize`), and fetch record pages before more listing pages: the
   first 40 of the shop's products took 50 pages instead of 81.
 
+### Runs, recording and replay (`wintergrab.runs`)
+
+- `Spider.run_registry = True` (or a workspace directory) keeps a record of
+  each run in `.wintergrab/runs/run-N`: settings, status, stats, failure
+  diagnoses, events, and how to run it again. `result.run_id` names it.
+  `Spider.record = True` (`crawl --record`, `goal --record`) also keeps:
+  - every response received, whatever its status (an HTTP cache, robots.txt
+    included);
+  - the items written;
+  - each response's timing.
+- `replay(run)` (`wintergrab replay RUN`) crawls a recorded run again from
+  its archive, without the network (no page, DNS lookup or robots.txt
+  request):
+  - it uses the run's command line, spider class or goal plan, or a class
+    given;
+  - it compares the items with the recorded ones (`DatasetDiff`) and counts
+    the requests beyond the recording;
+  - the CLI exits with 1 when they differ.
+
+  Page limits are lifted, so the recording decides which pages. Healing
+  extractors and learned files are left as they are.
+- `wintergrab runs` lists, shows and removes runs. Once `.wintergrab` exists,
+  every CLI crawl and goal run is kept.
+- `GoalPlan.from_dict()`.
+
 ### Fixes
 
+- A spider given an empty `HTTPCache` object (`cache=HTTPCache(...)` with
+  nothing in it yet) used no cache at all: the cache's length made it
+  falsy.
+- Offline, a page missing from the cache is logged quietly instead of as an
+  error for each page.
 - A goal on part of a site (`on shop.example/shop/`) could plan to extract
   record pages found in the sitemap outside that part, and collect nothing.
   The survey now samples the pages of that part first, then pages that look

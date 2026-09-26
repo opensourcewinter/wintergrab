@@ -29,12 +29,13 @@ from ..errors import (
     describe,
 )
 from ..events import JsonlEventSink
-from ..fetchers.cache import HTTPCache
+from ..fetchers.cache import CacheMiss, HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..fetchers.response import Response
 from ..fetchers.strategy import FetchStrategy
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
+from ..runs import RunRecorder, RunRegistry
 from ..urls import URLNormalizer, URLRules
 from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
 from .budget import BudgetMonitor, BudgetStatus
@@ -120,6 +121,8 @@ class Engine:
         self.url_rules = URLRules.coerce(spider.url_rules)
         self.adaptive = FetchStrategy.coerce(spider.adaptive_fetch)
         self.optimizer = CrawlOptimizer.coerce(spider.optimize, crawl_dir=spider.crawl_dir)
+        registry = RunRegistry.coerce(spider.run_registry) or (RunRegistry() if spider.record else None)
+        self.recorder = RunRecorder(registry, spider, record=bool(spider.record)) if registry is not None else None
         self._continued: set[int] = set()  # with the optimizer: attempts whose request goes on (a retry...)
         self.network_policy = spider.get_network_policy()
         self._policy_warned: set[str] = set()
@@ -266,6 +269,8 @@ class Engine:
         try:
             state = self._load_state(resume)
             frontier_existed = self._open_frontier(resume)
+            if self.recorder is not None:  # before the sessions: a recorded run has its own cache
+                self.recorder.start(resumed=state is not None or frontier_existed)
             self._whole_crawl = state is None and not frontier_existed and not spider.retry_dead_letters
             # A frontier that survived a crash means earlier output is part of this crawl.
             self._setup_output(append=state is not None or frontier_existed)
@@ -273,6 +278,10 @@ class Engine:
             self.budget.attach_output(self.exporter)
             self._output_budget = "max_output_bytes" in self.budget.limits and self.exporter is not None
             self._setup_events()
+            if self.recorder is not None and self.recorder.run is not None:
+                sink = JsonlEventSink(self.recorder.run.directory / "events.jsonl")
+                self._own_sinks.append(sink)
+                self._unsubscribe_sinks.append(self.events.subscribe(sink, self.recorder.event_kinds()))
             self._bind_extensions()
             spider.configure_sessions(self.sessions)
             if not len(self.sessions):
@@ -793,6 +802,9 @@ class Engine:
             fetch_strategy=strategy,
             optimizer=optimizer,
         )
+        if self.recorder is not None and self.recorder.run is not None:
+            self.recorder.finish(result, status=status, error=self._fatal)
+            result.run_id = self.recorder.run.id
         self._log_progress(final=True)
         try:
             await maybe_await(spider.on_close(result))
@@ -1196,7 +1208,8 @@ class Engine:
             retried = error.retryable and self._retry(request, describe(error))
             self.failures.failure(domain, request.url, error=error, final=not retried)
             if not retried:
-                await self._give_up(request, error)
+                # offline, a page not in the cache is information (a replay went further), not an alarm
+                await self._give_up(request, error, quiet=isinstance(error, CacheMiss))
             return
         self.stats.inc(f"error/{type(error).__name__}")
         self.failures.failure(domain, request.url, error=error, final=True)
@@ -1709,6 +1722,8 @@ class Engine:
             self.stats.inc("items_duplicate")
             return None
         self.stats.inc("items")
+        if self.recorder is not None:
+            self.recorder.item(processed)
         if self.exporter is not None:
             try:
                 self.exporter.write(processed)

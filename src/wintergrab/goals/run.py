@@ -185,6 +185,8 @@ def run_plan(
     pipeline = Pipeline(stages, name="goal")
     options: dict[str, Any] = dict(settings)
     options.setdefault("optimize", True)  # skip what gives nothing, drop parameters that change nothing
+    if options.get("record") or options.get("run_registry"):
+        options.setdefault("run_recipe", {"goal_plan": plan.to_dict()})  # a replay needs no survey
     if any(site.fetch == "adaptive" for site in sites):
         strategy = FetchStrategy()
         for site in sites:

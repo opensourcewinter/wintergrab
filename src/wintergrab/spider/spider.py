@@ -66,6 +66,8 @@ class CrawlResult:
     #: With ``optimize``: the :class:`~wintergrab.spider.optimizer.CrawlOptimizer`, with what it learned
     #: about each URL pattern (``describe()``).
     optimizer: Any = None
+    #: With ``run_registry`` or ``record``: the run's id in the registry (``"run-7"``; see :mod:`wintergrab.runs`).
+    run_id: str | None = None
 
     @property
     def paused(self) -> bool:
@@ -236,6 +238,15 @@ class Spider:
     #: :mod:`wintergrab.spider.optimizer`): ``True``, a file that keeps what was learned across
     #: crawls, or a :class:`~wintergrab.spider.optimizer.CrawlOptimizer`.
     optimize: Any = False
+    #: Keep a record of each run in a workspace (see :mod:`wintergrab.runs`): ``True`` for ``.wintergrab``
+    #: in the current directory, or a directory. The record has the run's settings, status, stats,
+    #: failures and events.
+    run_registry: Any = None
+    #: Also keep every response and item of the run, to replay it without the network
+    #: (:func:`wintergrab.runs.replay`); implies ``run_registry``. The recording is the run's own cache.
+    record: bool = False
+    #: How to run this crawl again, kept with its record (the command line and goal runs set it).
+    run_recipe: dict[str, Any] | None = None
     #: Session to retry *blocked* requests with (e.g. ``"browser"``).
     fallback_session: str | None = None
     #: Copy cookies from browser responses into the HTTP sessions, so a session
@@ -329,7 +340,7 @@ class Spider:
 
     def http_cache(self) -> HTTPCache | None:
         """The spider's shared :class:`HTTPCache` (``None`` unless :attr:`cache` is set)."""
-        if self._http_cache is None and self.cache:
+        if self._http_cache is None and self.cache is not None and self.cache is not False:  # an empty cache is falsy
             self._http_cache = HTTPCache.coerce(self.cache, mode=self.cache_mode, ttl=self.cache_ttl)
         return self._http_cache
 

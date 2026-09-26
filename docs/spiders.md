@@ -523,6 +523,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `budget_soft_limit` / `budget_soft_priority` | `None` / `1` | Past this fraction of a budget, only start requests with at least this priority. |
 | `crawl_order` | `"bfs"` | `"bfs"` or `"dfs"` among equal priorities. |
 | `priority_fn` | `None` | `request -> int` priority for every queued request. |
+| `run_registry` / `record` | `None` / `False` | Keep a record of each run in a workspace (`True`: `.wintergrab`), and with `record` its pages and items too, to [replay](runs.md) it without the network. `result.run_id` names it. |
 | `optimize` | `False` | [Learn which URL patterns give items](#learning-what-to-crawl): fetch them first, skip those that give nothing, drop query parameters that change nothing. `True`, or a file that keeps what was learned. |
 | `middlewares` / `pipelines` | `()` | [Downloader middleware and item pipelines](#middleware-and-pipelines). |
 | `dead_letters` / `retry_dead_letters` | `True` / `False` | Record failed requests in `crawl_dir/dead_letters.jsonl`; queue them again. |

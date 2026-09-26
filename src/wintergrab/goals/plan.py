@@ -305,6 +305,11 @@ class GoalPlan:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise ConfigurationError(f"cannot read the plan {path}: {exc}") from exc
+        return cls.from_dict(data)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> GoalPlan:
+        """A plan from its :meth:`to_dict` form."""
         goal = Goal.from_dict(data.get("goal") or {})
         return cls(
             goal=goal, sites=[SitePlan.from_dict(s) for s in data.get("sites") or ()], created=data.get("created", "")

@@ -56,6 +56,10 @@ thousands of pages), the same API scales up.
   pages lead nowhere, and stops downloading pages under parameters that
   change nothing. On the test site's shop, that is 203 pages instead of
   376, with every item found, and 172 on the next crawl.
+- **Replays crawls.** `--record` keeps a crawl's pages. `wintergrab replay`
+  crawls them again offline after you change a spider or a schema, and
+  shows what changed in the data. The exit status makes it a regression
+  test.
 - **Survives redesigns.** With `--heal`, an extractor notices when its
   selectors stop matching and finds replacements. It tests them on the
   failing pages and applies them only when other evidence on the page
@@ -247,8 +251,9 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |
 | [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies, site profiles and topology (`wintergrab inspect`), with the evidence |
 | [Goals](https://github.com/opensourcewinter/wintergrab/blob/main/docs/goals.md) | Say what data you want; wintergrab plans the crawl, shows its cost, and collects the records (`wintergrab goal`) |
+| [Runs and replay](https://github.com/opensourcewinter/wintergrab/blob/main/docs/runs.md) | Keep each crawl's record and pages; replay it offline after a change and see what it does to the data (`wintergrab runs`, `wintergrab replay`) |
 | [Healing](https://github.com/opensourcewinter/wintergrab/blob/main/docs/healing.md) | Extractors that repair their selectors when a site changes, with versions, rollback and a review queue (`wintergrab heal`, `wintergrab review`) |
-| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `heal`, `review`, `history`, `data` and `shell` reference |
+| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `runs`, `replay`, `heal`, `review`, `history`, `data` and `shell` reference |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly
