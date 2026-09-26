@@ -95,14 +95,20 @@ def test_browser_rendering() -> None:
     assert len(texts) == 10 and all(texts)
 
 
+def bot_check(page: wg.Response) -> bool:
+    """Whether pypi.org's CDN sent its JavaScript bot check instead of the page (it does, to some networks).
+    Then it must really be that check that was flagged, not the page misjudged."""
+    if not looks_blocked(page):
+        return False
+    title = page.css("title::text").get("")
+    assert "challenge" in title.lower(), f"flagged as blocked but not a challenge page: {title!r}"
+    return True
+
+
 def test_pypi_project_page() -> None:
     page = wg.get("https://pypi.org/project/lxml/")
     assert page.status == 200
-    title = page.css("title::text").get("")
-    if looks_blocked(page):
-        # pypi.org's CDN sends some networks a JavaScript bot check instead of
-        # the page. Then it must really be that check, not a misdetected page.
-        assert "challenge" in title.lower(), f"flagged as blocked but not a challenge page: {title!r}"
+    if bot_check(page):
         pytest.skip("pypi.org served its bot check to this network (detected correctly)")
     assert page.css("h1.project-header__name::text").get("").strip().startswith("lxml")
     assert page.structured_data()["opengraph"]
@@ -112,6 +118,9 @@ def test_pypi_feed_and_cache(tmp_path) -> None:
     assert len(wg.sitemap("https://pypi.org/rss/updates.xml", max_sitemaps=1)) > 0
     with wg.Fetcher(cache=str(tmp_path)) as http:
         first = http.get("https://pypi.org/project/cssselect/")
+        if bot_check(first):
+            assert first.cache_status is None  # (the check says no-store, and is not a page to keep)
+            pytest.skip("pypi.org served its bot check to this network (detected correctly)")
         second = http.get("https://pypi.org/project/cssselect/")
     assert first.cache_status == "stored"
     assert second.cache_status in ("hit", "revalidated")

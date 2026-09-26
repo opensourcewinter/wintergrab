@@ -5,7 +5,7 @@ wintergrab has two kinds of fetchers, each in a sync and an async flavour:
 | | Sync | Async | Use for |
 |---|---|---|---|
 | HTTP | `Fetcher` / `wg.get()` | `AsyncFetcher` / `wg.aget()` | Most pages. Fast, looks like a real browser. |
-| Browser | `BrowserFetcher` / `wg.render()` | `AsyncBrowserFetcher` / `wg.arender()` | JavaScript pages, clicking/scrolling, stubborn bot checks. |
+| Browser | `BrowserFetcher` / `wg.render()` | `AsyncBrowserFetcher` / `wg.arender()` | JavaScript pages, clicking and scrolling. |
 
 All of them return the same [`Response`](#the-response-object).
 

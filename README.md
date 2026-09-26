@@ -11,14 +11,15 @@ for quote in page.css(".quote"):
 ```
 
 wintergrab is a Python toolkit for grabbing data from websites. Simple things
-are one line. When a site is harder (JavaScript, bot checks, rate limits,
-thousands of pages), the same API scales up.
+are one line. When a site is harder (JavaScript, rate limits, thousands of
+pages), the same API scales up.
 
 - **Fetch like a real browser.** HTTP requests carry Chrome/Firefox/Safari
   TLS and HTTP/2 fingerprints (via [curl_cffi](https://github.com/lexiforest/curl_cffi)).
   A headless Chromium (via [Playwright](https://playwright.dev/python/)) is
-  one flag away for JavaScript pages. It hides common automation tells and
-  waits out "checking your browser" interstitials.
+  one flag away for JavaScript pages. It is Chromium as it is: nothing hides
+  that it is automated, and a "checking your browser" page that clears by
+  itself is waited for.
 - **Parse with CSS or XPath.** Scrapy-style `::text` / `::attr(href)`,
   extraction schemas, search by text, "find similar elements", and
   HTML → Markdown/text conversion.
