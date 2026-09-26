@@ -283,6 +283,18 @@ an error that says so, not a setting silently ignored
 - `plan.run(output)` collects the records with one spider: extraction,
   conditions and de-duplication as a data pipeline, adaptive fetching when
   some pages need JavaScript, the goal's limit, history when watching.
+- **The whole loop in one run**: `plan.run(output, provenance=True,
+  heal="DIR")` (`wintergrab goal --provenance --heal DIR [--review FILE]`).
+  Every record says where each value came from (`_provenance`; a record
+  from the site's API names the call, its page and the field each value was
+  read from). The records are read by a self-healing extractor kept in DIR:
+  the plan's schema is its first version, selectors are repaired when the
+  site changes, what it cannot decide and low-confidence values are
+  questions in `DIR/review.jsonl`, and the first complete record of each
+  site is kept as a regression fixture (`wintergrab heal DIR --check`). The
+  summary says the version, the repairs, the fixtures and the questions
+  waiting; `result.counts["repairs"]`, `["questions"]`, `["fixtures"]`.
+  `review` without `heal` is a `ConfigurationError`.
 - `wintergrab goal "..."` shows how the request was understood and the plan,
   asks before big crawls (`--yes`), and writes the records; `--plan-only`,
   `--save-plan`, `--plan`, `--explain`, `--json`.
@@ -337,7 +349,11 @@ an error that says so, not a setting silently ignored
   FIELD` (why a field is what it is on a page), `wintergrab heal DIR` (versions,
   health, `--log`, `--diff`, `--rollback`, `--activate`, `--import`,
   `--check`), and `wintergrab review FILE` (`--accept`, `--choice`,
-  `--reject`, `--correct`, `--note`).
+  `--reject`, `--correct`, `--note`). `--heal DIR` without `--review` keeps
+  the questions in `DIR/review.jsonl` (before, they were not asked);
+  `--review` without `--heal` is an error, not an option ignored.
+  `ExtractorVersions.add_fixture` keeps typed values (a price) as JSON
+  holds them.
 
 ### Crawl optimization (`wintergrab.spider.optimizer`)
 

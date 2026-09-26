@@ -241,7 +241,10 @@ and returns a `RepairResult` with every candidate and its test.
 
 In a [spider](spiders.md), use it where you would use an `Extractor`, and
 close it at the end (`close()` keeps what it learned). `wintergrab crawl
---heal` does that.
+--heal` does that, and so does `wintergrab goal --heal DIR`, which also
+keeps the first complete record of each site as a fixture
+([the whole loop](goals.md#the-whole-loop)). On the command line, `--heal
+DIR` without `--review` puts the questions in `DIR/review.jsonl`.
 
 ## Cost
 
@@ -259,7 +262,8 @@ every 40 pages. The kept pages are held in memory.
 | `versions.json` | which version is active; each version's reason, author (`initial`, `auto`, `human`), status (`active`, `retired`, `candidate`, `accepted`, `rejected`, `superseded`, `rolled back`), parent, and the test its repair passed |
 | `repairs.jsonl` | every attempt (`applied`, `queued`, `waiting`, `flagged`), confirmation, rollback, fixture and decision applied |
 | `state.json` | baselines, remembered elements, the last run's health, repairs on probation |
-| `fixtures/` | pages with confirmed values |
+| `fixtures/` | pages with confirmed values: those a person chose in the review queue, and (`by`: `goal`) the first complete record of each site a goal run read |
+| `review.jsonl` | the questions for a person, and the decisions, unless `--review FILE` puts them elsewhere |
 
 `wintergrab heal DIR --log` prints the log, `--rollback` goes back to the
 version the active one came from, `--activate N` makes a version active,

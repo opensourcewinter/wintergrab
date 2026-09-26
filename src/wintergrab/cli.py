@@ -106,6 +106,9 @@ EPILOG_GOAL = """examples:
   wintergrab goal "jobs posted in the last 30 days with title, company and salary" --site jobs.example
   wintergrab goal "articles from news.example published in 2025" --plan-only --save-plan news.plan.json
   wintergrab goal --plan news.plan.json --yes -o articles.jsonl   # run a saved (maybe edited) plan
+  wintergrab goal --plan shop.plan.json --yes -o shop.jsonl --provenance --heal shop.extractor
+      # the whole loop, run again and again: where each value came from, selectors repaired when the
+      # site changes, questions for you in shop.extractor/review.jsonl, a regression fixture per site
 
 The request is read by rules (entities, fields, conditions such as "under $1000",
 "rated 4 or more", "in the last 30 days", "in stock"); the plan shows how it was
@@ -608,7 +611,8 @@ class QuickSpider(Spider):
             if self.heal:
                 from .extraction.healing import HealingExtractor
 
-                extractor = HealingExtractor(self.heal, self.extract, review=self.review, provenance=self.provenance,
+                review = self.review or Path(self.heal) / "review.jsonl"
+                extractor = HealingExtractor(self.heal, self.extract, review=review, provenance=self.provenance,
                                              model=model)  # fmt: skip
             else:
                 from .extraction import Extractor
@@ -790,11 +794,17 @@ def cmd_goal(args: argparse.Namespace) -> int:
             print(f"the plan makes about {estimate.requests:,} requests: add --yes to run it", file=sys.stderr)
             return 0
     output = args.output or "-"
+    if args.review and not args.heal:
+        print("error: --review needs --heal DIR (the review queue is a self-healing extractor's)", file=sys.stderr)
+        return 2
     result = plan.run(
         output,
         max_pages=args.max_pages,
         keep_items=output == "-",
         use_api=not args.no_api,
+        provenance=args.provenance,
+        heal=args.heal,
+        review=args.review,
         log_level="DEBUG" if args.verbose > 0 else ("WARNING" if args.verbose < 0 else "INFO"),
         progress=False if output == "-" else None,
         optimize=not args.no_optimize,
@@ -1446,7 +1456,7 @@ def cmd_heal(args: argparse.Namespace) -> int:
     from .extraction.healing import HealingExtractor
 
     try:
-        extractor = HealingExtractor(args.directory, review=args.review)
+        extractor = HealingExtractor(args.directory, review=args.review or Path(args.directory) / "review.jsonl")
         versions = extractor.versions
         if args.rollback:
             version = versions.rollback(reason=args.note or "rolled back by hand", by="human")
@@ -1549,7 +1559,7 @@ def _crawl_settings(args: argparse.Namespace) -> tuple[type[Spider], dict[str, A
             container=args.container,
             provenance=args.provenance,
             heal=args.heal,
-            review=args.review,
+            review=_review_file(args),
             model=args.model,
             model_url=args.model_url,
         )
@@ -2580,7 +2590,9 @@ def _add_typed_extract_options(p: Any, *, schema_flag: bool = True) -> None:
         metavar="DIR",
         help="(--extract) keep versions of the extractor in DIR and repair its selectors when the site changes",
     )
-    p.add_argument("--review", metavar="FILE", help="(--heal) queue what needs a person in FILE (wintergrab review)")
+    p.add_argument(
+        "--review", metavar="FILE", help="(--heal) queue what needs a person in FILE instead of DIR/review.jsonl"
+    )
     p.add_argument(
         "--model",
         metavar="PROVIDER:NAME",
@@ -2600,14 +2612,23 @@ def _model(args: argparse.Namespace) -> Any:
     return load_model(spec, base_url=getattr(args, "model_url", None))
 
 
+def _review_file(args: argparse.Namespace) -> str | None:
+    """``--review FILE``, which needs ``--heal DIR`` (whose ``review.jsonl`` it is by default)."""
+    review, heal = getattr(args, "review", None), getattr(args, "heal", None)
+    if review and not heal:
+        raise SystemExit("error: --review needs --heal DIR (the review queue is a self-healing extractor's)")
+    return review
+
+
 def _extractor(args: argparse.Namespace) -> Any:
+    review = _review_file(args)
     if not getattr(args, "extract", None) and not getattr(args, "heal", None):
         return None
     if getattr(args, "heal", None):
         from .extraction.healing import HealingExtractor
 
-        return HealingExtractor(args.heal, args.extract, review=args.review, provenance=args.provenance,
-                                model=_model(args))  # fmt: skip
+        return HealingExtractor(args.heal, args.extract, review=review or Path(args.heal) / "review.jsonl",
+                                provenance=args.provenance, model=_model(args))  # fmt: skip
     from .extraction import Extractor
 
     return Extractor(
@@ -3157,6 +3178,14 @@ def build_parser() -> argparse.ArgumentParser:
         "(by default the plan collects from it)",
     )
     gp.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (default 20)")
+    gp.add_argument("--provenance", action="store_true", help="add where each value came from to the records")
+    gp.add_argument(
+        "--heal",
+        metavar="DIR",
+        help="read the records with a self-healing extractor kept in DIR: selectors repaired when the site "
+        "changes, questions for you in DIR/review.jsonl (wintergrab review), a regression fixture per site",
+    )
+    gp.add_argument("--review", metavar="FILE", help="(--heal) the review queue's file, instead of DIR/review.jsonl")
     gp.add_argument("-o", "--output", metavar="FILE", help="save the records (.jsonl, .csv, .json); default stdout")
     gp.add_argument("--json", action="store_true", help="print the plan as JSON (and collect nothing)")
     gp.set_defaults(func=cmd_goal)

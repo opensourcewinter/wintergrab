@@ -220,6 +220,57 @@ def test_plans_run_and_replay(site, tmp_path) -> None:
     assert limited.run(log_level=None).counts["records"] == 2
 
 
+def test_the_whole_loop_in_one_run(site, tmp_path, capsys) -> None:
+    """provenance=True, heal=DIR: records say where each value came from, the plan's schema is read by a
+    self-healing extractor kept in DIR (a fixture per site, questions in DIR/review.jsonl), and a redesign is
+    repaired the next time the plan runs."""
+    from wintergrab.cli import main
+    from wintergrab.extraction.healing import ExtractorVersions
+    from wintergrab.extraction.review import ReviewQueue
+
+    schema = tmp_path / "product.schema.json"
+    fields = {"name": {"type": "string", "selectors": ["h1"]}, "price": {"type": "money", "selectors": ["p.price"]}}
+    schema.write_text(json.dumps({"name": "product", "fields": {**fields, "url": "url"}}), encoding="utf-8")
+    heal = tmp_path / "ext"
+    products = plan_goal(read("products with name and price", sites=[site.url + "/products/page/1"]), sample=15)
+    products.schema = str(schema)
+    out = tmp_path / "products.jsonl"
+    result = products.run(str(out), log_level=None, provenance=True, heal=str(heal))
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert result.counts["records"] == len(rows) == 20
+    where = rows[0]["_provenance"]
+    assert where["url"] == rows[0]["url"] and where["extractor"] == "product@1" and "fetched_at" in where
+    assert where["fields"]["price"]["method"] == "selector"  # (the evidence per field, as the extractor keeps it)
+    versions = ExtractorVersions(heal)
+    assert versions.active_number == 1 and versions.load_state()["fields"]["price"]["baseline"] == 1.0
+    fixtures = versions.fixtures()  # the site's first complete record, as later versions must read it
+    assert len(fixtures) == 1 and fixtures[0].by == "goal" and "/product/" in fixtures[0].url
+    assert fixtures[0].expected["name"].startswith("Product") and fixtures[0].expected["price"]["currency"] == "USD"
+    assert versions.check_fixtures() == []
+    assert (result.extractor, result.extractor_version, result.review) == (str(heal), 1, str(heal / "review.jsonl"))
+    assert result.counts["fixtures"] == 1 and result.counts["repairs"] == 0 and result.counts["questions"] == 0
+    assert f"self-healing extractor {heal}: version 1, 1 regression fixture(s) kept" in result.summary()
+
+    # "the redesign": the books section, whose prices are p.price_color; the plan runs again, on the same extractor
+    books = plan_goal(read("books with title and price", sites=[site.url + "/books/"]), sample=15)
+    books.schema = str(schema)
+    books.save(tmp_path / "books.plan.json")
+    again = books.run(str(tmp_path / "books.jsonl"), log_level=None, provenance=True, heal=str(heal))
+    assert again.counts["records"] > 10 and again.counts["repairs"] == 1 and again.counts["fixtures"] == 0
+    assert ExtractorVersions(heal).active.reason == "repair of price: p.price -> .price_color (anchored)"
+    assert ", 1 repair(s) this run" in again.summary() and "question(s)" not in again.summary()
+    assert ReviewQueue(heal / "review.jsonl").pending() == []  # (nothing it could not decide)
+    # the command: the same, and the summary says what the extractor did
+    assert main(["goal", "--plan", str(tmp_path / "books.plan.json"), "--yes", "-o", str(tmp_path / "b.jsonl"),
+                 "--provenance", "--heal", str(heal)]) == 0  # fmt: skip
+    err = capsys.readouterr().err
+    assert f"self-healing extractor {heal}: version 2" in err
+    assert main(["goal", "--plan", str(tmp_path / "books.plan.json"), "--yes", "--review", "r.jsonl"]) == 2
+    assert "--review needs --heal" in capsys.readouterr().err
+    with pytest.raises(ConfigurationError, match="review needs heal"):
+        books.run(log_level=None, review=str(tmp_path / "r.jsonl"))
+
+
 def test_goal_command(site, tmp_path, capsys) -> None:
     from wintergrab.cli import main
 

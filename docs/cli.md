@@ -75,7 +75,7 @@ Options:
 | `--each SEL`, `--field NAME=SEL` | Build records (repeatable). |
 | `--extract SCHEMA`, `--all`, `--container SEL`, `--explain`, `--provenance` | Typed extraction with a [data schema](extraction.md). |
 | `--why FIELD` | (`--extract`) Why FIELD is what it is on the page, or empty: what each strategy saw, and the likely causes, each saying how sure it is ([extraction](extraction.md#why-is-this-field-empty)). |
-| `--heal DIR`, `--review FILE` | (`--extract`) A [self-healing extractor](healing.md) kept in DIR, and a review queue for what needs a person. |
+| `--heal DIR`, `--review FILE` | (`--extract`) A [self-healing extractor](healing.md) kept in DIR; what needs a person waits in `DIR/review.jsonl`, or in FILE. |
 | `-f/--format`, `-o/--output FILE` | Output format and destination. |
 | `--main-content` | Markdown/text of the main content only. |
 | `--adaptive` | Use [adaptive selectors](adaptive-selectors.md). |
@@ -146,7 +146,7 @@ Options for any crawl:
 | `--block-trackers` | `resource_filter = True` |
 | `--extract SCHEMA` | (URL mode) extract typed records with [the extractor](extraction.md) (`--all`, `--container`, `--provenance`) |
 | `--model PROVIDER:NAME`, `--model-url URL` | (with `--extract`) ask a [language model](models.md) for the fields the page's own data does not give: `openai:NAME`, `anthropic:NAME`, `ollama:NAME` |
-| `--heal DIR`, `--review FILE` | (with `--extract`) a [self-healing extractor](healing.md): versions in DIR, selectors repaired when the site changes, questions in FILE |
+| `--heal DIR`, `--review FILE` | (with `--extract`) a [self-healing extractor](healing.md): versions in DIR, selectors repaired when the site changes, questions in `DIR/review.jsonl` (or FILE) |
 | `--quality FILE` | measure the items' [quality](data.md#quality) and compare it with the last run's report, kept in FILE (events `quality_degraded`, `schema_changed`) |
 | `--pipeline FILE` | appends a [data pipeline](data.md#pipelines-as-configuration) to `pipelines` (`--allow-imports` if it names Python functions) |
 | `-s/--set NAME=VALUE` | any attribute; values are parsed as JSON when possible (`-s retries=5`, `-s 'allowed_statuses=[404]'`) |
@@ -259,7 +259,8 @@ wintergrab goal "REQUEST" [--site URL] [--sample N] [--plan-only] [--save-plan F
                           [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-api] [--no-optimize]
                           [--find-sites [--provider P] [--endpoint URL]]
                           [--record] [--quality FILE] [--model PROVIDER:NAME [--model-url URL]] [-o FILE]
-wintergrab goal --plan FILE [-y] [--no-api] [-o FILE]
+                          [--provenance] [--heal DIR [--review FILE]]
+wintergrab goal --plan FILE [-y] [--no-api] [-o FILE] [--provenance] [--heal DIR]
 ```
 
 Reads the request ("Find all laptops under $1000 on shop.example with name,
@@ -279,6 +280,13 @@ request that names no site can ask a search API which sites rank for it
 shown, for you to pick one. See [goals.md](goals.md#records-from-the-sites-api).
 When records could not be written to the output, the summary says how many,
 and the exit status is 1.
+
+`--provenance` adds where each value came from to every record, and
+`--heal DIR` reads the records with a [self-healing extractor](healing.md)
+kept in DIR: selectors repaired when the site changes, questions for you in
+`DIR/review.jsonl` (`--review FILE` puts them elsewhere), and the first
+complete record of each site kept as a regression fixture. Together they
+make one run [the whole loop](goals.md#the-whole-loop).
 
 ## `wintergrab search`: search results, and what they say
 
@@ -341,9 +349,10 @@ wintergrab heal DIR --rollback | --activate N | --import SCHEMA  [--note TEXT]
 wintergrab heal DIR --check                    # the regression fixtures against the active version
 ```
 
-DIR is the directory of `get`/`crawl --extract SCHEMA --heal DIR`. `--check`
-exits with 1 when the active version reads a confirmed page differently.
-See [healing.md](healing.md).
+DIR is the directory of `get`/`crawl --extract SCHEMA --heal DIR` or
+`goal --heal DIR`; its review queue is `DIR/review.jsonl` unless `--review`
+names another file. `--check` exits with 1 when the active version reads a
+confirmed page differently. See [healing.md](healing.md).
 
 ## `wintergrab review`: decide what an extractor was unsure of
 
@@ -352,9 +361,10 @@ wintergrab review FILE [--all] [--json]
 wintergrab review FILE --accept ID [--choice B] | --reject ID | --correct ID VALUE  [--note TEXT]
 ```
 
-Lists the pending items of a review queue (`--review FILE`): low-confidence
-values with their candidates, selector repairs waiting for a person, and
-fields whose selectors broke. Decisions are kept in the file. The extractor
+Lists the pending items of a review queue (`DIR/review.jsonl` of a `--heal
+DIR` extractor, or the `--review FILE` given): low-confidence values with
+their candidates, selector repairs waiting for a person, and fields whose
+selectors broke. Decisions are kept in the file. The extractor
 applies them the next time it runs: repairs become versions, and confirmed
 values become regression fixtures.
 

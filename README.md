@@ -58,6 +58,9 @@ pages), the same API scales up.
   to a browser, the others stay on fast HTTP; when the pages call a JSON API
   that holds the records, it is read instead, page by page. No site in mind?
   `--find-sites` asks a search API (with your key) which sites rank for it.
+  Run it again and again with `--provenance --heal DIR` and it is the whole
+  loop: where each value came from, selectors repaired when the site
+  changes, questions for you, a regression fixture per site.
 - **Click to build.** `wintergrab build URL -o FILE` shows the page without
   its scripts. Click a field, a repeated card, a table or the next-page
   link, and get a schema you can read, edit and test on the page. It

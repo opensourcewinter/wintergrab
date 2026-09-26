@@ -277,6 +277,38 @@ def test_crawl_heals(site, tmp_path) -> None:
     assert all(r["price"]["currency"] == "GBP" for r in rows if "/catalogue/book-" in r["url"])
 
 
+def test_the_questions_go_in_the_extractors_directory_unless_told_otherwise(site, tmp_path, capsys) -> None:
+    from argparse import Namespace
+
+    from wintergrab.cli import _extractor, main
+
+    schema = tmp_path / "product.schema.json"
+    schema.write_text(json.dumps({"name": "product", "fields": {"name": {"type": "string", "selectors": ["h1"]}}}))
+    args = Namespace(extract=str(schema), heal=str(tmp_path / "ext"), review=None, provenance=False, model=None)
+    assert _extractor(args).review.path == tmp_path / "ext" / "review.jsonl"
+    args.review = str(tmp_path / "elsewhere.jsonl")
+    assert _extractor(args).review.path == tmp_path / "elsewhere.jsonl"
+    args.heal = None
+    with pytest.raises(SystemExit, match="--review needs --heal"):
+        _extractor(args)
+    with pytest.raises(SystemExit, match="--review needs --heal"):
+        main(["crawl", site.url + "/product/1", "--extract", str(schema), "--review", str(tmp_path / "r.jsonl")])
+    assert main(["get", site.url + "/product/1", "--extract", str(schema), "--heal", str(tmp_path / "g")]) == 0
+    capsys.readouterr()
+    assert not (tmp_path / "g" / "review.jsonl").exists()  # (no question: no file)
+    assert main(["heal", str(tmp_path / "g")]) == 0  # (reads the same queue)
+
+
+def test_fixtures_hold_typed_values_as_json_does(tmp_path) -> None:
+    from wintergrab.data.normalize import Money
+
+    schema = {"name": "product", "fields": {"price": {"type": "money", "selectors": ["p.price"]}}}
+    versions = ExtractorVersions(tmp_path / "ext", schema)
+    kept = versions.add_fixture("https://s.example/1", "<p class='price'>$9.50</p>", {"price": Money(9.5, "USD")})
+    assert kept.expected == {"price": "9.5 USD"} and versions.fixtures()[0].expected == kept.expected
+    assert versions.check_fixtures() == []  # (read back as the field's type: the same price)
+
+
 def test_rolling_back_one_repair_keeps_the_others(tmp_path) -> None:
     schema = {"name": "product", "fields": {"name": {"type": "string", "selectors": ["h1.title"]},
                                             "price": {"type": "money", "selectors": [".price"]}}}  # fmt: skip

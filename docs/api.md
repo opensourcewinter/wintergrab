@@ -787,10 +787,11 @@ checks that it is up to date.
   - `run(self, output: str | None = None, **options: Any) -> GoalResult`: Collect the records (see :func:`~wintergrab.goals.run.run_plan`).
   - `save(self, path: str | Path)`: Write the plan as JSON (edit it, and run it with :meth:`load` and :meth:`run`).
   - `to_dict(self, *, embed_schema: bool = False) -> dict[str, Any]`: The plan as JSON holds it; ``embed_schema``: a schema file's content rather than its name.
-- **`GoalResult(plan: GoalPlan, crawl: CrawlResult | None = None, records: list[dict[str, Any]] = ..., output: str | None = None, counts: Counter[str] = ..., found: Counter[str] = ..., pages: list[Response] = ..., notes: list[str] = ...)`** (class). What running a plan gave: the records (when kept), the crawl's result, and counts.
+- **`GoalResult(plan: GoalPlan, crawl: CrawlResult | None = None, records: list[dict[str, Any]] = ..., output: str | None = None, counts: Counter[str] = ..., found: Counter[str] = ..., pages: list[Response] = ..., notes: list[str] = ..., extractor: str | None = None, extractor_version: int | None = None, review: str | None = None)`** (class). What running a plan gave: the records (when kept), the crawl's result, and counts.
   - `summary(self) -> str`: The records, the fields they have, and what was left out and why.
-- **`GoalSpider(goal: Goal, plans: list[SitePlan], *, schema: Schema | None = None, keep_pages: bool = False, use_api: bool = True, **settings: Any)`** (class). Collects a goal's records, following a plan per site (see the module docs).
+- **`GoalSpider(goal: Goal, plans: list[SitePlan], *, schema: Schema | None = None, keep_pages: bool = False, use_api: bool = True, provenance: bool = False, heal: str | os.PathLike[str] | None = None, review: ReviewQueue | str | os.PathLike[str] | None = None, **settings: Any)`** (class). Collects a goal's records, following a plan per site (see the module docs).
   - `api_failed(self, request: Request, error: BaseException) -> Any`: An API request that failed: a refusal is reported; another failure on the first page leaves the site to its pages.
+  - `on_close(self, result: CrawlResult)`: A self-healing extractor keeps what it learned for the next run.
   - `parse(self, response: Response) -> Any`: A page of a ``follow`` plan: its record if it has one, and the links that lead to more.
   - `parse_api(self, response: Response) -> Any`: A page of a site's API: its records, and the next page.
   - `parse_record(self, response: Response) -> Any`: A page that holds a record: extract it.
@@ -806,7 +807,7 @@ checks that it is up to date.
 - **`parse_goal(text: str, *, sites: list[str] | None = None, parser: Callable[[str], Mapping[str, Any]] | None = None, now: datetime | None = None) -> Goal`**. A :class:`Goal` from a request in plain words (see the module docs).
 - **`path_pattern(urls: list[str]) -> str`**. A path pattern covering ``urls``: segments they share stay, the others become ``*``.
 - **`plan_goal(goal: Goal, *, sample: int = 30, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, surveys: dict[str, SiteSurvey] | None = None, log_level: str | None = 'WARNING', settings: Mapping[str, Any] | None = None, api: bool = True, probe: int = 3) -> GoalPlan`**. Plan ``goal`` for each of its sites (see the module docs).
-- **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, keep_pages: bool = False, use_api: bool = True, log_level: str | None = 'INFO', progress: bool | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
+- **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, keep_pages: bool = False, use_api: bool = True, log_level: str | None = 'INFO', progress: bool | None = None, provenance: bool = False, heal: str | os.PathLike[str] | None = None, review: ReviewQueue | str | os.PathLike[str] | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
 
 ## `wintergrab.goals.api`: Records from the API a site's pages call
 
