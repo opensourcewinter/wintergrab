@@ -170,8 +170,22 @@ records = extractor.extract_all(response, container=".product-card")
 
 `extract_all` uses, in this order: several schema.org objects of the
 schema's type (an `ItemList` of products), the elements matching
-`container`, or the page's main repeating group, found automatically. Inside
-a record only record-level strategies run.
+`container` (by default the schema's own `container`), or the page's main
+repeating group, found automatically. Inside a record only record-level
+strategies run.
+
+A schema can say where a listing's records are itself:
+
+```json
+{"name": "book", "container": "article.product_pod", "next_page": "li.next > a",
+ "fields": {"title": {"type": "string", "selectors": ["h3 a::attr(title)"]},
+            "price": {"type": "money", "selectors": ["p.price_color"]}}}
+```
+
+`wintergrab get URL --extract FILE` then reads every card of the page.
+`wintergrab crawl URL --extract FILE` does so on each page and follows
+`next_page` from page to page, rather than every link. The
+[visual builder](builder.md) makes such a schema by clicking the page.
 
 ## Extraction models
 

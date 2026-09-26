@@ -25,6 +25,15 @@ can't do the following:
   text, under a Content Security Policy that allows no script. The
   dashboard only reads, listens on 127.0.0.1, and refuses requests
   addressed to other host names (DNS rebinding).
+- **Run code in the builder, or drive it.** `wintergrab build` shows the
+  page with its scripts, frames, plugins, event handlers, `javascript:`
+  links and refresh tags removed. It shows it in a frame sandboxed without
+  scripts, under a policy that allows none, even when the page is opened
+  on its own. Only the page's images, styles and fonts load, from wherever
+  the page takes them, with no referrer.
+  Changes need a token that only the builder's own page holds, sent as JSON
+  from the same origin. The builder listens on 127.0.0.1, refuses other
+  host names, and writes to the one file named when it started.
 - **Plant a formula in a spreadsheet.** Excel output (`.xlsx`) writes text
   as text, so a crawled `=HYPERLINK(...)` never becomes a formula. CSV
   files carry no types: open crawled CSV in a spreadsheet with that in mind,

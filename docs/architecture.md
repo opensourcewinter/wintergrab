@@ -25,7 +25,7 @@ where something happens. Users start with [getting started](getting-started.md).
 ## The layers
 
 ```
-  command line (cli.py) · Python API (wintergrab.*) · dashboard (dashboard.py)
+  command line (cli.py) · Python API (wintergrab.*) · dashboard (dashboard.py) · builder (builder.py)
                                     │
   goals: read a request → survey the site → plan → run        projects: jobs, schedules, triggers,
   (goals/)                                                     webhooks (project.py, schedules.py,
@@ -101,6 +101,7 @@ where something happens. Users start with [getting started](getting-started.md).
 | `runs.py` | The run registry, recording and replay | `RunRegistry`, `replay()` |
 | `project.py`, `schedules.py`, `watch.py`, `webhooks.py` | Projects: jobs, schedules, change triggers, webhooks | `Project`, `Scheduler`, `Webhook` |
 | `dashboard.py` | The local web view of runs | `serve()` |
+| `builder.py`, `static/` | The visual builder: a schema by clicking a page | `BuilderSession`, `serve()` |
 | `models.py` | Language model adapters | `load_model()` |
 | `plugins.py` | Plugin discovery and the registry plugins use | `load_plugins()` |
 | `redact.py`, `netpolicy.py` | Keeping credentials out of records; refusing private addresses | `redact()`, `NetworkPolicy` |

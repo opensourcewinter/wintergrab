@@ -581,7 +581,7 @@ checks that it is up to date.
   - `apply(self, record: Mapping[str, Any]) -> Issue | None`
   - `classmethod from_dict(cls, data: Mapping[str, Any]) -> Rule`: A rule from its file form: ``{"code": ..., "check": "<expression>", "message": ..., ...}``.
   - `to_dict(self) -> dict[str, Any]`
-- **`Schema(name: str = 'record', fields: list[SchemaField] = ..., version: int = 1, description: str = '', key: list[str] = ..., extra: str = 'keep')`** (class). A named, versioned list of typed fields.
+- **`Schema(name: str = 'record', fields: list[SchemaField] = ..., version: int = 1, description: str = '', key: list[str] = ..., extra: str = 'keep', container: str | None = None, next_page: str | None = None)`** (class). A named, versioned list of typed fields.
   - `classmethod from_dict(cls, data: Mapping[str, Any]) -> Schema`
   - `classmethod infer(cls, records: Iterable[Mapping[str, Any]], name: str = 'inferred', *, sample: int = 1000) -> Schema`: Guess a schema from sample records (see :func:`wintergrab.data.inference.infer_schema`).
   - `key_of(self, record: Mapping[str, Any]) -> tuple[Any, ...] | None`: The record's identity (its ``key`` fields' values), ``None`` without a key or with missing parts.
@@ -962,6 +962,22 @@ checks that it is up to date.
   - `to_dict(self) -> dict[str, Any]`
 - **`serve(workspace: str | Path = '.wintergrab', *, project: Any = None, host: str = '127.0.0.1', port: int = 8710) -> _Server`**. A dashboard server for ``workspace`` (not started: call ``serve_forever()``, or run it in a thread).
 - **`summarize_events(path: Path, *, max_bytes: int = 67108864) -> EventSummary`**. Sum up a run's ``events.jsonl`` (its last ``max_bytes`` when it is bigger).
+
+## `wintergrab.builder`: The visual builder
+
+- **`DEFAULT_PORT`** = `8711`
+- **`BuilderSession(page: Response, output: str | os.PathLike[str], *, name: str | None = None)`** (class). A page being built on (see the module docs).
+  - `card(self, number: Any) -> dict[str, Any]`: The repeated card element ``number`` is in: its selector, how many there are, their numbers, and fields found in them.
+  - `element(self, number: Any) -> etree._Element`: The page's element numbered ``number``.
+  - `field(self, number: Any, container: str | None = None) -> dict[str, Any]`: Selectors for a field read from element ``number`` (inside a card when ``container`` is given), each with what it reads, and a name, a type and a way to read it guessed from the element.
+  - `next_page(self, number: Any) -> dict[str, Any]`: A selector for the link to the next page (element ``number``, or the link it is in).
+  - `number(self, el: etree._Element) -> int | None`: ``el``'s number (to show it in the page).
+  - `save(self, spec: Mapping[str, Any]) -> dict[str, Any]`: Write ``spec`` to the builder's file (nowhere else), and say how to use it.
+  - `state(self) -> dict[str, Any]`
+  - `table(self, number: Any) -> dict[str, Any]`: The table element ``number`` is in: a table of records (a card per row, a field per column), or of one record's properties (a field per row, found by its label).
+  - `test(self, spec: Mapping[str, Any]) -> dict[str, Any]`: The records ``spec`` reads on the page, as the extractor reads them.
+  - `view_html(self) -> str`: The page as the builder shows it: numbered elements, no scripts, links resolved against the page's address.
+- **`serve(session: BuilderSession, *, host: str = '127.0.0.1', port: int = 8711) -> _Server`**. A builder server for ``session`` (not started: call ``serve_forever()``, or run it in a thread).
 
 ## `wintergrab.redact`: Keeping credentials out
 

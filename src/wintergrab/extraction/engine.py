@@ -586,12 +586,14 @@ class Extractor:
         """Every record of a listing page.
 
         Uses, in this order: several schema.org objects of the schema's type
-        (an ``ItemList`` of products...), the elements matching ``container``,
-        or the page's main repeating group found by
-        :func:`~wintergrab.parser.autoextract.detect_records`. Inside a record
-        only record-level strategies run (selectors, labels, DOM, patterns).
+        (an ``ItemList`` of products...), the elements matching ``container``
+        (by default the schema's own ``container``), or the page's main
+        repeating group found by :func:`~wintergrab.parser.autoextract.detect_records`.
+        Inside a record only record-level strategies run (selectors, labels, DOM,
+        patterns).
         """
         ctx = PageContext(page, url=url)
+        container = container or self.schema.container
         wanted = target_types(self.schema.name)
         if wanted and container is None:
             for kind in ("json-ld", "microdata"):

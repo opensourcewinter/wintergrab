@@ -414,7 +414,11 @@ def _selectors_for(element: etree._Element, doc: etree._Element) -> list[tuple[s
         proposed.append((position, _POSITION))
     kept: list[tuple[str, int]] = []
     page = Selector(root=doc)
-    for query, rank in dict.fromkeys(proposed):
+    seen: set[str] = set()
+    for query, rank in proposed:  # the first way a query was proposed is its most stable
+        if query in seen:
+            continue
+        seen.add(query)
         try:
             matched = page.select(query)
         except Exception:

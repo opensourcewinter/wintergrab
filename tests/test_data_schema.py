@@ -189,11 +189,29 @@ def test_schema_file_round_trips(schema: Schema, tmp_path) -> None:
         ({"fields": {"a": {"type": "number", "minimum": "0"}}}, "must be a number"),
         ({"fields": [{"type": "string"}]}, "needs a 'name'"),
         ({"name": "no fields"}, "needs 'fields'"),
+        ({"fields": {"a": "string"}, "container": ["article"]}, "container must be a selector"),
     ],
 )
 def test_invalid_schemas(spec, message: str) -> None:
     with pytest.raises(SchemaError, match=message):
         Schema.from_dict(spec)
+
+
+def test_where_a_listing_page_holds_its_records() -> None:
+    from wintergrab.extraction import Extractor
+
+    spec = {"name": "item", "container": "li.item", "next_page": "a.next", "fields": {"name": {"type": "string",
+            "selectors": ["b"]}, "price": "money"}}  # fmt: skip
+    schema = Schema.from_dict(spec)
+    assert schema.container == "li.item" and schema.next_page == "a.next"
+    assert Schema.from_dict(schema.to_dict()).to_dict() == schema.to_dict()
+    assert "container" not in Schema.from_dict({"fields": {"a": "string"}, "container": ""}).to_dict()
+    page = "<ul><li class=item><b>A</b> $1</li><li class=item><b>B</b> $2</li></ul><ul><li>not one</li></ul>"
+    records = Extractor(schema).extract_all(page)  # the schema's container, unless another is given
+    assert [(r.data["name"], r.data["price"]) for r in records] == [
+        ("A", {"amount": 1, "currency": "USD"}),
+        ("B", {"amount": 2, "currency": "USD"}),
+    ]
 
 
 def test_schema_files_that_cannot_be_read(tmp_path) -> None:

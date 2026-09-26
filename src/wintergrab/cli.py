@@ -360,7 +360,7 @@ def cmd_get(args: argparse.Namespace) -> int:
             rows.append(doc)
             continue
         if extractor is not None:
-            listing = args.all or args.container
+            listing = args.all or args.container or extractor.schema.container  # a listing's schema says so
             found = extractor.extract_all(page, container=args.container) if listing else [extractor.extract(page)]
             if listing and not found:
                 print(f"warning: no records found on {page.url}", file=sys.stderr)
@@ -495,7 +495,7 @@ class QuickSpider(Spider):
 
                 extractor = Extractor(self.extract, provenance=self.provenance, model=model)  # type: ignore[arg-type]
             self.__dict__["_extractor"] = extractor
-        if self.extract_all or self.container:
+        if self.extract_all or self.container or extractor.schema.container:
             found = extractor.extract_all(response, container=self.container)
         else:
             found = [extractor.extract(response)]
@@ -547,9 +547,13 @@ class QuickSpider(Spider):
         if not response.is_html:
             return
         links: list[str] = []
+        extractor = self.__dict__.get("_extractor")
+        next_page = extractor.schema.next_page if extractor is not None else None
         if self.follow:
             for query in self.follow:
                 links.extend(response.links(query, allow=self.allow or None, deny=self.deny or None))
+        elif next_page:  # a listing's schema: its next pages, not the whole site
+            links = response.links(next_page, allow=self.allow or None, deny=self.deny or None)
         elif not self.paginate and self.wander:
             links = response.links(allow=self.allow or None, deny=self.deny or None, same_domain=True)
         if self.paginate:
@@ -853,6 +857,42 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     workspace = args.workspace or (str(project.workspace) if project is not None else DEFAULT_WORKSPACE)
     server = serve(workspace, project=project, host=args.host, port=args.port)
     print(f"wintergrab dashboard: {server.url}  ({workspace}; Ctrl+C to stop)", file=sys.stderr)
+    if args.open:
+        webbrowser.open(server.url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    import webbrowser
+
+    from .builder import BuilderSession, serve
+    from .fetchers import BrowserFetcher, Fetcher
+
+    try:
+        if args.browser:
+            with BrowserFetcher(timeout=args.timeout) as browser:
+                page = browser.get(ensure_scheme(args.url))
+        else:
+            with Fetcher(timeout=args.timeout) as http:
+                page = http.get(ensure_scheme(args.url))
+        if not page.ok:
+            print(f"error: {args.url} answered {page.status}", file=sys.stderr)
+            return 1
+        if not page.is_html:
+            print(f"error: {args.url} is not an HTML page", file=sys.stderr)
+            return 1
+        session = BuilderSession(page, args.output, name=args.name)
+        server = serve(session, host=args.host, port=args.port)
+    except (WintergrabError, OSError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(f"wintergrab build: {server.url}  ({page.url} -> {args.output}; Ctrl+C to stop)", file=sys.stderr)
     if args.open:
         webbrowser.open(server.url)
     try:
@@ -2339,6 +2379,27 @@ def build_parser() -> argparse.ArgumentParser:
     db.add_argument("--port", type=int, default=8710, help="the port (default 8710)")
     db.add_argument("--open", action="store_true", help="open it in a browser")
     db.set_defaults(func=cmd_dashboard)
+
+    bu = sub.add_parser(
+        "build",
+        help="build an extraction schema by clicking the parts of a page",
+        description="Fetch a page and serve the visual builder on this machine (http://127.0.0.1:8711/): click "
+        "the fields, a repeated card, a table or the next-page link; test the schema on the page; save it. The "
+        "page is shown without its scripts.",
+        epilog="examples:\n"
+        "  wintergrab build https://books.toscrape.com/ -o books.schema.json --open\n"
+        "  wintergrab crawl https://books.toscrape.com/ --extract books.schema.json -o books.jsonl\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    bu.add_argument("url", metavar="URL")
+    bu.add_argument("-o", "--output", required=True, metavar="FILE", help="the schema file to write (and to load)")
+    bu.add_argument("--name", metavar="NAME", help="what the records are (a new schema's name)")
+    bu.add_argument("--browser", "-b", action="store_true", help="fetch the page in a browser (pages built by JS)")
+    bu.add_argument("--timeout", type=float, default=30, metavar="SEC", help="to fetch the page (default 30)")
+    bu.add_argument("--host", default="127.0.0.1", help="the address to listen on (default: this machine only)")
+    bu.add_argument("--port", type=int, default=8711, help="the port (default 8711)")
+    bu.add_argument("--open", action="store_true", help="open it in a browser")
+    bu.set_defaults(func=cmd_build)
 
     ru = sub.add_parser(
         "runs",

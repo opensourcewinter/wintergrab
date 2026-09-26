@@ -478,6 +478,32 @@
   read it, the rules do.
 - None is needed or called unless named.
 
+### The visual builder (`wintergrab.builder`)
+
+- `wintergrab build URL -o FILE` fetches a page and serves a builder on
+  this machine. The page is shown without its scripts. Click:
+  - **a field**: selectors that find it (attributes meant for machines,
+    classes, a label, the tag, positions), each with what it matches and
+    reads, and a guessed name and type;
+  - **a repeated card**: the schema's `container`. Fields clicked in a
+    card get selectors that work in every card, and the fields found in
+    the cards are offered;
+  - **a table**: a table of records, a field per column, or a table of one
+    record's properties, a field per row found by its label;
+  - **the next page**: the schema's `next_page`.
+- The specification is a schema, editable in place and as JSON. **Test**
+  reads the page with it through the extractor; **Save** writes it to
+  `FILE` (and nowhere else), which the builder starts from when it exists.
+- The page is shown with its scripts, frames, plugins, event handlers,
+  `javascript:` links and refresh tags removed. Its frame is sandboxed
+  without scripts, under a policy that allows none. Changes need the
+  builder page's token, as JSON from the same origin. The builder listens
+  on 127.0.0.1 and refuses other host names.
+- Schemas can say where a listing's records are: `container` (the elements
+  holding one each) and `next_page`. `Extractor.extract_all` uses the
+  schema's container. `get --extract` reads every card, and `crawl
+  --extract` follows `next_page` rather than every link.
+
 ### Generated scrapers (`wintergrab.goals.generate_scraper`, `wintergrab.extraction.generate_schema`)
 
 - `wintergrab generate "REQUEST" -o DIR` makes a scraper for one site from

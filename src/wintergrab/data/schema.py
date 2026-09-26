@@ -25,6 +25,11 @@ Schemas load from and save to JSON (or YAML, with PyYAML installed) in a
 versioned format (``"$schema": "wintergrab/schema/v1"``), export to JSON
 Schema (:meth:`Schema.to_json_schema`), and can be inferred from sample records
 (:meth:`Schema.infer`).
+
+Besides the fields' extraction hints (``selectors``, ``sources``), a schema for
+listing pages can say where its records are: ``container``, the elements that
+hold one record each, and ``next_page``, the link to the next page of them.
+The extractor and ``wintergrab crawl --extract`` use them.
 """
 
 from __future__ import annotations
@@ -473,6 +478,10 @@ class Schema:
     key: list[str] = field(default_factory=list)
     #: Fields in records but not in the schema: ``"keep"``, ``"drop"`` or ``"warn"`` (validation info).
     extra: str = "keep"
+    #: On listing pages: the elements holding one record each (a CSS or XPath selector).
+    container: str | None = None
+    #: On listing pages: the link to the next page of records (a selector).
+    next_page: str | None = None
 
     def __post_init__(self) -> None:
         names = [f.name for f in self.fields]
@@ -526,7 +535,7 @@ class Schema:
         declared = data.get("$schema")
         if declared is not None and declared != SCHEMA_FORMAT:
             raise SchemaError(f"unsupported schema format {declared!r} (expected {SCHEMA_FORMAT!r})")
-        known = {"$schema", "name", "fields", "version", "description", "key", "extra"}
+        known = {"$schema", "name", "fields", "version", "description", "key", "extra", "container", "next_page"}
         unknown = set(data) - known
         if unknown:
             raise SchemaError(f"unknown schema option(s): {', '.join(sorted(unknown))}")
@@ -540,6 +549,8 @@ class Schema:
             description=str(data.get("description") or ""),
             key=[key] if isinstance(key, str) else list(key),
             extra=str(data.get("extra") or "keep"),
+            container=_selector_option(data, "container"),
+            next_page=_selector_option(data, "next_page"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -550,6 +561,10 @@ class Schema:
             out["key"] = list(self.key)
         if self.extra != "keep":
             out["extra"] = self.extra
+        if self.container:
+            out["container"] = self.container
+        if self.next_page:
+            out["next_page"] = self.next_page
         out["fields"] = {f.name: f.to_dict() for f in self.fields}
         return out
 
@@ -785,6 +800,15 @@ def _one(normalizer: Normalizer, f: SchemaField, raw: Any, ctx: NormalizeContext
     except (ArithmeticError, TypeError, ValueError) as exc:
         notes.append(f"error:{type(exc).__name__}")
         return None
+
+
+def _selector_option(data: Mapping[str, Any], name: str) -> str | None:
+    value = data.get(name)
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise SchemaError(f"{name} must be a selector (a string), got {value!r}")
+    return value
 
 
 def load_schema(path: str | Path) -> Schema:

@@ -7,9 +7,9 @@ stdout, so you can pipe the output anywhere.
 ```
 wintergrab [-v | -q] [--version] COMMAND ...
 
-COMMAND: get, crawl, data, inspect, goal, generate, review, fixture, test, run, schedule,
-         init, runs, replay, dashboard, heal, history, templates, shell, doctor, plugins
-         (and the commands of installed plugins)
+COMMAND: get, crawl, data, inspect, goal, generate, build, review, fixture, test, run,
+         schedule, init, runs, replay, dashboard, heal, history, templates, shell, doctor,
+         plugins (and the commands of installed plugins)
 ```
 
 `-v` shows debug logs; `-q` keeps only warnings.
@@ -242,6 +242,19 @@ against the goal's own extraction. It prints each step and writes
 `report.json` to `DIR`. The exit status is 0 when the scraper is accepted,
 1 when it is rejected (the reasons are printed). Run an accepted one with
 `wintergrab goal --plan DIR/plan.json`. See [generate.md](generate.md).
+
+## `wintergrab build`: a schema by clicking the page
+
+```bash
+wintergrab build URL -o FILE [--name NAME] [--browser] [--timeout SEC] [--host HOST] [--port N] [--open]
+```
+
+Fetches the page and serves the visual builder on this machine
+(`http://127.0.0.1:8711/`). Click the fields, a repeated card, a table or
+the next-page link. The schema is shown as JSON, editable, testable on the
+page, and saved to `FILE`, which it starts from when it exists. A schema
+with a card crawls with `wintergrab crawl URL --extract FILE`. See
+[builder.md](builder.md).
 
 ## `wintergrab heal`: a self-healing extractor's versions
 

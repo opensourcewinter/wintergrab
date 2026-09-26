@@ -219,8 +219,8 @@ def test_crawl_failures_are_diagnosed(fresh_site) -> None:
     class Troubled(Base):
         obey_robots_txt = True
         retries = 1
-        start_urls = [
-            fresh_site.url + "/product/1",
+        start_urls = [fresh_site.url + "/product/1"]
+        troubles = [
             fresh_site.url + "/status/404",
             fresh_site.url + "/ratelimited/a?limit=9&after=0",
             fresh_site.url + "/blocked",
@@ -233,6 +233,9 @@ def test_crawl_failures_are_diagnosed(fresh_site) -> None:
             if "crash" in response.url:
                 raise KeyError("price")
             yield {"url": response.url}
+            if response.url.endswith("/product/1"):  # the troubles once the site has worked
+                for url in self.troubles:
+                    yield response.follow(url)
 
         def on_error(self, request, error):
             pass

@@ -136,6 +136,11 @@ own with `register_type(name, normalizer, json_schema)`.
 `country`, `country_field`, `currency_field`, `best`, `key`, `aliases`,
 `default`, `selectors` and `sources` (extraction hints), `fields`.
 
+**Schema options**: `name`, `version`, `description`, `key`, `extra`, and
+two extraction hints for listing pages: `container` (the elements holding
+one record each) and `next_page` (the link to the next page of records).
+The [visual builder](builder.md) writes them.
+
 Schemas are files too: `Schema.load("product.schema.json")` reads JSON, YAML
 or TOML; `schema.save(path)` writes JSON or YAML in a versioned format
 (`"$schema": "wintergrab/schema/v1"`). `schema.to_json_schema()` exports

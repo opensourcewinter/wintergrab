@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="wg-token" content="{{token}}">
+<title>wintergrab build</title>
+<link rel="stylesheet" href="/builder.css">
+<script src="/builder.js" defer></script>
+</head>
+<body>
+<main>
+  <section class="view" aria-label="The page">
+    <iframe id="page" src="/page" sandbox="allow-same-origin" title="The page, without its scripts"></iframe>
+  </section>
+  <aside class="panel">
+    <header>
+      <h1>wintergrab build</h1>
+      <p class="muted"><span id="url"></span><br>saves to <code id="output"></code></p>
+    </header>
+
+    <fieldset class="modes">
+      <legend>Click the page to pick</legend>
+      <label><input type="radio" name="mode" value="field" checked> a field</label>
+      <label><input type="radio" name="mode" value="card"> a repeated card</label>
+      <label><input type="radio" name="mode" value="table"> a table</label>
+      <label><input type="radio" name="mode" value="next"> the next page</label>
+    </fieldset>
+
+    <p id="message" role="status"></p>
+
+    <section id="proposal" hidden>
+      <h2>New field</h2>
+      <div class="row">
+        <label>Name <input id="p-name" autocomplete="off" spellcheck="false"></label>
+        <label>Type <select id="p-type"></select></label>
+      </div>
+      <p class="muted" id="p-about"></p>
+      <ul id="p-candidates" class="candidates"></ul>
+      <div class="row">
+        <button id="p-add" type="button" class="primary">Add field</button>
+        <button id="p-cancel" type="button">Cancel</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Records</h2>
+      <label class="wide"><span>Card <span id="card-count" class="muted">(one record per page)</span></span>
+        <span class="row"><input id="container" placeholder="none: the page is one record" spellcheck="false"><button id="container-clear" type="button" title="No cards">×</button></span>
+      </label>
+      <div id="suggested"></div>
+      <label class="wide"><span>Next page</span>
+        <span class="row"><input id="next" placeholder="none" spellcheck="false"><button id="next-clear" type="button" title="No next page">×</button></span>
+      </label>
+    </section>
+
+    <section>
+      <h2>Fields</h2>
+      <table class="fields">
+        <thead><tr><th>Name</th><th>Type</th><th>Selector</th><th></th></tr></thead>
+        <tbody id="fields"></tbody>
+      </table>
+      <p class="muted" id="no-fields">None yet: click a part of the page.</p>
+    </section>
+
+    <section>
+      <h2>Specification</h2>
+      <p class="muted">A schema: edit it here or above, test it on the page, save it.</p>
+      <label class="wide">Records' name <input id="name" spellcheck="false"></label>
+      <textarea id="json" spellcheck="false" rows="12" aria-label="The specification as JSON"></textarea>
+      <div class="row">
+        <button id="apply" type="button">Apply the JSON</button>
+        <button id="test" type="button">Test</button>
+        <button id="save" type="button" class="primary">Save</button>
+      </div>
+    </section>
+
+    <section id="results" hidden>
+      <h2>What it reads</h2>
+      <p id="summary" class="muted"></p>
+      <div class="scroll"><table id="records"></table></div>
+    </section>
+  </aside>
+</main>
+</body>
+</html>

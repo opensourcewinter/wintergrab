@@ -43,6 +43,7 @@ MODULES = [
     ("wintergrab.storage.xlsx", "Excel"),
     ("wintergrab.storage.postgres", "PostgreSQL"),
     ("wintergrab.dashboard", "The dashboard"),
+    ("wintergrab.builder", "The visual builder"),
     ("wintergrab.redact", "Keeping credentials out"),
     ("wintergrab.errors", "Errors"),
 ]
