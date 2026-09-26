@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Responsible access (breaking)
+
+WINTERGRAB does not try to get past a block, a bot check, a rate limit or a
+login it was not given. Features built for that are gone, and using one is
+an error that says so, not a setting silently ignored
+(docs/responsible-access.md, which replaces docs/anti-blocking.md):
+
+- `Spider.fallback_session`, which fetched a blocked or rate-limited page
+  again through another session (a browser), raises `ConfigurationError`.
+  The page is reported (`blocked`, the failure report's likely cause) and
+  its domain slowed down, as before.
+- The browser's `stealth` mode, on by default, is gone: nothing patches
+  `navigator.webdriver`, the user agent, plugins or WebGL, and no launch
+  flag hides automation. `stealth=` is no longer an option.
+- `referer="google"` / `"bing"`, which made requests look like clicks from
+  search results, are gone: `referer` takes a URL (anything else raises
+  `ConfigurationError`).
+- A site's 403, 429 or block page no longer counts against the proxy it
+  came through, and its retry goes through the same proxy, in fetchers and
+  spiders alike: only a proxy's own failures (connection errors, 407, 502,
+  504) bench it or move a retry to another. `PROXY_FAILURE_STATUSES` is
+  `{407, 502, 504}`; `ProxyRotator.reuse()`.
+- `examples/08_sessions_and_fallback.py` is `examples/08_sessions.py`: HTTP
+  for most pages, a browser for the one that needs JavaScript.
+
 ### Foundation: errors, URLs, network safety
 
 - **Error taxonomy.** Every error has a `category` and a `context` dict and
@@ -535,7 +560,8 @@
   `"tabs .tabs a"`, `"snapshot"`, `"screenshot F"`, `"pdf F"`, `"download
   a.csv"`. `response.actions` says what each did; `response.snapshots` keeps
   the HTML after each tab, and `response.downloads` the files (their names
-  only, 200 MB at most). No step runs a script.
+  only, 200 MB at most). No step runs a script. What a `fill` step types is
+  left out of `response.actions`, logs and errors (`fill #password => ***`).
 - A step that cannot be done stops the page with a `BrowserFetchError`
   naming it, not retried; `dismiss` and `optional` steps are passed over.
   Steps are held to the network policy: one that leads where it refuses

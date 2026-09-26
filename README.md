@@ -214,16 +214,16 @@ class BigCrawl(Spider):
     cache = ".cache/big"         # revalidating HTTP cache; cache_mode="offline" replays the crawl
     output = "catalog.db"        # SQLite...
     unique_key = "url"           # ...with upserts: re-crawls update rows in place
-    fallback_session = "browser" # blocked page? retry it in a headless browser, share its cookies
+    adaptive_fetch = True        # HTTP first; a browser for the pages that need JavaScript
 ```
 
 Spiders also give you:
 
 - **Sessions.** Route requests through different fetchers with
-  `Request(url, session="browser")`. Set `fallback_session="browser"` to
-  retry blocked pages in a headless browser automatically.
-- **Proxy rotation.** `proxies = [...]` (or a `ProxyRotator`). Proxies that
-  keep failing are benched for a while.
+  `Request(url, session="browser")`. Cookies from a browser session (a
+  sign-in) carry over to the HTTP sessions.
+- **Proxies.** `proxies = [...]` (or a `ProxyRotator`). A proxy that keeps
+  failing is benched for a while; a site's refusal is not held against it.
 - **Speed control.** Per-domain concurrency and delays that back off on
   429/503/block pages, honour `Retry-After` and robots.txt `Crawl-delay`,
   and recover gradually.
@@ -262,7 +262,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Adaptive selectors](https://github.com/opensourcewinter/wintergrab/blob/main/docs/adaptive-selectors.md) | How relocation works and how to tune it |
 | [Spiders](https://github.com/opensourcewinter/wintergrab/blob/main/docs/spiders.md) | Crawling, sessions, pause/resume, output, every setting |
 | [Power features](https://github.com/opensourcewinter/wintergrab/blob/main/docs/power-features.md) | Zero-selector extraction, cache & offline replay, API capture, cookie handoff, sitemaps, disk frontier, SQLite |
-| [Tough sites](https://github.com/opensourcewinter/wintergrab/blob/main/docs/anti-blocking.md) | Impersonation, browsers, proxies, AutoThrottle, etiquette |
+| [Responsible access](https://github.com/opensourcewinter/wintergrab/blob/main/docs/responsible-access.md) | robots.txt, slowing down, blocked pages, honest browsers, logins, proxies, etiquette |
 | [Storage](https://github.com/opensourcewinter/wintergrab/blob/main/docs/storage.md) | Where items go: JSON Lines, JSON, CSV, SQLite, Parquet, Excel, PostgreSQL (typed columns, upserts), and your own formats |
 | [Observability](https://github.com/opensourcewinter/wintergrab/blob/main/docs/observability.md) | Events, live metrics, Prometheus, failure reports, dead letters |
 | [Data](https://github.com/opensourcewinter/wintergrab/blob/main/docs/data.md) | Normalizers, typed schemas, validation, pipelines, duplicates, quality monitoring |
@@ -294,10 +294,13 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 ## Scrape responsibly
 
 wintergrab makes polite crawling the default. Spiders obey robots.txt,
-adapt their speed to each site, and back off when asked. Stealth features
-exist so legitimate automation isn't misclassified. They don't make it OK
-to ignore a site's terms, hammer servers, or collect personal data you
-have no right to. Check the rules of each site you scrape.
+adapt their speed to each site, and back off when asked. A blocked or
+rate-limited page is reported, not fetched another way to get past the
+refusal, and the browser does not hide that it is automated
+([responsible access](https://github.com/opensourcewinter/wintergrab/blob/main/docs/responsible-access.md)).
+None of this makes it OK to ignore a site's terms, hammer servers, or
+collect personal data you have no right to. Check the rules of each site
+you scrape.
 
 ## Development
 

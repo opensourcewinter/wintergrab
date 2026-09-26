@@ -14,7 +14,7 @@ practising web scraping.
 | `05_quotes_spider.py` | a spider with pagination, multiple callbacks, JSON Lines output |
 | `06_books_resumable.py` | pause/resume, AutoThrottle, proxies from env, item pipeline |
 | `07_browser_rendering.py` | JavaScript pages with `BrowserFetcher`, `wait_for`, `page_action` |
-| `08_sessions_and_fallback.py` | several sessions in one spider, escalating blocked pages to a browser |
+| `08_sessions.py` | several sessions in one spider: HTTP for most pages, a browser for the one that needs JavaScript |
 | `09_zero_selector.py` | `auto_extract`, learning a schema from examples, `next_page`, structured data |
 | `10_big_crawl.py` | sitemaps, disk frontier, revalidating cache + offline replay, SQLite upserts |
 | `11_templates_and_evidence.py` | a record from a template (`Extractor("product")`), with where each value came from and how sure it is |

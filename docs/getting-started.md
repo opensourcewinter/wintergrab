@@ -137,6 +137,6 @@ wintergrab crawl https://quotes.toscrape.com --follow "li.next a" \
 ## Where next
 
 - Pages built with JavaScript: [fetching.md#browser](fetching.md#browser-fetching)
-- Sites that block you: [anti-blocking.md](anti-blocking.md)
+- What WINTERGRAB does when a site says no: [responsible-access.md](responsible-access.md)
 - Selectors that survive redesigns: [adaptive-selectors.md](adaptive-selectors.md)
 - Every spider setting: [spiders.md](spiders.md#settings-reference)

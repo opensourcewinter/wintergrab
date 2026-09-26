@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..errors import ConfigurationError
 from ..events import EventBus
 from ..fetchers.blocking import looks_blocked
 from ..fetchers.browser import AsyncBrowserFetcher
@@ -102,6 +103,14 @@ class CrawlResult:
             f"<CrawlResult {self.status}: {self.stats.get('pages', 0)} pages, "
             f"{self.stats.get('items', 0)} items, {len(self.items)} kept>"
         )
+
+
+#: Settings that were removed, and why (setting one is an error, not silently ignored).
+_REMOVED_SETTINGS = {
+    "fallback_session": "a blocked or rate-limited page is not fetched again another way to get past the refusal; "
+    "the domain slows down, and the page is reported (docs/responsible-access.md). For pages that need "
+    "JavaScript, set adaptive_fetch = True",
+}
 
 
 class Spider:
@@ -252,10 +261,8 @@ class Spider:
     #: Where to post the crawl's events as they happen (see :mod:`wintergrab.webhooks`): URLs,
     #: ``{"url", "events", "secret"...}`` mappings, or :class:`~wintergrab.webhooks.Webhook` objects.
     webhooks: Sequence[Any] = ()
-    #: Session to retry *blocked* requests with (e.g. ``"browser"``).
-    fallback_session: str | None = None
     #: Copy cookies from browser responses into the HTTP sessions, so a session
-    #: established in the browser (consent wall, login, JS check) carries on over
+    #: established in the browser (a login, a consent dialog) carries on over
     #: fast HTTP for the rest of the crawl.
     share_browser_cookies: bool = True
     #: Respect robots.txt rules and Crawl-delay.
@@ -325,6 +332,9 @@ class Spider:
     use_uvloop: bool = True
 
     def __init__(self, **overrides: Any) -> None:
+        for key, why in _REMOVED_SETTINGS.items():
+            if key in overrides or getattr(type(self), key, None) is not None:
+                raise ConfigurationError(f"{type(self).__name__}.{key} was removed: {why}", key=key)
         for key, value in overrides.items():
             if key.startswith("_") or not _is_setting(type(self), key):
                 raise TypeError(f"{type(self).__name__} has no setting {key!r}")
@@ -408,9 +418,8 @@ class Spider:
         """Register the fetch sessions this spider uses.
 
         The default registers ``"http"`` (an :class:`AsyncFetcher` built from
-        the spider's settings) and, if :attr:`use_browser`, :attr:`adaptive_fetch` or
-        :attr:`fallback_session` asks for it, ``"browser"``. Override to add
-        your own, e.g. several logged-in accounts.
+        the spider's settings) and, if :attr:`use_browser` or :attr:`adaptive_fetch`
+        asks for it, ``"browser"``. Override to add your own.
         """
         sessions.add(
             "http",
@@ -426,7 +435,7 @@ class Spider:
             ),
             default=not self.use_browser,
         )
-        if self.use_browser or self.adaptive_fetch or self.fallback_session == "browser":
+        if self.use_browser or self.adaptive_fetch:
             sessions.add(
                 "browser",
                 AsyncBrowserFetcher(

@@ -1057,8 +1057,7 @@ class Engine:
                     self._requeue(request)
                     self.fail(exc)
                     return
-                proxy = request.proxy or (self.proxies.next() if self.proxies is not None else None)
-                rotated = request.proxy is None and self.proxies is not None
+                proxy, rotated = self._pick_proxy(request)
                 options = self._fetch_options(request)
                 if request.meta.get("adaptive") == "browser" and session == "browser" and self.adaptive is not None:
                     options = {**self.adaptive.browser_options(), **options}  # for this attempt only
@@ -1179,8 +1178,8 @@ class Engine:
                 )
             elif live:
                 self.throttle.on_success(domain, latency)
-            if rotated:
-                bad = blocked or response.status in PROXY_FAILURE_STATUSES
+            if rotated:  # a block or a rate limit is the site's answer, not the proxy's failure
+                bad = response.status in PROXY_FAILURE_STATUSES
                 (self.proxies.report_failure if bad else self.proxies.report_success)(proxy)  # type: ignore[union-attr]
             if render is not None:
                 self._render(request, render)
@@ -1189,7 +1188,8 @@ class Engine:
             retryable = blocked or response.status in spider.retry_statuses
             if retryable:
                 reason = "blocked" if blocked else f"HTTP {response.status}"
-                retried = self._retry(request, reason, blocked=blocked, retry_after=retry_after)
+                same_proxy = proxy if rotated and response.status not in PROXY_FAILURE_STATUSES else None
+                retried = self._retry(request, reason, retry_after=retry_after, proxy=same_proxy)
                 self.failures.failure(domain, request.url, response=response, blocked=blocked, final=not retried)
                 if retried:
                     return
@@ -1366,7 +1366,24 @@ class Engine:
                 self.throttle.set_min_delay(domain, delay)
         return True
 
-    def _retry(self, request: Request, reason: str, *, blocked: bool = False, retry_after: float | None = None) -> bool:
+    def _pick_proxy(self, request: Request) -> tuple[str | None, bool]:
+        """The proxy for ``request``, and whether the rotator chose it. A retry of a page the site answered goes
+        through the proxy it was asked through: a block or a rate limit is not a reason to ask from elsewhere."""
+        if request.proxy:
+            return request.proxy, False
+        if self.proxies is None:
+            return None, False
+        pinned = request.meta.get("proxy_index")
+        pool = self.proxies.proxies
+        if isinstance(pinned, int) and 0 <= pinned < len(pool):
+            return self.proxies.reuse(pool[pinned]), True
+        return self.proxies.next(), True
+
+    def _retry(
+        self, request: Request, reason: str, *, retry_after: float | None = None, proxy: str | None = None
+    ) -> bool:
+        """Queue ``request`` again after a pause, the same way: the same session, and ``proxy`` when given (kept
+        as its place in the pool, so no proxy credentials go into a crawl's saved state)."""
         spider = self.spider
         attempt = request.retries
         if attempt >= spider.retries:
@@ -1376,9 +1393,9 @@ class Engine:
             return False
         new = request.replace(dont_filter=True)
         new.meta["retry_times"] = attempt + 1
-        if blocked and spider.fallback_session and request.session != spider.fallback_session:
-            log.info("%s looks blocked; retrying with session %r", request.url, spider.fallback_session)
-            new.session = spider.fallback_session
+        new.meta.pop("proxy_index", None)
+        if proxy is not None and self.proxies is not None and proxy in self.proxies.proxies:
+            new.meta["proxy_index"] = self.proxies.proxies.index(proxy)
         delay = min(30.0, 0.5 * 2**attempt) * random.uniform(0.75, 1.25)
         if retry_after:
             delay = 0.0  # the throttle already paused the whole domain for Retry-After

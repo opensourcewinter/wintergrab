@@ -172,11 +172,10 @@ with wg.Fetcher() as http:
 ```
 
 Spiders do this automatically (`share_browser_cookies = True`). When a
-request goes through a browser session, for example as the
-`fallback_session` for a blocked page, the cookies it ends up with are copied
-into every HTTP session. The next requests go over HTTP instead of paying
-for the browser again. Some protections also bind cookies to the exact
-browser fingerprint, so this can't always carry a session over.
+request goes through a browser session, for example to sign in with the
+site's own form ([browser actions](fetching.md#browser-actions)), the
+cookies it ends up with are copied into every HTTP session. The next
+requests go over HTTP instead of paying for the browser again.
 
 ## Sitemaps
 

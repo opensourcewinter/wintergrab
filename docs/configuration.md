@@ -31,7 +31,7 @@ be. The [settings reference](spiders.md#settings-reference) lists them all.
 | A project (`wintergrab.yaml`, `.toml` or `.json`) | Jobs, their schedules and triggers, and webhooks | [projects](projects.md) |
 | A goal plan (`--save-plan plan.json`) | A reviewed crawl plan, to run again with `--plan` | [goals](goals.md) |
 | An extraction test suite (a directory with `suite.json`) | Pages with the values expected from them | [testing](testing.md) |
-| A proxy list (`--proxy-file`) | One proxy URL per line | [tough sites](anti-blocking.md) |
+| A proxy list (`--proxy-file`) | One proxy URL per line | [responsible access](responsible-access.md#proxies) |
 
 YAML files need PyYAML (`pip install "wintergrab[yaml]"`). TOML and JSON
 need nothing more.

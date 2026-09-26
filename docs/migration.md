@@ -1,8 +1,10 @@
 # Upgrading from 0.2
 
-Code written for 0.2 keeps working. This page lists what behaves
-differently, what code may need a change, and what wintergrab now writes
-on its own. The [changelog](../CHANGELOG.md) has everything that is new.
+Code written for 0.2 keeps working, except where it uses one of the
+features that were built to get past a site's refusal: they are gone
+(below). This page lists what behaves differently, what code may need a
+change, and what wintergrab now writes on its own. The
+[changelog](../CHANGELOG.md) has everything that is new.
 
 ## What behaves differently
 
@@ -21,6 +23,28 @@ on its own. The [changelog](../CHANGELOG.md) has everything that is new.
 - **A template name is a schema.** `--extract product` and
   `Extractor("product")` use the product template when no file of that name
   exists. Before, they failed.
+
+## Features that are gone
+
+WINTERGRAB does not try to get past a block, a bot check or a rate limit
+([responsible access](responsible-access.md)). Using one of these is an
+error that says so, not a setting silently ignored:
+
+- **`fallback_session`**, which fetched a blocked or rate-limited page
+  again through another session (a browser), raises `ConfigurationError`.
+  The page is reported and its domain slowed down. For pages that need
+  JavaScript, use `adaptive_fetch = True`, or `Request(url,
+  session="browser")`.
+- **`stealth`**, on by default, patched the browser to hide that it is
+  automated (`navigator.webdriver`, the user agent, plugins, WebGL). It is
+  no longer an option: `BrowserFetcher(stealth=...)` is a `TypeError`.
+- **`referer="google"` and `"bing"`** made requests look like clicks from
+  search results. `referer` takes a URL; anything else raises
+  `ConfigurationError`.
+- **Proxies** are no longer benched for a site's 403, 429 or block page,
+  and a retry of such a page goes through the same proxy.
+  `PROXY_FAILURE_STATUSES` is `{407, 502, 504}`.
+- `examples/08_sessions_and_fallback.py` is now `examples/08_sessions.py`.
 
 ## Code that may need a change
 

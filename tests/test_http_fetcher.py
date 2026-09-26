@@ -27,9 +27,12 @@ def test_browser_like_headers_by_default(site) -> None:
 
 
 def test_custom_headers_and_referer(site) -> None:
-    echoed = wg.get(site.url + "/headers", headers={"X-Test": "1"}, referer="google").json()
+    echoed = wg.get(site.url + "/headers", headers={"X-Test": "1"}, referer=site.url + "/quotes/").json()
     assert echoed["X-Test"] == "1"
-    assert echoed["Referer"] == "https://www.google.com/"
+    assert echoed["Referer"] == site.url + "/quotes/"
+    # a Referer is the page that links here, not a pretend click from search results
+    with pytest.raises(wg.errors.ConfigurationError, match="referer is the URL of the page"):
+        wg.Fetcher(referer="google")
 
 
 def test_encodings(site) -> None:

@@ -6,7 +6,7 @@ checks that it is up to date.
 
 ## `wintergrab`: Fetching, parsing and the most used names
 
-- **`AsyncBrowserFetcher(*, headless: bool = True, stealth: bool = True, executable_path: str | None = None, channel: str | None = None, proxy: str | None = None, proxies: ProxyRotator | Sequence[str] | None = None, user_agent: str | None = None, locale: str = 'en-US', timezone_id: str | None = None, viewport: tuple[int, int] = (1366, 768), extra_headers: Mapping[str, str] | None = None, cookies: Mapping[str, str] | Sequence[Mapping[str, Any]] | None = None, block_resources: Iterable[str] = ('image', 'media', 'font'), timeout: float = 30.0, wait_until: str = 'load', max_pages: int = 4, retries: int = 1, retry_statuses: Iterable[int] = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}, wait_for_challenge: bool = True, challenge_timeout: float = 20.0, user_data_dir: str | None = None, launch_args: Sequence[str] | None = None, adaptive_storage: AdaptiveStorage | None = None, cache: HTTPCache | str | bool | None = None, cache_mode: str | None = None, cache_ttl: float | None = None, resource_filter: ResourceFilter | Mapping[str, Any] | bool | None = None, network_policy: NetworkPolicy | str | bool | None = None)`** (class). Fetch pages with a real (headless) Chromium via Playwright.
+- **`AsyncBrowserFetcher(*, headless: bool = True, executable_path: str | None = None, channel: str | None = None, proxy: str | None = None, proxies: ProxyRotator | Sequence[str] | None = None, user_agent: str | None = None, locale: str = 'en-US', timezone_id: str | None = None, viewport: tuple[int, int] = (1366, 768), extra_headers: Mapping[str, str] | None = None, cookies: Mapping[str, str] | Sequence[Mapping[str, Any]] | None = None, block_resources: Iterable[str] = ('image', 'media', 'font'), timeout: float = 30.0, wait_until: str = 'load', max_pages: int = 4, retries: int = 1, retry_statuses: Iterable[int] = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}, wait_for_challenge: bool = True, challenge_timeout: float = 20.0, user_data_dir: str | None = None, launch_args: Sequence[str] | None = None, adaptive_storage: AdaptiveStorage | None = None, cache: HTTPCache | str | bool | None = None, cache_mode: str | None = None, cache_ttl: float | None = None, resource_filter: ResourceFilter | Mapping[str, Any] | bool | None = None, network_policy: NetworkPolicy | str | bool | None = None)`** (class). Fetch pages with a real (headless) Chromium via Playwright.
   - `aclose(self)`: Close every tab, context and the browser itself.
   - `close(self)`: Close every tab, context and the browser itself.
   - `export_cookies(self, url: str | None = None, *, proxy: str | None = None) -> list[dict[str, Any]]`: Cookies of the browser session (optionally only those sent to ``url``).
@@ -66,7 +66,7 @@ checks that it is up to date.
 - **`ExtractionError`** (exception). Data could not be extracted (a required field is missing, an extractor crashed...).
 - **`FetchError`** (exception). A page could not be fetched (network error, timeout, proxy failure...).
 - **`FetchTimeout`** (exception). The request did not complete in time.
-- **`Fetcher(**kwargs: Any)`** (class). Synchronous HTTP client that looks like a real browser.
+- **`Fetcher(**kwargs: Any)`** (class). Synchronous HTTP client with a browser's TLS, HTTP/2 settings and headers (``impersonate``).
   - `add_cookies(self, cookies: Mapping[str, str] | Iterable[Mapping[str, Any]], *, url: str | None = None, domain: str | None = None)`: Load cookies into the session, scoped to a domain.
   - `close(self)`
   - `delete(self, url: str, **kwargs: Any) -> Response`
@@ -130,6 +130,7 @@ checks that it is up to date.
   - `next(self) -> str`: The proxy to use for the next request.
   - `report_failure(self, proxy: str | None)`
   - `report_success(self, proxy: str | None)`
+  - `reuse(self, proxy: str) -> str`: ``proxy`` once more (a retry of a page the site answered through it), counted as a use.
   - `stats(self) -> list[dict[str, object]]`: Per-proxy counters (passwords hidden).
 - **`RecordGroup(container_selector: str, elements: list[etree._Element], score: float, fields: dict[str, str])`** (class). A list of repeating records found by :func:`detect_records`.
   - `as_schema(self) -> LearnedSchema`: The group as a reusable :class:`LearnedSchema` (to extract other pages of the site).
@@ -272,6 +273,7 @@ checks that it is up to date.
 
 - **`VERBS`**: a dict
 - **`Action(verb: str, target: str = '', value: str | None = None, repeat: int = 1, until_gone: bool = False, optional: bool = False)`** (class). One step (see the module docs).
+  - `describe(self) -> str`: The step as :func:`str` writes it, with what a ``fill`` types left out (``fill #password => ***``): how it appears in ``response.actions``, logs and errors, which may be kept where a password must not be.
 - **`ActionsResult(log: list[dict[str, Any]] = ..., snapshots: list[dict[str, str]] = ..., downloads: list[dict[str, Any]] = ...)`** (class). What the steps did: a log, and what they kept.
 - **`load_actions(path: str | Path) -> list[Action]`**. Steps from a JSON or YAML file holding a list of them.
 - **`parse_actions(steps: Iterable[str | Mapping[str, Any]] | str | Mapping[str, Any]) -> list[Action]`**. Steps (strings or one-key mappings; see the module docs) as :class:`Action` s.

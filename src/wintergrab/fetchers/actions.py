@@ -15,7 +15,7 @@
         "download a.export",                      # a file the page offers (response.downloads)
     ])
     response.actions      # what each step did: [{"step": "click button.load-more until-gone", "ok": True,
-                          #   "detail": "clicked 4 time(s); it is gone"}, ...]
+                          #   "detail": "clicked 4 time(s); it is gone"}, ...] (what "fill" types left out)
 
 In a spider, ``Request(url, session="browser", options={"actions": [...]})``; on the command line,
 ``wintergrab get URL --do "click .more until-gone" --do "wait .item"``; in a file (JSON or YAML), a
@@ -108,6 +108,13 @@ class Action:
             text += f" x{self.repeat}"
         return text + (" (optional)" if self.optional and self.verb != "dismiss" else "")  # dismiss always is
 
+    def describe(self) -> str:
+        """The step as :func:`str` writes it, with what a ``fill`` types left out (``fill #password => ***``):
+        how it appears in ``response.actions``, logs and errors, which may be kept where a password must not be."""
+        if self.verb == "fill" and self.value:
+            return str(Action(self.verb, self.target, "***", self.repeat, self.until_gone, self.optional))
+        return str(self)
+
 
 def parse_actions(steps: Iterable[str | Mapping[str, Any]] | str | Mapping[str, Any]) -> list[Action]:
     """Steps (strings or one-key mappings; see the module docs) as :class:`Action` s.
@@ -148,11 +155,11 @@ def _parse_step(step: str | Mapping[str, Any]) -> list[Action]:
     optional = bool(options.pop("optional", False))
     until_gone = bool(options.pop("until_gone", False))
     repeat = options.pop("repeat", 1)
-    if len(options) != 1:
-        raise ConfigurationError(f"a browser action has one verb: {step!r}", key="actions")
+    if len(options) != 1:  # the keys only: a step's values may be what a login types
+        raise ConfigurationError(f"a browser action has one verb, not {', '.join(map(str, options))}", key="actions")
     verb, argument = next(iter(options.items()))
     verb = str(verb).lower()
-    _check_verb(verb, step)
+    _check_verb(verb, verb)
     if verb in ("fill", "select") and isinstance(argument, Mapping):
         return [Action(verb, str(s), str(v), optional=optional) for s, v in argument.items()]
     if verb == "press" and isinstance(argument, Mapping):
@@ -169,7 +176,7 @@ def _from_text(text: str) -> Action:
     stripped = " ".join(text.split())
     verb, _, rest = stripped.partition(" ")
     verb = verb.lower()
-    _check_verb(verb, text)
+    _check_verb(verb, verb)
     repeat, until_gone = 1, False
     match = _REPEAT.search(rest) if verb == "click" else None
     if match:
@@ -197,9 +204,7 @@ def _from_text(text: str) -> Action:
 
 def _check_verb(verb: str, step: Any) -> None:
     if verb not in VERBS:
-        raise ConfigurationError(
-            f"unknown browser action {verb!r} in {step!r}; known: {', '.join(VERBS)}", key="actions"
-        )
+        raise ConfigurationError(f"unknown browser action {verb!r}; known: {', '.join(VERBS)}", key="actions")
 
 
 @dataclass
@@ -227,24 +232,26 @@ async def run_actions(
     result = ActionsResult()
     timeout_ms = timeout * 1000
     for action in actions:
-        url = page.url
+        url, step = page.url, action.describe()
         try:
             detail = await _run(page, action, timeout_ms, downloads, result)
             if _error_page(page):  # a link to where nothing loads, or where the network policy refuses to go
                 raise BrowserError("the page it led to could not be loaded")
         except Exception as exc:
             reason = " ".join(str(exc).split("\n")[0].split())[:300]
-            result.log.append({"step": str(action), "ok": False, "detail": reason})
+            if action.verb == "fill" and action.value:
+                reason = reason.replace(action.value, "***")  # Playwright's message may quote what was typed
+            result.log.append({"step": step, "ok": False, "detail": reason})
             if not action.optional or _error_page(page):
                 raise BrowserFetchError(
                     url,
-                    f"browser action {str(action)!r} failed: {reason}",
+                    f"browser action {step!r} failed: {reason}",
                     retryable=False,
                     kind="browser",
-                    context={"action": str(action)},
+                    context={"action": step},
                 ) from None
             continue
-        result.log.append({"step": str(action), "ok": True, "detail": detail})
+        result.log.append({"step": step, "ok": True, "detail": detail})
     return result
 
 

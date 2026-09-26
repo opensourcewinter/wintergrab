@@ -99,8 +99,8 @@ def test_07_browser_rendering(site) -> None:
 
 
 @pytest.mark.browser
-def test_08_sessions_and_fallback(site) -> None:
-    spider_cls = load("08_sessions_and_fallback").MixedSpider
+def test_08_sessions(site) -> None:
+    spider_cls = load("08_sessions").MixedSpider
     result = spider_cls(
         start_urls=[site.url + "/quotes/"], js_url=site.url + "/quotes/page/2/", log_level=None, max_pages=5
     ).run()

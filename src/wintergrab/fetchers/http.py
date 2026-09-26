@@ -14,7 +14,7 @@ from urllib.parse import urljoin, urlsplit
 from curl_cffi import requests as curl_requests
 from curl_cffi.requests import exceptions as curl_exc
 
-from ..errors import FetchError, FetchTimeout, NetworkError, PolicyError, ProxyError, describe
+from ..errors import ConfigurationError, FetchError, FetchTimeout, NetworkError, PolicyError, ProxyError, describe
 from ..netpolicy import NetworkPolicy
 from ..proxy import ProxyRotator, proxy_label
 from ..request import Request
@@ -28,11 +28,10 @@ if TYPE_CHECKING:
 log = logging.getLogger("wintergrab.fetch")
 
 DEFAULT_RETRY_STATUSES: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524})
-# Statuses that count against the proxy that returned them: blocked/throttled
-# IPs (403, 429), proxy auth failures (407) and gateway errors (502, 504).
-PROXY_FAILURE_STATUSES: frozenset[int] = frozenset({403, 407, 429, 502, 504})
-
-REFERERS = {"google": "https://www.google.com/", "bing": "https://www.bing.com/"}
+# Statuses that count against the proxy that returned them: it refused us (407), or could not reach the site
+# (502, 504). A site's own refusal (403, 429, a bot check) is the site's answer, not the proxy's failure: it is not
+# held against the proxy, and a retry of it goes through the same proxy.
+PROXY_FAILURE_STATUSES: frozenset[int] = frozenset({407, 502, 504})
 
 _HTTP_VERSIONS = {1: "HTTP/1.0", 2: "HTTP/1.1", 3: "HTTP/2", 30: "HTTP/3"}
 
@@ -103,8 +102,7 @@ class _HTTPBase:
             max_redirects: Redirect limit.
             verify: Verify TLS certificates (or a CA bundle path).
             http_version: Force ``"1.1"``, ``"2"`` or ``"3"``.
-            referer: ``Referer`` sent with requests - a URL, or ``"google"``
-                / ``"bing"`` to look like a click from search results.
+            referer: ``Referer`` sent with requests: the URL of the page that links to them.
             raise_for_status: Raise :class:`~wintergrab.errors.HTTPStatusError` on 4xx/5xx.
             adaptive_storage: Where adaptive selectors on fetched pages keep
                 their data (defaults to a SQLite file in your cache dir).
@@ -136,7 +134,11 @@ class _HTTPBase:
         self.max_redirects = max_redirects
         self.verify = resolve_verify(verify)
         self.http_version = {"1.1": "v1", "1": "v1", "2": "v2", "3": "v3"}.get(str(http_version))
-        self.referer = REFERERS.get(referer, referer) if referer else None
+        if referer and not str(referer).startswith(("http://", "https://")):
+            raise ConfigurationError(
+                f"referer is the URL of the page that links to the one fetched, not {referer!r}", key="referer"
+            )
+        self.referer = referer or None
         self.raise_for_status = raise_for_status
         self.adaptive_storage = adaptive_storage
         self.cache = HTTPCache.coerce(cache, mode=cache_mode, ttl=cache_ttl)
@@ -340,7 +342,7 @@ class _HTTPBase:
 
 
 class Fetcher(_HTTPBase):
-    """Synchronous HTTP client that looks like a real browser.
+    """Synchronous HTTP client with a browser's TLS, HTTP/2 settings and headers (``impersonate``).
 
     Keeps cookies between requests (it is a session). Use it as a context
     manager or call :meth:`close` when done::
@@ -383,8 +385,12 @@ class Fetcher(_HTTPBase):
         if cached is not None:
             return self._finish(req, cached)
         attempts = 1 + (self.retries if retries is None else max(0, retries))
+        chosen, rotated, switch = proxy, False, True
         for attempt in range(attempts):
-            chosen, rotated = self._pick_proxy(proxy)
+            if switch:  # the first attempt, or the last one's proxy failed: pick one
+                chosen, rotated = self._pick_proxy(proxy)
+            elif rotated and self.proxies is not None and chosen is not None:
+                self.proxies.reuse(chosen)
             kwargs = self._request_kwargs(
                 req.method,
                 req.url,
@@ -407,6 +413,7 @@ class Fetcher(_HTTPBase):
                 if err.retryable:  # bad URLs/arguments are not the proxy's fault
                     self._report(chosen, rotated, ok=False)
                 if attempt + 1 < attempts and err.retryable:
+                    switch = True
                     delay = self._retry_delay(attempt)
                     log.info("retrying %s in %.1fs (%s)", req.url, delay, describe(exc))
                     time.sleep(delay)
@@ -415,6 +422,8 @@ class Fetcher(_HTTPBase):
             response = self._to_response(raw, req, time.monotonic() - start, history)
             self._report(chosen, rotated, ok=response.status not in PROXY_FAILURE_STATUSES)
             if response.status in self.retry_statuses and attempt + 1 < attempts:
+                # The site's own answer (429, 503...) is asked for again the same way, through the same proxy.
+                switch = response.status in PROXY_FAILURE_STATUSES
                 delay = self._retry_delay(attempt, response)
                 log.info("retrying %s in %.1fs (HTTP %s)", req.url, delay, response.status)
                 time.sleep(delay)
@@ -570,8 +579,12 @@ class AsyncFetcher(_HTTPBase):
             return self._finish(req, cached)
         session = self._get_session()
         attempts = 1 + (self.retries if retries is None else max(0, retries))
+        chosen, rotated, switch = proxy, False, True
         for attempt in range(attempts):
-            chosen, rotated = self._pick_proxy(proxy)
+            if switch:  # the first attempt, or the last one's proxy failed: pick one
+                chosen, rotated = self._pick_proxy(proxy)
+            elif rotated and self.proxies is not None and chosen is not None:
+                self.proxies.reuse(chosen)
             kwargs = self._request_kwargs(
                 req.method,
                 req.url,
@@ -594,6 +607,7 @@ class AsyncFetcher(_HTTPBase):
                 if err.retryable:  # bad URLs/arguments are not the proxy's fault
                     self._report(chosen, rotated, ok=False)
                 if attempt + 1 < attempts and err.retryable:
+                    switch = True
                     delay = self._retry_delay(attempt)
                     log.info("retrying %s in %.1fs (%s)", req.url, delay, describe(exc))
                     await asyncio.sleep(delay)
@@ -602,6 +616,8 @@ class AsyncFetcher(_HTTPBase):
             response = self._to_response(raw, req, time.monotonic() - start, history)
             self._report(chosen, rotated, ok=response.status not in PROXY_FAILURE_STATUSES)
             if response.status in self.retry_statuses and attempt + 1 < attempts:
+                # The site's own answer (429, 503...) is asked for again the same way, through the same proxy.
+                switch = response.status in PROXY_FAILURE_STATUSES
                 delay = self._retry_delay(attempt, response)
                 log.info("retrying %s in %.1fs (HTTP %s)", req.url, delay, response.status)
                 await asyncio.sleep(delay)

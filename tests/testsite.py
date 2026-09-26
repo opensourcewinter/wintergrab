@@ -5,12 +5,13 @@ from __future__ import annotations
 import gzip
 import http.client
 import json
+import re
 import threading
 import time
 from collections import Counter, defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 QUOTES = [
     ("The world as we have created it is a process of our thinking.", "Albert Einstein", ["change", "thinking"]),
@@ -361,17 +362,22 @@ class Handler(BaseHTTPRequestHandler):
             head = f"<meta property='og:title' content='Rich {n}'><meta property='og:image' content='/img/{n}.png'>"
             html = layout(f"Rich {n}", body).replace("<head>", "<head>" + head, 1)
             return self.send(200, html)
-        if path.startswith("/jsgate/"):
-            # Content needs a cookie that only a JavaScript-running client gets.
-            if "gate=passed" in (self.headers.get("Cookie") or ""):
-                n = path.rsplit("/", 1)[1]
-                return self.send(200, layout(f"gated {n}", f"<h1 id='gated'>Gated {n}</h1>"))
-            html = (
-                "<html><head><title>Just a moment...</title></head><body>Checking your browser"
-                "<script>document.cookie = 'gate=passed; path=/'; setTimeout(function(){location.reload()}, 300);</script>"
-                "</body></html>"
+        if path == "/members/login":
+            # A members' area you sign into with the site's own form (its script sets the session cookie).
+            html = layout(
+                "Sign in",
+                "<input id='user'> <button id='signin' onclick=\"document.cookie = 'member=' +"
+                " encodeURIComponent(document.getElementById('user').value) + '; path=/';"
+                " location.href = '/members/1'\">Sign in</button>",
             )
-            return self.send(403, html)
+            return self.send(200, html)
+        if path.startswith("/members/"):
+            n = path.rsplit("/", 1)[1]
+            member = re.search(r"(?:^|;\s*)member=([^;]+)", self.headers.get("Cookie") or "")
+            if member:
+                name = unquote(member.group(1))
+                return self.send(200, layout(f"members {n}", f"<h1 id='member'>Members page {n} for {name}</h1>"))
+            return self.send(401, layout("Sign in first", "<p>Members only. <a href='/members/login'>Sign in</a></p>"))
         if path == "/guarded":
             if self.headers.get("X-Solved") == "yes":
                 return self.send(200, layout("Guarded", "<h1 id='real'>Guarded content</h1>"))

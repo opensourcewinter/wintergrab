@@ -58,7 +58,6 @@ _CLIENT_OPTIONS = {
 }
 _BROWSER_CLIENT_OPTIONS = {
     "headless",
-    "stealth",
     "executable_path",
     "channel",
     "proxy",
@@ -135,9 +134,9 @@ def render(url: str, **kwargs: Any) -> Response:
 
         page = wintergrab.render("https://example.com", wait_for=".results")
 
-    Accepts :class:`BrowserFetcher` options (``headless``, ``stealth``,
-    ``proxy``, ``block_resources``...) and per-page options (``wait_for``,
-    ``wait``, ``scroll``, ``page_action``, ``screenshot``).
+    Accepts :class:`BrowserFetcher` options (``headless``, ``proxy``,
+    ``block_resources``...) and per-page options (``wait_for``, ``wait``,
+    ``scroll``, ``actions``, ``page_action``, ``screenshot``).
     """
     client, per_request = _split(kwargs, _BROWSER_CLIENT_OPTIONS)
     with BrowserFetcher(**client) as browser:

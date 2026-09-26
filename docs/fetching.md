@@ -46,7 +46,7 @@ with wg.Fetcher(impersonate="chrome", retries=3) as fetcher:
 | `follow_redirects`, `max_redirects` | `True`, `10` | Redirect handling. |
 | `verify` | `True` | TLS verification, or a CA bundle path. `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` / `SSL_CERT_FILE` are honoured. |
 | `http_version` | auto | Force `"1.1"`, `"2"` or `"3"`. |
-| `referer` | – | A URL, or `"google"` / `"bing"` to look like a click from search results. |
+| `referer` | – | The URL of the page that links to the ones fetched (sent as `Referer`). |
 | `raise_for_status` | `False` | Raise `HTTPStatusError` for 4xx/5xx instead of returning them. |
 | `adaptive_storage` | SQLite in cache dir | Where [adaptive selectors](adaptive-selectors.md) store fingerprints. |
 
@@ -99,7 +99,6 @@ runs its event loop in a background thread.
 | Option | Default | What it does |
 |---|---|---|
 | `headless` | `True` | Hide the window. `False` is handy for debugging. |
-| `stealth` | `True` | Hide common automation tells: `navigator.webdriver`, the `HeadlessChrome` user agent, empty plugin list, WebGL vendor, … |
 | `block_resources` | image, media, font | Resource types not to download. Faster and lighter. Pass `()` to load everything. |
 | `resource_filter` | – | Also block ads, analytics and trackers: `True` for the built-in lists, or a dict of `ResourceFilter` options (`lists`, `block_domains`, `allow_domains`, `block_third_party`, `block_patterns`...). `ResourceFilter.load_list(path)` reads hosts files and `\|\|domain^` blocklists. `response.blocked_resources` counts what was blocked. |
 | `network_policy` | – | Refuse requests to forbidden destinations, e.g. `"public"` (see [below](#network-policy-ssrf-protection)). |
@@ -196,6 +195,8 @@ started to finish. Each step waits `timeout` seconds at most.
   to a page that does not load stops the page too, optional or not.
 - A download keeps only the file's name, with no directories from the site.
   A file over 200 MB is deleted, and the step fails.
+- What a `fill` step types is left out of `page.actions`, logs and errors
+  (`fill #password => ***`): a login's password stays out of what is kept.
 - No step runs a script: steps do what a person could do on the page. For
   anything else, `page_action` takes your own async function.
 

@@ -35,6 +35,13 @@ def test_steps_as_text_and_as_mappings() -> None:
     assert steps[0] == Action("click", "button.more", repeat=50, until_gone=True)
     assert steps[3].optional  # a dialog that may not be there
     assert parse_actions("snapshot") == [Action("snapshot")]
+    # what a step types is left out where a password must not be: response.actions, logs, errors
+    assert [s.describe() for s in steps[4:8]] == [
+        "fill input[name=q] => ***", "fill #first => ***", "fill #last => ***", "select #sort => price",
+    ]  # fmt: skip
+    with pytest.raises(ConfigurationError) as refused:
+        parse_actions([{"fill": {"#password": "hunter2"}, "wait": ".account"}])
+    assert "hunter2" not in str(refused.value)
 
 
 @pytest.mark.parametrize(
@@ -89,10 +96,11 @@ def test_actions_on_a_page(shop, tmp_path) -> None:
                      "download a.export", f"pdf {tmp_path / 'shop.pdf'}", "dismiss .nothing-here"],
             downloads=tmp_path / "files",
         )  # fmt: skip
-        assert [(a["step"], a["detail"]) for a in page.actions][:3] == [
+        assert [(a["step"], a["detail"]) for a in page.actions][:4] == [
             ("dismiss #accept", "clicked"),
             ("click .load-more until-gone", "clicked 3 time(s); it is gone"),
             ("expand summary", "clicked 2 element(s)"),
+            ("fill #q => ***", "typed 5 character(s)"),
         ]
         assert page.actions[-1] == {"step": "dismiss .nothing-here", "ok": True, "detail": "not there"}
         assert not page.css("#cookies") and len(page.css("li.item")) == 8  # the dialog gone, every item loaded
@@ -107,6 +115,9 @@ def test_actions_on_a_page(shop, tmp_path) -> None:
         with pytest.raises(BrowserFetchError, match=r"browser action 'click \.no-such-button' failed") as failed:
             browser.get(shop + "/shop.html", actions=["click .no-such-button"], timeout=3)
         assert not failed.value.retryable and failed.value.context["action"] == "click .no-such-button"
+        with pytest.raises(BrowserFetchError, match=r"'fill #pin => \*\*\*' failed") as failed:
+            browser.get(shop + "/shop.html", actions=[{"fill": {"#pin": "hunter2"}}], timeout=2)
+        assert "hunter2" not in str(failed.value)
 
 
 @pytest.mark.browser

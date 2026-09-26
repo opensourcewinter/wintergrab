@@ -9,7 +9,6 @@ import glob
 import json as _json
 import logging
 import os
-import platform
 import sys
 import threading
 import time
@@ -68,60 +67,6 @@ INSTALL_HINT = (
     "    playwright install chromium\n"
     "Or point WINTERGRAB_BROWSER_PATH at an existing Chrome/Chromium binary."
 )
-
-# Evasions for the most common automation tells. They make a headless browser
-# look like a normal one to simple checks; they are not a guarantee.
-STEALTH_SCRIPT = r"""
-(() => {
-  const define = (obj, prop, value) => {
-    try { Object.defineProperty(obj, prop, { get: () => value, configurable: true }); } catch (e) {}
-  };
-  define(Navigator.prototype, 'webdriver', undefined);
-  define(Navigator.prototype, 'languages', __LANGUAGES__);
-  define(Navigator.prototype, 'hardwareConcurrency', 8);
-  define(Navigator.prototype, 'deviceMemory', 8);
-  if (navigator.plugins && navigator.plugins.length === 0) {
-    const fake = [
-      { name: 'PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-      { name: 'Chrome PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-      { name: 'Chromium PDF Viewer', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
-    ];
-    define(Navigator.prototype, 'plugins', Object.assign(fake, { item: i => fake[i], namedItem: n => fake.find(p => p.name === n) }));
-  }
-  if (!window.chrome) {
-    window.chrome = { runtime: {}, app: { isInstalled: false }, csi: () => ({}), loadTimes: () => ({}) };
-  }
-  if (navigator.permissions && navigator.permissions.query) {
-    const original = navigator.permissions.query.bind(navigator.permissions);
-    navigator.permissions.query = (params) =>
-      params && params.name === 'notifications'
-        ? Promise.resolve({ state: Notification.permission, onchange: null })
-        : original(params);
-  }
-  const patchWebGL = (proto) => {
-    if (!proto) return;
-    const getParameter = proto.getParameter;
-    proto.getParameter = function (p) {
-      if (p === 37445) return 'Intel Inc.';
-      if (p === 37446) return 'Intel Iris OpenGL Engine';
-      return getParameter.call(this, p);
-    };
-  };
-  patchWebGL(window.WebGLRenderingContext && WebGLRenderingContext.prototype);
-  patchWebGL(window.WebGL2RenderingContext && WebGL2RenderingContext.prototype);
-})();
-"""
-
-STEALTH_ARGS = ["--disable-blink-features=AutomationControlled", "--no-default-browser-check", "--no-first-run"]
-
-
-def _platform_token() -> str:
-    system = platform.system()
-    if system == "Windows":
-        return "Windows NT 10.0; Win64; x64"
-    if system == "Darwin":
-        return "Macintosh; Intel Mac OS X 10_15_7"
-    return "X11; Linux x86_64"
 
 
 def _discover_chromium() -> list[str]:
@@ -211,14 +156,13 @@ class _PageError:
 class AsyncBrowserFetcher:
     """Fetch pages with a real (headless) Chromium via Playwright.
 
-    Use it for pages that build their content with JavaScript, need clicks or
-    scrolling, or reject plain HTTP clients. One browser is shared by all
-    requests; each request gets its own tab.
+    Use it for pages that build their content with JavaScript, or need clicks
+    or scrolling. One browser is shared by all requests; each request gets its
+    own tab. The browser is Playwright's Chromium as it is: nothing hides that
+    it is automated (see docs/responsible-access.md).
 
     Args:
         headless: Run without a window.
-        stealth: Hide common automation tells (``navigator.webdriver``, the
-            ``HeadlessChrome`` user agent, missing plugins...).
         executable_path: Chrome/Chromium binary to use (also read from
             ``$WINTERGRAB_BROWSER_PATH``).
         channel: Playwright browser channel, e.g. ``"chrome"`` to drive an
@@ -262,7 +206,6 @@ class AsyncBrowserFetcher:
         self,
         *,
         headless: bool = True,
-        stealth: bool = True,
         executable_path: str | None = None,
         channel: str | None = None,
         proxy: str | None = None,
@@ -295,7 +238,6 @@ class AsyncBrowserFetcher:
         if user_data_dir and proxies:
             raise ValueError("user_data_dir cannot be combined with rotating proxies")
         self.headless = headless
-        self.stealth = stealth
         self.executable_path = executable_path
         self.channel = channel
         self.proxy = proxy
@@ -331,7 +273,6 @@ class AsyncBrowserFetcher:
         self._lock: asyncio.Lock | None = None
         self._sem: asyncio.Semaphore | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._ua: str | None = None
 
     # ------------------------------------------------------------------ #
     # lifecycle
@@ -361,9 +302,6 @@ class AsyncBrowserFetcher:
     def _launch_options(self) -> dict[str, Any]:
         args = list(self.launch_args)
         opts: dict[str, Any] = {"headless": self.headless, "args": args}
-        if self.stealth:
-            args.extend(a for a in STEALTH_ARGS if a not in args)
-            opts["ignore_default_args"] = ["--enable-automation"]
         if self.proxy:
             opts["proxy"] = proxy_for_playwright(self.proxy)
         return opts
@@ -380,8 +318,6 @@ class AsyncBrowserFetcher:
             env_path = os.environ.get("WINTERGRAB_BROWSER_PATH")
             if env_path:
                 attempts.append({"executable_path": env_path})
-            if self.stealth and self.headless:
-                attempts.append({"channel": "chromium"})  # "new" headless: a full Chrome, no HeadlessChrome tells
             attempts.append({})
             attempts.extend({"executable_path": p} for p in _discover_chromium())
         errors: list[str] = []
@@ -402,17 +338,7 @@ class AsyncBrowserFetcher:
         raise BrowserNotAvailable(INSTALL_HINT + "\n\nLaunch attempts:\n  " + "\n  ".join(errors))
 
     def _user_agent(self) -> str | None:
-        if self.user_agent:
-            return self.user_agent
-        if not self.stealth:
-            return None
-        if self._ua is None and self._browser is not None:
-            major = str(self._browser.version).split(".")[0]
-            self._ua = (
-                f"Mozilla/5.0 ({_platform_token()}) AppleWebKit/537.36 (KHTML, like Gecko) "
-                f"Chrome/{major}.0.0.0 Safari/537.36"
-            )
-        return self._ua
+        return self.user_agent or None
 
     def _context_options(self, proxy: str | None) -> dict[str, Any]:
         opts: dict[str, Any] = {
@@ -433,10 +359,6 @@ class AsyncBrowserFetcher:
         return opts
 
     async def _prepare_context(self, context: Any) -> None:
-        if self.stealth:
-            lang = self.locale.split("-")[0]
-            languages = f"['{self.locale}', '{lang}']" if lang != self.locale else f"['{self.locale}']"
-            await context.add_init_script(STEALTH_SCRIPT.replace("__LANGUAGES__", languages))
         if self.cookies and not isinstance(self.cookies, Mapping):
             await context.add_cookies([dict(c) for c in self.cookies])
 
@@ -598,9 +520,13 @@ class AsyncBrowserFetcher:
         assert self._sem is not None
         attempts = 1 + (self.retries if retries is None else max(0, retries))
         last_error: FetchError | None = None
+        chosen, rotated, switch = proxy, False, True
         for attempt in range(attempts):
-            chosen = proxy or (self.proxies.next() if self.proxies is not None else None)
-            rotated = proxy is None and self.proxies is not None
+            if switch:  # the first attempt, or the last one's proxy failed: pick one
+                chosen = proxy or (self.proxies.next() if self.proxies is not None else None)
+                rotated = proxy is None and self.proxies is not None
+            elif rotated and self.proxies is not None and chosen is not None:
+                self.proxies.reuse(chosen)
             try:
                 async with self._sem:
                     response = await self._fetch_once(
@@ -626,6 +552,7 @@ class AsyncBrowserFetcher:
                 if rotated and self.proxies is not None:
                     self.proxies.report_failure(chosen)
                 if attempt + 1 < attempts and last_error.retryable:
+                    switch = True
                     await asyncio.sleep(min(10.0, 1.0 * 2**attempt))
                     continue
                 raise last_error from exc
@@ -635,6 +562,8 @@ class AsyncBrowserFetcher:
                 else:
                     self.proxies.report_success(chosen)
             if response.status in self.retry_statuses and attempt + 1 < attempts:
+                # The site's own answer (429, 503...) is asked for again the same way, through the same proxy.
+                switch = response.status in PROXY_FAILURE_STATUSES
                 await asyncio.sleep(min(10.0, 1.0 * 2**attempt))
                 continue
             if use_cache and self._cache_layer is not None:

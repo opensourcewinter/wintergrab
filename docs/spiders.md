@@ -133,12 +133,11 @@ def parse(self, response):
 Shortcuts:
 
 - `use_browser = True` makes a headless browser the default session.
-- `fallback_session = "browser"` retries requests that look **blocked** (a
-  challenge page, 403 + bot-wall markers, 429) through that session.
-  With the default sessions, setting it to `"browser"` also registers the
-  browser session for you.
 - `adaptive_fetch = True` fetches over HTTP and uses the browser only for
   the pages that need it (below).
+
+A page that looks blocked is never sent to another session because of it
+(see [responsible access](responsible-access.md#blocked-pages)).
 
 ### HTTP first, a browser when needed
 
@@ -229,9 +228,10 @@ For full control, pass your own instance:
 
 Failed requests are retried up to `retries` times (default 3) with
 exponential backoff. This covers network errors, timeouts, the statuses in
-`retry_statuses`, and pages that `is_blocked()` flags. Retries go through
-the next proxy in the rotation. Blocked requests also switch to
-`fallback_session` if it's set.
+`retry_statuses`, and pages that `is_blocked()` flags. A page the site
+answered (a 429, a 503, a block page) is asked for again the same way: the
+same session, through the same proxy, after the domain has slowed down. A
+request whose connection or proxy failed goes through the next proxy.
 
 When a request finally fails:
 
@@ -460,10 +460,11 @@ class ViaProxies(Spider):
 ```
 
 Requests rotate through the proxies. A proxy that fails several times in a
-row is benched for a cooldown, which doubles for repeat offenders. Failures
-include connection errors, 403/407/429/502/504 and block pages. Use
-`Request(proxy=...)` to pin one request to a proxy. See
-[anti-blocking.md](anti-blocking.md#proxies).
+row is benched for a cooldown, which doubles for repeat offenders. Its
+failures are its own: connection errors, 407, 502 and 504. A site's 403, 429
+or block page is not held against the proxy. Use `Request(proxy=...)` to
+pin one request to a proxy. See
+[responsible access](responsible-access.md#proxies).
 
 ## Which URLs get crawled
 
@@ -551,7 +552,6 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `use_browser` | `False` | Headless browser as the default session. |
 | `adaptive_fetch` | `False` | [HTTP first, a browser for the pages that need one](#http-first-a-browser-when-needed), learned per URL pattern: `True`, a file to keep what was learned, or a `FetchStrategy`. |
 | `render_if_missing` | `()` | With `adaptive_fetch`: CSS selectors a usable page has. |
-| `fallback_session` | `None` | Session for retrying blocked requests. |
 | `obey_robots_txt` | `True` | Respect robots.txt. |
 | `robots_user_agent` | `"*"` | User agent used to match robots.txt rules. |
 | `dedupe` | `True` | Filter already-seen URLs. |
