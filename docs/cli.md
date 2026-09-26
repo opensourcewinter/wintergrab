@@ -244,6 +244,20 @@ fields whose selectors broke. Decisions are kept in the file. The extractor
 applies them the next time it runs: repairs become versions, and confirmed
 values become regression fixtures.
 
+## `wintergrab fixture` and `wintergrab test`: extraction tests
+
+```bash
+wintergrab fixture URL... --to DIR [--schema FILE] [--expect FIELD=VALUE ...] [--only] [--name NAME] [--note TEXT]
+wintergrab fixture --from-run RUN --to DIR [--schema FILE] [--match REGEX] [--limit N]
+wintergrab test DIR [--schema FILE | --heal DIR] [--only NAME] [--update] [--json]
+```
+
+`fixture` keeps pages with the values expected from them. These are what
+`--schema` reads now, plus `--expect` values on top. The pages come from
+URLs, or from what a recorded crawl kept. `test` reads every fixture's page
+and compares each value, exiting with 1 when one differs. `--update`
+accepts what was read. See [testing.md](testing.md).
+
 ## `wintergrab runs` and `wintergrab replay`: recorded crawls
 
 ```bash

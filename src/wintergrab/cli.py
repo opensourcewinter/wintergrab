@@ -703,6 +703,89 @@ def cmd_replay(args: argparse.Namespace) -> int:
     return 0 if result.same else 1
 
 
+def cmd_fixture(args: argparse.Namespace) -> int:
+    import re
+
+    from .extraction.fixtures import FixtureSuite, _show
+    from .fetchers import Fetcher
+    from .fetchers.response import Headers, Response
+
+    suite = FixtureSuite(args.to)
+    expect = {k: _coerce(v) for k, v in _parse_pairs(args.expect, "=", "--expect").items()}
+    pages: list[Response] = []
+    if args.from_run:
+        from .fetchers.cache import HTTPCache
+        from .runs import DEFAULT_WORKSPACE, RunRegistry
+
+        run = RunRegistry(args.workspace or DEFAULT_WORKSPACE).get(args.from_run)
+        if not run.recorded:
+            print(f"error: {run.id} was not recorded (crawl --record): it kept no page", file=sys.stderr)
+            return 1
+        wanted = re.compile(args.match) if args.match else None
+        archive = HTTPCache(run.archive, mode="offline")
+        try:
+            for entry in archive.entries():
+                html = "html" in entry.header_map.get("content-type", "")
+                if entry.status != 200 or not html or (wanted is not None and not wanted.search(entry.url)):
+                    continue
+                pages.append(Response(entry.url, headers=Headers(entry.headers), body=entry.body))
+                if len(pages) >= args.limit:
+                    break
+        finally:
+            archive.close()
+    elif args.urls:
+        with Fetcher(timeout=args.timeout) as fetcher:
+            for url in args.urls:
+                response = fetcher.get(ensure_scheme(url))
+                if response.status != 200:
+                    print(f"error: {url} answered {response.status}", file=sys.stderr)
+                    return 1
+                pages.append(response)
+    else:
+        print("error: give URLs, or --from-run RUN", file=sys.stderr)
+        return 2
+    if not pages:
+        print("no page to keep (none matched)", file=sys.stderr)
+        return 1
+    for page in pages:
+        fixture = suite.add(page, schema=args.schema, expect=expect, only=args.only, name=args.name,
+                            note=args.note or "")  # fmt: skip
+        values = ", ".join(f"{k}={_show(v)}" for k, v in fixture.expected.items())
+        print(f"{fixture.path}: {values}")
+    print("check these values: they are what wintergrab test will expect", file=sys.stderr)
+    return 0
+
+
+def cmd_test(args: argparse.Namespace) -> int:
+    from .extraction.fixtures import FixtureSuite
+
+    schema: Any = args.schema
+    directory = args.directory
+    if args.heal:
+        from .extraction.healing import ExtractorVersions
+
+        versions = ExtractorVersions(args.heal)
+        schema = schema or versions.schema()  # its active version
+        directory = directory or str(versions.directory / "fixtures")
+    if not directory:
+        print("error: which fixtures? give their directory (or --heal DIR)", file=sys.stderr)
+        return 2
+    suite = FixtureSuite(directory)
+    if not suite.fixtures(args.only):
+        print(f"error: no fixture in {directory}", file=sys.stderr)
+        return 1
+    report = suite.run(schema, names=args.only)
+    if args.json:
+        print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False, default=str))
+    else:
+        print(report.describe(verbose=args.verbose > 0))
+    if args.update and not report.ok:
+        changed = suite.update(report)
+        print(f"{changed} fixture(s) now expect what was read: review the change", file=sys.stderr)
+        return 0
+    return 0 if report.ok else 1
+
+
 def _choice(text: str | None) -> int | None:
     """``--choice``: a candidate's letter (``B``) or number (``2``), as an index."""
     if not text:
@@ -1867,6 +1950,40 @@ def build_parser() -> argparse.ArgumentParser:
     rv.add_argument("--note", metavar="TEXT", help="why (kept with the decision)")
     rv.add_argument("--json", action="store_true", help="print the items as JSON")
     rv.set_defaults(func=cmd_review)
+
+    fx = sub.add_parser(
+        "fixture",
+        help="keep a page and the values a schema must read from it (for wintergrab test)",
+        description="Keep pages as fixtures: the page, and the values expected from it (what --schema reads "
+        "now, and --expect FIELD=VALUE on top). Review the values: they are what wintergrab test expects.",
+    )
+    fx.add_argument("urls", nargs="*", metavar="URL", help="pages to keep")
+    fx.add_argument("--to", required=True, metavar="DIR", help="the fixtures' directory")
+    fx.add_argument("--schema", metavar="FILE", help="what reads the pages (kept as the suite's schema)")
+    fx.add_argument("--expect", action="append", metavar="FIELD=VALUE", help="a value to expect (JSON; null: none)")
+    fx.add_argument("--only", action="store_true", help="expect only the --expect values")
+    fx.add_argument("--from-run", metavar="RUN", help="take the pages a recorded run kept (crawl --record)")
+    fx.add_argument("--match", metavar="REGEX", help="(--from-run) only pages whose URL matches")
+    fx.add_argument("--limit", type=int, default=20, metavar="N", help="(--from-run) at most N pages (20)")
+    fx.add_argument("--workspace", metavar="DIR", help="(--from-run) where runs are kept (default .wintergrab)")
+    fx.add_argument("--name", metavar="NAME", help="the fixture's name (default: from the URL)")
+    fx.add_argument("--note", metavar="TEXT", help="why it is there")
+    fx.add_argument("--timeout", type=float, default=30, metavar="SEC", help="per page fetched (default 30)")
+    fx.set_defaults(func=cmd_fixture)
+
+    ts = sub.add_parser(
+        "test",
+        help="check that a schema still reads what its fixtures expect",
+        description="Read every fixture's page with the schema and compare each value with the expected one. "
+        "Exit status 1 when one differs.",
+    )
+    ts.add_argument("directory", nargs="?", metavar="DIR", help="the fixtures (wintergrab fixture --to DIR)")
+    ts.add_argument("--schema", metavar="FILE", help="the schema to test (default: the one the suite was made with)")
+    ts.add_argument("--heal", metavar="DIR", help="test a healing extractor's active version (its fixtures by default)")
+    ts.add_argument("--only", action="append", metavar="NAME", help="only these fixtures (repeatable; a prefix works)")
+    ts.add_argument("--update", action="store_true", help="accept what was read where it differs (review it)")
+    ts.add_argument("--json", action="store_true", help="print the report as JSON")
+    ts.set_defaults(func=cmd_test)
 
     ru = sub.add_parser(
         "runs",

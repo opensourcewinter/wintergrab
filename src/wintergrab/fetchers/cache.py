@@ -22,7 +22,7 @@ import sqlite3
 import threading
 import time
 import zlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -326,6 +326,29 @@ class HTTPCache:
         if "last-modified" in headers:
             out["If-Modified-Since"] = headers["last-modified"]
         return out
+
+    def entries(self) -> Iterator[CachedResponse]:
+        """Every stored response, oldest first (browser-rendered ones have keys starting ``browser:``)."""
+        with self._lock:
+            if self._conn is None:
+                return
+            rows = self._conn.execute(
+                "SELECT key, url, status, reason, headers, body, compressed, stored_at, http_version, history,"
+                " encoding FROM responses ORDER BY stored_at"
+            ).fetchall()
+        for key, url, status, reason, headers, body, compressed, stored_at, http_version, history, encoding in rows:
+            yield CachedResponse(
+                key=key,
+                url=url,
+                status=status,
+                reason=reason or "",
+                headers=[tuple(pair) for pair in json.loads(headers)],  # type: ignore[misc]
+                body=zlib.decompress(body) if compressed else bytes(body),
+                stored_at=stored_at,
+                http_version=http_version,
+                history=json.loads(history) if history else [],
+                encoding=encoding,
+            )
 
     # ------------------------------------------------------------------ #
     # housekeeping

@@ -370,6 +370,23 @@
   every CLI crawl and goal run is kept.
 - `GoalPlan.from_dict()`.
 
+### Extraction tests (`wintergrab.extraction.fixtures`)
+
+- `FixtureSuite(directory)`: pages kept with the values a schema must read
+  from them. Each fixture is two text files, `0001-name.json` (URL,
+  expected values) and `0001-name.html`, so the values are reviewed like
+  code. `add()` snapshots what a schema reads now, and takes values to
+  expect on top (`None`: nothing must be found). `run()` checks every
+  value as its type reads it: prices by amount (and currency), numbers as
+  numbers, text exactly (spacing aside), lists in order. `update()`
+  accepts what was read. A healing extractor's confirmed fixtures are read
+  too.
+- `wintergrab fixture URL... --to DIR --schema S [--expect F=V] [--only]`,
+  or `--from-run RUN [--match REGEX]` for the pages a recorded crawl kept.
+  `wintergrab test DIR [--schema S | --heal DIR] [--update] [--json]`
+  exits with 1 when a value differs, for CI.
+- `HTTPCache.entries()` lists what a cache holds.
+
 ### Fixes
 
 - A spider given an empty `HTTPCache` object (`cache=HTTPCache(...)` with
