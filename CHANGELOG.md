@@ -1056,6 +1056,13 @@ an error that says so, not a setting silently ignored
   variable is missing; a value written in the file instead of `${NAME}` is
   an error.
 
+### `wintergrab doctor --json`
+
+- The installation's checks as JSON, for programs (§60's machine-readable
+  output modes): each check's `name`, `ok`, `detail` and the `fix` that
+  installs what is missing, and whether the required ones pass. The exit
+  status is the text mode's.
+
 ### Documentation and contributing
 
 - CI audits the packages wintergrab installs, with every extra and their

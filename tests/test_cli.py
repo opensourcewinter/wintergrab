@@ -211,3 +211,12 @@ def test_crawl_retry_failed(fresh_site, tmp_path, capsys) -> None:
     assert "1 failed request(s) recorded; retry just those with --retry-failed" in err
     code, out, err = run(capsys, "crawl", url, *common, "--retry-failed")
     assert code == 0 and [json.loads(line)["url"] for line in out.splitlines()] == [url]
+
+
+def test_the_doctor_as_json(capsys) -> None:
+    assert main(["doctor", "--json"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    checks = report["checks"]
+    assert report["ok"] is True and [c["name"] for c in checks[:4]] == ["python", "curl_cffi", "lxml", "cssselect"]
+    assert all(set(c) == {"name", "ok", "detail", "fix"} and (c["fix"] is None) == c["ok"] for c in checks)
+    assert "duckdb" in {c["name"] for c in checks}

@@ -1855,10 +1855,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         except Exception:
             return None
 
-    rows: list[tuple[str, str, str]] = []
+    checks: list[dict[str, Any]] = []
 
     def check(name: str, ok: bool, detail: str, hint: str = "") -> None:
-        rows.append(("ok " if ok else "-- ", name, detail if ok else f"{detail}  ->  {hint}"))
+        checks.append({"name": name, "ok": ok, "detail": detail, "fix": None if ok else hint})
 
     check("python", sys.version_info >= (3, 10), platform.python_version(), "Python 3.10+ is required")
     for dist in ("curl_cffi", "lxml", "cssselect"):
@@ -1893,10 +1893,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         v = version(dist)
         check(dist, v is not None, v or f"not installed ({what})", f'pip install "wintergrab[{extra}]"')
     check("adaptive db", True, str(default_storage_path()))
-    width = max(len(r[1]) for r in rows)
-    for status, name, detail in rows:
-        print(f"{status} {name.ljust(width)}  {detail}")
-    return 0 if all(r[0].strip() == "ok" for r in rows[:4]) else 1
+    ready = all(c["ok"] for c in checks[:4])  # (Python and the libraries everything needs)
+    if args.json:
+        print(json.dumps({"ok": ready, "checks": checks}, indent=2))
+        return 0 if ready else 1
+    width = max(len(c["name"]) for c in checks)
+    for c in checks:
+        detail = c["detail"] if c["ok"] else f"{c['detail']}  ->  {c['fix']}"
+        print(f"{'ok ' if c['ok'] else '-- '} {c['name'].ljust(width)}  {detail}")
+    return 0 if ready else 1
 
 
 # --------------------------------------------------------------------------- #
@@ -3430,6 +3435,7 @@ def build_parser() -> argparse.ArgumentParser:
     bm.add_argument("-o", "--output", metavar="FILE", help="also save the report here as JSON")
     bm.set_defaults(func=cmd_benchmark)
     d = sub.add_parser("doctor", help="check the installation and optional features")
+    d.add_argument("--json", action="store_true", help="print the checks as JSON (each: name, ok, detail, fix)")
     d.set_defaults(func=cmd_doctor)
 
     tp = sub.add_parser(

@@ -455,7 +455,10 @@ ok  pyyaml       6.0.3
 ```
 
 Lists the optional parts wintergrab can use (browser, faster event loop and
-JSON, YAML) and whether each is there.
+JSON, YAML, the storage extras...) and whether each is there, with the
+command that installs what is missing. `--json` gives the same checks to a
+program (`{"ok": true, "checks": [{"name", "ok", "detail", "fix"}...]}`); the
+exit status is 1 when Python or a library everything needs is missing.
 
 ## `wintergrab templates`: ready-made extraction schemas
 
