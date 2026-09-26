@@ -427,6 +427,21 @@
   `quality_degraded` (price completeness 98% → 41%) and `schema_changed`
   without writing a data pipeline.
 
+### Extraction templates (`wintergrab.extraction.templates`)
+
+- Ready-made schemas for common records, used by name wherever a schema
+  file is (`--extract product`, `Extractor("job")`, `data validate event
+  items.jsonl`): product, article, job, event, company, place, person,
+  review, recipe, and two new kinds, `property` (real estate) and
+  `documentation`. `wintergrab templates [NAME]` lists them or prints one
+  to start from.
+- Real estate: a `property` page type (schema.org `RealEstateListing`,
+  `Apartment`, `House`..., property URLs, and rooms and floor area in the
+  text), paths for bedrooms, bathrooms, rooms, floor size and year built,
+  and text patterns for "3 bedrooms", "2.5 baths" and "2,100 sq ft" (floor
+  sizes keep their unit). Goals understand "apartments under $2000 on
+  ...".
+
 ### Plugins (`wintergrab.plugins`)
 
 - Installed packages with a `wintergrab.plugins` entry point add to

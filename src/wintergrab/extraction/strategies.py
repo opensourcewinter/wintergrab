@@ -108,9 +108,16 @@ def _kind(name: str, kind: str, aliases: tuple[str, ...]) -> str:
 
     One of ``title``, ``description``, ``price``, ``currency``, ``availability``,
     ``rating``, ``review_count``, ``image``, ``url``, ``date``, ``author``,
-    ``email``, ``phone``, ``address``, ``sku``, ``brand``, ``category`` or ``other``.
+    ``email``, ``phone``, ``address``, ``sku``, ``brand``, ``category``,
+    ``bedrooms``, ``bathrooms``, ``floor_area`` or ``other``.
     """
     keys = set(candidate_names(name, aliases))
+    if kind in ("integer", "number") and keys & {"bedrooms", "beds", "bedroom"}:
+        return "bedrooms"
+    if kind in ("integer", "number") and keys & {"bathrooms", "baths", "bathroom"}:
+        return "bathrooms"
+    if kind in ("quantity", "number") and keys & {"floor_size", "floor_area", "living_area", "living_space"}:
+        return "floor_area"
     if kind == "currency":
         return "currency"
     if kind == "money" or any(word in k for k in keys for word in ("price", "cost")):
@@ -774,6 +781,12 @@ def _class_rating(classes: str) -> str | None:
     return None
 
 
+# "3 bedrooms", "2 bd", "1.5 baths", "2,100 sq ft", "96 m²" (for fields named bedrooms, bathrooms, floor_size...)
+_BEDROOMS = re.compile(r"\b(\d{1,2})\s*-?\s*(?:bed(?:room)?s?|bd|br)\b", re.I)
+_BATHROOMS = re.compile(r"\b(\d{1,2}(?:[.,]5)?)\s*-?\s*(?:bath(?:room)?s?|ba)\b", re.I)
+_FLOOR_AREA = re.compile(
+    r"\b\d[\d,.]*\s*(?:sq\.?\s?ft|sqft|square\s+(?:feet|foot|metres|meters)|m²|m2|sqm)(?!\w)", re.I
+)
 _RATING_TEXT = re.compile(r"\b\d(?:[.,]\d{1,2})?\s*(?:/|out of|von|sur|de|su)\s*(?:5|10|100)\b", re.I)
 _AVAILABILITY_TEXT = re.compile(
     r"\b(?:in stock|out of stock|sold out|pre-?order|back-?order|only \d+ left(?: in stock)?|currently unavailable|"
@@ -818,6 +831,12 @@ class Patterns(Strategy):
         elif kind == "currency" and page.scope is not None:
             found = [m.group(0) for m in _MONEY_TEXT.finditer(text)]
             label = "price"
+        elif kind in ("bedrooms", "bathrooms"):
+            found = [
+                m.group(1).replace(",", ".") for m in (_BEDROOMS if kind == "bedrooms" else _BATHROOMS).finditer(text)
+            ]
+        elif kind == "floor_area":
+            found = [m.group(0) for m in _FLOOR_AREA.finditer(text)]
         if not found:
             return []
         if f.many:

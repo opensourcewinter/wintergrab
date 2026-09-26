@@ -40,7 +40,7 @@ from typing import Any
 
 from ..data.issues import Issue
 from ..data.normalize import Money, Quantity
-from ..data.schema import NormalizeContext, Schema, SchemaField, load_schema
+from ..data.schema import NormalizeContext, Schema, SchemaField
 from ..data.similarity import content_hash, normalize_for_hash
 from ..errors import ConfigurationError
 from ..parser import Selector
@@ -295,8 +295,12 @@ def _schema_of(schema: Schema | Mapping[str, Any] | str | Path) -> Schema:
     if isinstance(schema, Mapping):
         return Schema.from_dict(schema)
     if isinstance(schema, (str, Path)):
-        return load_schema(schema)
-    raise ConfigurationError(f"expected a Schema, a schema mapping or a file, got {type(schema).__name__}")
+        from .templates import schema_named
+
+        return schema_named(schema)  # a file, or a template's name ("product", "job"...)
+    raise ConfigurationError(
+        f"expected a Schema, a schema mapping, a file or a template name, got {type(schema).__name__}"
+    )
 
 
 def _is_async(model: Any) -> bool:

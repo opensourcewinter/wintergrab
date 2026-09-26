@@ -38,6 +38,7 @@ __all__ = ["PAGE_TYPES", "PageClassifier", "PageFeatures", "PageType", "classify
 #: The page types :func:`classify_page` can answer (plus ``"unknown"``).
 PAGE_TYPES = (
     "product",
+    "property",
     "category",
     "listing",
     "article",
@@ -68,6 +69,7 @@ _URL_RULES: list[tuple[str, float, re.Pattern[str]]] = [
     ("article", 2.0, re.compile(r"/(?:blog|article|articles|post|posts|stories|story|insights|magazine)/[^/]+|/\d{4}/\d{2}/(?:\d{2}/)?[^/]+")),
     ("job", 3.0, re.compile(r"/(?:jobs?|careers?|vacanc(?:y|ies)|positions?|openings?)(?:/|$)")),
     ("event", 2.0, re.compile(r"/(?:events?|tickets?|concerts?|conferences?|meetups?)(?:/|$)")),
+    ("property", 2.0, re.compile(r"/(?:propert(?:y|ies)|real-?estate|homes?-for-(?:sale|rent)|for-(?:sale|rent)|rentals?|apartments?|condos?|immobilien|expose)/[^/]+")),
     ("profile", 2.0, re.compile(r"/(?:users?|profiles?|people|members?|authors?)/[^/]+|/@[\w.-]+/?$")),
     ("company", 2.0, re.compile(r"/(?:company|companies|organi[sz]ations?|about(?:-us)?|who-we-are)(?:/|$)")),
     ("review", 2.0, re.compile(r"/(?:reviews?|ratings?|testimonials?)(?:/|$)")),
@@ -93,6 +95,9 @@ _SCHEMA_TYPES: dict[str, tuple[str, float]] = {
     "Review": ("review", 4.0), "SearchResultsPage": ("search", 6.0), "CollectionPage": ("category", 3.0),
     "ItemList": ("listing", 2.0), "FAQPage": ("documentation", 1.0), "AboutPage": ("company", 4.0),
     "ContactPage": ("contact", 6.0), "Place": ("directory", 1.0),
+    "RealEstateListing": ("property", 6.0), "Apartment": ("property", 5.0), "House": ("property", 5.0),
+    "SingleFamilyResidence": ("property", 5.0), "Residence": ("property", 4.0), "ApartmentComplex": ("property", 4.0),
+    "Accommodation": ("property", 3.0),
 }  # fmt: skip
 _OG_TYPES = {"product": "product", "product.item": "product", "article": "article", "profile": "profile",
              "book": "product", "business.business": "company", "event": "event"}  # fmt: skip
@@ -113,6 +118,10 @@ _MAX_TEXT = 100_000  # wording rules read this much of the page's text
 _NOT_FOUND = re.compile(r"\b(?:404|page not found|not found|nicht gefunden|introuvable|no encontrada)\b", re.I)
 _LOGIN_WORDS = re.compile(r"\b(?:log ?in|sign ?in|anmelden|connexion|iniciar sesi[oó]n)\b", re.I)
 _SEARCH_WORDS = re.compile(r"\b(?:search results|results for|no results|resultados|suchergebnisse|résultats)\b", re.I)
+_PROPERTY_WORDS = re.compile(
+    r"\b\d+\s*(?:bed(?:room)?s?|bath(?:room)?s?|rooms)\b|\b\d[\d,.]*\s*(?:sq\.?\s?ft|square (?:feet|metres|meters)|m²|sqm)",
+    re.I,
+)
 _JOB_WORDS = re.compile(
     r"\b(?:apply (?:now|for this job)|job description|responsibilities|qualifications|salary|full[- ]time|part[- ]time)\b",
     re.I,
@@ -357,6 +366,7 @@ def _default_rules() -> list[tuple[str, str, Rule]]:
     )
     add("job", "job wording", lambda f: 2.0 if len(_JOB_WORDS.findall(f.text)) >= 2 else None)
     add("event", "event wording", lambda f: 2.0 if _EVENT_WORDS.search(f.text) and f.time_elements else None)
+    add("property", "rooms and floor area", lambda f: 2.5 if len(_PROPERTY_WORDS.findall(f.text)) >= 2 else None)
     add("profile", "profile wording", lambda f: 2.0 if _PROFILE_WORDS.search(f.text) else None)
     add("contact", "contact wording", lambda f: 3.0 if _CONTACT_WORDS.search(" ".join([f.title, *f.h1])) else None)
     add("archive", "archive wording", lambda f: 2.0 if _ARCHIVE_WORDS.search(" ".join([f.title, *f.h1])) else None)

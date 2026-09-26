@@ -49,6 +49,9 @@ TYPES: dict[str, frozenset[str]] = {
     "software": frozenset({"SoftwareApplication", "MobileApplication", "WebApplication", "VideoGame"}),
     "app": frozenset({"SoftwareApplication", "MobileApplication", "WebApplication"}),
     "faq": frozenset({"FAQPage", "Question"}),
+    "property": frozenset({"RealEstateListing", "Residence", "Apartment", "House", "SingleFamilyResidence",
+                           "ApartmentComplex", "Accommodation"}),
+    "documentation": frozenset({"TechArticle", "APIReference", "HowTo", "FAQPage"}),
     "dataset": frozenset({"Dataset"}),
 }  # fmt: skip
 
@@ -142,7 +145,7 @@ FIELD_PATHS: dict[str, tuple[str, ...]] = {
     "postal_code": ("address.postalCode", "postalCode", "location.address.postalCode"),
     "zip": ("address.postalCode", "postalCode"),
     "street": ("address.streetAddress", "streetAddress"),
-    "address": ("address", "location.address", "jobLocation.address"),
+    "address": ("address", "location.address", "jobLocation.address", "about.address", "mainEntity.address"),
     "phone": ("telephone", "contactPoint.telephone"),
     "telephone": ("telephone", "contactPoint.telephone"),
     "email": ("email", "contactPoint.email"),
@@ -173,6 +176,12 @@ FIELD_PATHS: dict[str, tuple[str, ...]] = {
     "given_name": ("givenName",),
     "family_name": ("familyName",),
     "job_title_person": ("jobTitle",),
+    "bedrooms": ("numberOfBedrooms", "about.numberOfBedrooms", "mainEntity.numberOfBedrooms", "numberOfRooms"),
+    "bathrooms": ("numberOfBathroomsTotal", "numberOfFullBathrooms", "about.numberOfBathroomsTotal",
+                  "mainEntity.numberOfBathroomsTotal"),
+    "rooms": ("numberOfRooms", "about.numberOfRooms", "mainEntity.numberOfRooms"),
+    "floor_size": ("floorSize", "about.floorSize", "mainEntity.floorSize"),
+    "year_built": ("yearBuilt", "about.yearBuilt", "mainEntity.yearBuilt"),
 }  # fmt: skip
 
 #: Field name -> keys in the OpenGraph / Twitter / meta dicts of ``structured_data()`` (source, key).

@@ -47,6 +47,43 @@ product@1 from https://shop.example/p/phone-x: confidence 0.92
 No selectors were written for this page. Where the site's markup is
 unusual, add `selectors` to a field and they are tried with a high prior.
 
+## Templates
+
+For common kinds of records there is no schema to write: name a template.
+
+```bash
+wintergrab get https://jobs.example/role/42 --extract job
+wintergrab crawl https://homes.example/for-sale/ --follow ".listing a" --extract property -o homes.jsonl
+wintergrab templates                          # every template and its fields
+wintergrab templates product > product.schema.json   # to start your own from
+```
+
+```python
+Extractor("event").extract(page)
+```
+
+| Template | Also | Fields |
+|---|---|---|
+| `product` | `item` | name, price, list_price, currency, availability, rating, review_count, brand, sku, gtin, category, image, description, url |
+| `article` | `news`, `post`, `blog` | title, author, published, modified, description, section, tags, image, body, url |
+| `job` | `vacancy` | title, company, location, salary, currency, employment_type, remote, date_posted, valid_through, description, url |
+| `event` | | name, start_date, end_date, venue, city, address, price, currency, organizer, performer, description, image, url |
+| `company` | `business`, `organization` | name, website, telephone, email, address, city, country, description, founded, employees, industry, url |
+| `place` | `restaurant`, `hotel`, `store` | name, address, street, city, postal_code, country, telephone, email, website, rating, review_count, opening_hours, price_range, cuisine, latitude, longitude, description, image, url |
+| `person` | `profile` | name, job_title, organization, email, telephone, location, image, description, url |
+| `review` | | author, rating, date, title, text, item, url |
+| `property` | `real-estate`, `apartment` | name, price, currency, address, city, bedrooms, bathrooms, rooms, floor_size, year_built, latitude, longitude, description, image, url |
+| `documentation` | `docs` | title, description, section, body, modified, url |
+| `recipe` | | name, ingredients, total_time, servings, calories, rating, author, image, url |
+
+The first field (a review's text) is required: a page without it gives no
+record. The others are filled when the page states them, in its structured
+data (schema.org `JobPosting`, `RealEstateListing`, `Recipe`...) or in its
+text. Property listings are read from phrases such as "3 bedrooms", "2.5
+baths" and "2,100 sq ft" too, and floor sizes keep their unit (`{"value":
+2100, "unit": "ft2"}`). A file of the same name, when there is one, comes
+first. The same kinds are what [goals](goals.md) ask for.
+
 ## The strategy hierarchy
 
 Every strategy proposes candidate values for every field; cheaper and more

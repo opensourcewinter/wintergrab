@@ -326,7 +326,9 @@ def _as_schema(schema: Schema | Mapping[str, Any] | str | Path) -> Schema:
         return schema
     if isinstance(schema, Mapping):
         return Schema.from_dict(schema)
-    return Schema.load(schema)
+    from .templates import schema_named
+
+    return schema_named(schema)
 
 
 def _atomic_write(path: Path, text: str) -> None:

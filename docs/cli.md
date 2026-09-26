@@ -8,7 +8,7 @@ stdout, so you can pipe the output anywhere.
 wintergrab [-v | -q] [--version] COMMAND ...
 
 COMMAND: get, crawl, data, inspect, goal, review, fixture, test, run, schedule, init,
-         runs, replay, dashboard, heal, history, shell, doctor, plugins
+         runs, replay, dashboard, heal, history, templates, shell, doctor, plugins
          (and the commands of installed plugins)
 ```
 
@@ -351,6 +351,17 @@ ok  pyyaml       6.0.3
 
 Lists the optional parts wintergrab can use (browser, faster event loop and
 JSON, YAML) and whether each is there.
+
+## `wintergrab templates`: ready-made extraction schemas
+
+```bash
+wintergrab templates                 # the templates and their fields
+wintergrab templates job             # one, as a schema file (JSON) to start from
+```
+
+`--extract NAME` uses a template directly (`--extract product`, `--extract
+job`), and so do `data validate NAME FILE` and `data quality --schema NAME`.
+See [extraction.md](extraction.md#templates).
 
 ## `wintergrab plugins`: what installed plugins add
 

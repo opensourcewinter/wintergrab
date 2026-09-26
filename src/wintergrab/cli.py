@@ -1114,9 +1114,9 @@ def _crawl_settings(args: argparse.Namespace) -> tuple[type[Spider], dict[str, A
         pipeline = Pipeline.load(args.pipeline, allow_imports=args.allow_imports)
         overrides["pipelines"] = [*(overrides.get("pipelines") or getattr(cls, "pipelines", None) or ()), pipeline]
     if args.quality:
-        from .data.schema import load_schema
+        from .extraction.templates import schema_named
 
-        name = load_schema(args.extract).name if getattr(args, "extract", None) else overrides.get("name") or cls.name
+        name = schema_named(args.extract).name if getattr(args, "extract", None) else overrides.get("name") or cls.name
         monitor = _quality_monitor(args.quality, name)
         overrides["pipelines"] = [*(overrides.get("pipelines") or getattr(cls, "pipelines", None) or ()), monitor]
     if args.progress is not None:
@@ -1375,10 +1375,11 @@ def cmd_data_run(args: argparse.Namespace) -> int:
 
 
 def cmd_data_validate(args: argparse.Namespace) -> int:
-    from .data import Normalize, Pipeline, Validate, load_schema
+    from .data import Normalize, Pipeline, Validate
     from .data.io import read_records
+    from .extraction.templates import schema_named
 
-    schema = load_schema(args.schema)
+    schema = schema_named(args.schema)
     stages: list[Any] = []
     if not args.no_normalize:
         stages.append(Normalize(schema, country=args.country, currency=args.currency, dayfirst=args.dayfirst))
@@ -1660,10 +1661,11 @@ def _history_url(history: Any, args: argparse.Namespace) -> int:
 
 
 def cmd_data_quality(args: argparse.Namespace) -> int:
-    from .data import QualityMonitor, QualityReport, load_schema
+    from .data import QualityMonitor, QualityReport
     from .data.io import read_records
+    from .extraction.templates import schema_named
 
-    schema = load_schema(args.schema) if args.schema else None
+    schema = schema_named(args.schema) if args.schema else None
     name = Path(args.input).stem if args.input != "-" else "records"
     monitor = QualityMonitor(schema, name=name, key=args.key or None, save_to=None)
     for record in read_records(args.input, limit=args.limit):
@@ -2295,6 +2297,15 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("doctor", help="check the installation and optional features")
     d.set_defaults(func=cmd_doctor)
 
+    tp = sub.add_parser(
+        "templates",
+        help="ready-made extraction schemas (product, article, job, event, property...)",
+        description="List the extraction templates, or print one as a schema file to start your own from "
+        "(wintergrab templates product > product.schema.json). Use one directly with --extract NAME.",
+    )
+    tp.add_argument("name", nargs="?", help="print this template as a schema (JSON)")
+    tp.set_defaults(func=cmd_templates)
+
     pl = sub.add_parser(
         "plugins",
         help="the installed plugins and what they add",
@@ -2315,6 +2326,27 @@ def build_parser() -> argparse.ArgumentParser:
         add_arguments(plugin_parser)
         plugin_parser.set_defaults(func=handler)
     return parser
+
+
+def cmd_templates(args: argparse.Namespace) -> int:
+    from .extraction.templates import ALIASES, template, template_names
+
+    if args.name:
+        try:
+            schema = template(args.name)
+        except KeyError as exc:
+            print(f"error: {exc.args[0]}", file=sys.stderr)
+            return 1
+        print(json.dumps(schema.to_dict(), indent=2, ensure_ascii=False))
+        return 0
+    for name in template_names():
+        schema = template(name)
+        also = sorted(alias for alias, target in ALIASES.items() if target == name and "_" not in alias)
+        fields = ", ".join(f.name + ("*" if f.required else "") for f in schema.fields)
+        print(f"{name:<14} {fields}" + (f"  (also: {', '.join(also)})" if also else ""))
+    print("\n* a page without it gives no record. Use one: --extract NAME; start from one: wintergrab templates NAME",
+          file=sys.stderr)  # fmt: skip
+    return 0
 
 
 def cmd_plugins(args: argparse.Namespace) -> int:

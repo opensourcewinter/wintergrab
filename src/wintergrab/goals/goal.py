@@ -182,6 +182,33 @@ ENTITIES: dict[str, EntityKind] = {
             "date",
         ),
         EntityKind(
+            "property",
+            ("property", "properties", "real estate", "property listings", "apartment", "apartments", "houses",
+             "houses for sale", "homes for sale", "homes for rent", "rental", "rentals", "condo", "condos"),
+            ("property",),
+            ("listing", "search", "category"),
+            {
+                "name": "string", "price": "money", "currency": "currency", "address": "address", "city": "string",
+                "bedrooms": "integer", "bathrooms": "number", "rooms": "number", "floor_size": "quantity",
+                "year_built": "integer", "latitude": "number", "longitude": "number", "description": "text",
+                "image": "url", "url": "url",
+            },
+            ("name", "price", "address", "bedrooms", "url"),
+        ),
+        EntityKind(
+            "documentation",
+            ("documentation", "docs", "doc pages", "documentation pages", "reference pages", "manual pages",
+             "api reference"),
+            ("documentation",),
+            ("documentation", "listing"),
+            {
+                "title": "string", "description": "text", "section": "string", "body": "text",
+                "modified": "datetime", "url": "url",
+            },
+            ("title", "section", "modified", "url"),
+            "modified",
+        ),
+        EntityKind(
             "recipe",
             ("recipe", "recipes"),
             ("article",),
