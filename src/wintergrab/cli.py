@@ -86,6 +86,7 @@ EPILOG_SEARCH = """examples:
   wintergrab search "budget laptop" "laptop under 500" -o serp.jsonl        # Brave: BRAVE_SEARCH_API_KEY
   wintergrab search "budget laptop" --provider searxng --endpoint https://searx.example
   wintergrab search --report serp.jsonl --domain shop.example --before last-week.jsonl
+  wintergrab search "budget laptop" -o history.jsonl --append     # each week: --report shows the history
 
 Only search APIs are asked, with your own access; search engines' result pages are not fetched.
 Requests go one at a time, a second apart. See docs/search.md.
@@ -823,85 +824,136 @@ def _quoted(text: str) -> str:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    from collections import defaultdict
+
     from .data.io import read_records
     from .intel.serp import (
         cluster_queries,
         competitors,
         gaps,
+        modules,
         ranking_changes,
+        ranking_history,
         read_results,
         search,
         visibility_score,
     )
     from .spider.exporters import open_exporter
 
+    depth = args.depth if args.depth is not None else 10
+    show = args.show if args.show is not None else 15
     if args.report:
+        searching = (("QUERY", args.query), ("-o", args.output), ("--append", args.append), ("--provider", args.provider),
+                     ("--endpoint", args.endpoint), ("--pages", args.pages), ("--delay", args.delay is not None),
+                     ("--timeout", args.timeout is not None))  # fmt: skip
+        misplaced = [name for name, given in searching if given]
+        if misplaced:
+            print(f"error: {', '.join(misplaced)}: for searching; --report reads results collected", file=sys.stderr)
+            return 2
+        if args.before and not args.domain:
+            print("error: --before compares a domain's positions: say which with --domain", file=sys.stderr)
+            return 2
         try:
-            results = read_results(r for path in args.report for r in read_records(path))
+            everything = read_results(r for path in args.report for r in read_records(path))
             before = read_results(read_records(args.before)) if args.before else []
         except WintergrabError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
-        if not results:
+        web = [r for r in everything if r.type == "web"]
+        if not web:
             print("error: no search results in it (records with a query, a position and a URL)", file=sys.stderr)
             return 1
-        queries = len({r.query for r in results})
-        print(f"{len(results):,} results for {queries:,} queries")
+        collections: dict[str, set[str]] = defaultdict(set)
+        for result in web:
+            collections[result.query].add(result.fetched)
+        queries = len(collections)
+        searched = max(len(times) for times in collections.values())
+        dated = sorted(t for times in collections.values() for t in times if t)
+        print(
+            f"{_many(len(web), 'result', 'results')} for {_many(queries, 'query', 'queries')}"
+            + (f", searched up to {searched} times" if searched > 1 else "")
+            + (f" ({dated[0][:10]} to {dated[-1][:10]}): what follows reads each query's latest" if searched > 1
+               and dated else "")
+        )  # fmt: skip
         if args.domain:
-            print(f"{args.domain}: visibility {visibility_score(results, args.domain, depth=args.depth)} "
+            print(f"{args.domain}: visibility {visibility_score(web, args.domain, depth=depth)} "
                   f"(1.0: first for every query)")  # fmt: skip
         print("\nCompetitors (visibility: the sum of 1/position, over the queries):")
-        for v in competitors(results, domain=args.domain, depth=args.depth, top=args.show):
+        for v in competitors(web, domain=args.domain, depth=depth, top=show):
             print(
-                f"  {v.domain:<32} {v.visibility:<6} in {v.queries} of {queries} queries, average #{v.average_position}"
+                f"  {v.domain:<32} {v.visibility:<6} in {v.queries} of {_many(queries, 'query', 'queries')}, "
+                f"average #{v.average_position}"
             )
-        clusters = [c for c in cluster_queries(results, depth=args.depth) if len(c) > 1]
+        clusters = [c for c in cluster_queries(web, depth=depth) if len(c) > 1]
         if clusters:
             print("\nQueries one page can answer (they share results):")
-            for cluster in clusters[: args.show]:
+            for cluster in clusters[:show]:
                 print("  " + " | ".join(cluster))
+        boxes = modules(everything, domain=args.domain)
+        if boxes:
+            print("\nBesides web results, the pages have:")
+            for box in boxes[:show]:
+                print(
+                    f"  {box.type:<12} in {box.queries} of {_many(queries, 'query', 'queries')}"
+                    + (f", place #{box.average_rank:g} on the page" if box.average_rank is not None else "")
+                    + (": " + ", ".join(f"{d} ({n})" for d, n in box.domains.items()) if box.domains else "")
+                    + (f"; {args.domain} in it for {box.own}" if box.own else "")
+                )
         if args.domain:
-            missing = gaps(results, args.domain, depth=args.depth)
+            missing = gaps(web, args.domain, depth=depth)
             print(
-                f"\nGaps: {len(missing)} queries where rivals rank and {args.domain} does not"
+                f"\nGaps: {_many(len(missing), 'query', 'queries')} where rivals rank and {args.domain} does not"
                 + (":" if missing else "")
             )
-            for gap in missing[: args.show]:
+            for gap in missing[:show]:
                 rivals = ", ".join(f"{d} #{p}" for d, p in gap["rivals"].items())
                 print(f"  {gap['query']:<40} {rivals}")
             if before:
-                changes = [c for c in ranking_changes(before, results, args.domain) if c["change"] != "same"]
+                changes = [c for c in ranking_changes(before, web, args.domain) if c["change"] != "same"]
                 print(f"\nChanges since {args.before}: {len(changes)}" + (":" if changes else ""))
-                for change in changes[: args.show]:
+                for change in changes[:show]:
                     was = f"#{change['before']}" if change["before"] else "-"
                     now = f"#{change['after']}" if change["after"] else "-"
                     print(f"  {change['query']:<40} {was} -> {now}  ({change['change']})")
+            history = [h for h in ranking_history(web, args.domain) if len(h["positions"]) > 1]
+            if history:
+                print(f"\nHistory of {args.domain}, oldest first (the last 8 searches; -: not in the results):")
+                for entry in history[:show]:
+                    marks = " ".join(str(p["position"] or "-") for p in entry["positions"][-8:])
+                    moved = f", {entry['change']}" if entry["change"] not in (None, "same") else ""
+                    print(f"  {entry['query']:<40} {marks:<24} best #{entry['best']}{moved}")
         return 0
     if not args.query:
         print('error: say what to search for: wintergrab search "budget laptop" (or --report FILE)', file=sys.stderr)
         return 2
-    exporter = open_exporter(args.output) if args.output else None
-    found = 0
+    misplaced = [name for name, given in (("--domain", args.domain), ("--before", args.before),
+                                          ("--depth", args.depth is not None), ("--show", args.show is not None)) if given]  # fmt: skip
+    if misplaced:
+        print(f"error: {', '.join(misplaced)}: for --report, which reads results collected", file=sys.stderr)
+        return 2
+    if args.append and not args.output:
+        print("error: --append adds to an output: say which with -o FILE", file=sys.stderr)
+        return 2
+    exporter = open_exporter(args.output, append=args.append) if args.output else None
+    delay = args.delay if args.delay is not None else 1.0
+    found = others = 0
     try:
         for n, query in enumerate(args.query):
             if n:
-                time.sleep(args.delay)
-            answer = search(query, provider=args.provider, endpoint=args.endpoint, pages=args.pages,
-                            delay=args.delay, timeout=args.timeout)  # fmt: skip
-            found += len(answer.results)
-            for result in answer.results:
-                if exporter is not None:
-                    exporter.write(result.to_dict())
-            if exporter is None and args.verbose >= 0:
+                time.sleep(delay)
+            answer = search(query, provider=args.provider or "brave", endpoint=args.endpoint, pages=args.pages or 1,
+                            delay=delay, timeout=args.timeout or 20)  # fmt: skip
+            found, others = found + len(answer.results), others + len(answer.modules)
+            if exporter is not None:
+                for record in answer.records():
+                    exporter.write(record)
+            elif args.verbose >= 0:
                 print(
                     f"{query}  ({len(answer.results)} results" + (f" of {answer.total:,}" if answer.total else "") + ")"
                 )
                 for result in answer.results:
                     print(f"  {result.position:>3}. {result.domain:<28} {result.title[:70]}")
-                if answer.related:
-                    print("  related: " + ", ".join(answer.related[:8]))
-                for question in answer.questions[:5]:
-                    print(f"  asked: {question['question']}")
+                _show_boxes(answer.modules)
             for note in answer.notes:
                 print(f"note: {query}: {note}", file=sys.stderr)
     except WintergrabError as exc:
@@ -911,8 +963,34 @@ def cmd_search(args: argparse.Namespace) -> int:
         if exporter is not None:
             exporter.close()
     if exporter is not None and args.verbose >= 0:
-        print(f"{found:,} results for {len(args.query)} queries -> {redact_url(args.output)}", file=sys.stderr)
+        more = f" and {others:,} of the pages' other results and boxes" if others else ""
+        asked = _many(len(args.query), "query", "queries")
+        print(f"{_many(found, 'result', 'results')}{more} for {asked} -> {redact_url(args.output)}", file=sys.stderr)
     return 0
+
+
+def _many(count: int, one: str, many: str) -> str:
+    return f"{count:,} {one if count == 1 else many}"
+
+
+def _show_boxes(boxes: list[Any]) -> None:
+    """A search page's other results and boxes, a line for each kind, in their order on the page."""
+    kinds: dict[str, list[Any]] = {}
+    for box in boxes:
+        kinds.setdefault(box.type, []).append(box)
+    placed = sorted(kinds.items(), key=lambda kv: min((b.rank for b in kv[1] if b.rank), default=10**6))
+    for kind, listed in placed:
+        if kind == "related":
+            print("  related: " + ", ".join(b.title for b in listed[:8]))
+        elif kind == "question":
+            for box in listed[:5]:
+                print(f"  asked: {box.title}")
+        elif kind == "correction":
+            print(f"  searched for: {listed[0].title}")
+        else:
+            place = f" (place #{listed[0].rank})" if listed[0].rank else ""
+            shown = "; ".join(b.title[:50] + (f" ({b.domain})" if b.domain else "") for b in listed[:3])
+            print(f"  {kind}{place}: {shown}" + (f"; {len(listed) - 3} more" if len(listed) > 3 else ""))
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
@@ -2959,25 +3037,29 @@ def build_parser() -> argparse.ArgumentParser:
     se = sub.add_parser(
         "search",
         help="search results from a search API (Brave, Google, your SearXNG), and what they say of rankings",
-        description="Ask a search API that permits it, with your key, for the results of queries; or read "
-        "collected results for competitors, gaps, queries one page can answer, and ranking changes.",
+        description="Ask a search API that permits it, with your key, for the results of queries (and the pages' "
+        "other results and boxes: news, videos, local results, questions...); or read collected results for "
+        "competitors, gaps, queries one page can answer, the pages' boxes, and rankings over time.",
         epilog=EPILOG_SEARCH,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     se.add_argument("query", nargs="*", metavar="QUERY", help="what to search for (repeatable)")
-    se.add_argument("--provider", default="brave", choices=["brave", "google", "searxng"],
-                    help="the search API: brave (BRAVE_SEARCH_API_KEY), google (GOOGLE_API_KEY and GOOGLE_CSE_ID), "
-                    "searxng (SEARXNG_URL)")  # fmt: skip
+    se.add_argument("--provider", choices=["brave", "google", "searxng"],
+                    help="the search API: brave (BRAVE_SEARCH_API_KEY; the default), google (GOOGLE_API_KEY and "
+                    "GOOGLE_CSE_ID), searxng (SEARXNG_URL)")  # fmt: skip
     se.add_argument("--endpoint", metavar="URL", help="the API's URL (your SearXNG instance: https://searx.example)")
-    se.add_argument("--pages", type=int, default=1, metavar="N", help="pages of results per query (1; 10 at most)")
-    se.add_argument("--delay", type=float, default=1.0, metavar="SEC", help="between requests (1)")
-    se.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (20)")
+    se.add_argument("--pages", type=int, metavar="N", help="pages of results per query (1; 10 at most)")
+    se.add_argument("--delay", type=float, metavar="SEC", help="between requests (1)")
+    se.add_argument("--timeout", type=float, metavar="SEC", help="per request (20)")
     se.add_argument("-o", "--output", metavar="FILE", help="save the results as records (.jsonl, .csv, a database...)")
+    se.add_argument("--append", action="store_true",
+                    help="(-o) add to the output instead of replacing it: search again later, and --report shows how "
+                    "rankings moved")  # fmt: skip
     se.add_argument("--report", nargs="+", metavar="FILE", help="read collected results instead, and report on them")
-    se.add_argument("--domain", metavar="DOMAIN", help="(--report) your site: its visibility, gaps and changes")
+    se.add_argument("--domain", metavar="DOMAIN", help="(--report) your site: its visibility, gaps and history")
     se.add_argument("--before", metavar="FILE", help="(--report, --domain) earlier results: what moved since")
-    se.add_argument("--depth", type=int, default=10, metavar="N", help="(--report) positions that count (10)")
-    se.add_argument("--show", type=int, default=15, metavar="N", help="(--report) entries per list (15)")
+    se.add_argument("--depth", type=int, metavar="N", help="(--report) positions that count (10)")
+    se.add_argument("--show", type=int, metavar="N", help="(--report) entries per list (15)")
     se.set_defaults(func=cmd_search)
 
     gen = sub.add_parser(

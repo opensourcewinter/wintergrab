@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
+from collections import Counter
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -12,12 +14,15 @@ import pytest
 from wintergrab.cli import main
 from wintergrab.errors import ConfigurationError, WintergrabError
 from wintergrab.intel.serp import (
+    Module,
     SearchResult,
     cluster_queries,
     competitors,
     gaps,
+    modules,
     overlap,
     ranking_changes,
+    ranking_history,
     read_results,
     search,
     visibility_score,
@@ -48,6 +53,45 @@ def _page(query: str, first: int, size: int) -> list[tuple[str, str, str]]:
     return FOUND.get(query, [])[first : first + size]
 
 
+#: The rest of Brave's first page for "budget laptop": its boxes, and their order on the page ("mixed").
+BRAVE_BOXES = {
+    "news": {"type": "news", "results": [
+        {"title": "Laptop prices fall", "url": "https://news.example/laptops", "description": "Down 10%.",
+         "age": "2 hours ago", "page_age": "2026-09-25T10:00:00", "source": "News Example", "breaking": True,
+         "meta_url": {"hostname": "news.example"}},
+        {"title": "Back to school", "url": "https://reviews.example/news/school", "description": "Deals.",
+         "source": "Reviews Example", "breaking": False},
+    ]},
+    "videos": {"type": "videos", "results": [
+        {"type": "video_result", "title": "Budget laptop review", "url": "https://video.example/watch?v=1",
+         "description": "Five laptops.", "video": {"duration": "12:31", "creator": "Tech Reviews",
+                                                   "publisher": "Video Example", "views": 12000}},
+    ]},
+    "locations": {"type": "locations", "results": [
+        {"type": "location_result", "id": "loc-1", "title": "Laptop Shop", "url": "https://shop.example/stores/1",
+         "coordinates": [48.8566, 2.3522], "contact": {"telephone": "+33 1 23 45 67 89"}, "price_range": "€€",
+         "postal_address": {"type": "PostalAddress", "country": "FR", "postalCode": "75001",
+                            "streetAddress": "1 Rue Example", "addressLocality": "Paris",
+                            "displayAddress": "1 Rue Example, 75001 Paris"},
+         "rating": {"ratingValue": 4.5, "bestRating": 5, "reviewCount": 120}},
+    ]},
+    "discussions": {"type": "search", "results": [
+        {"type": "discussion", "title": "Which laptop?", "url": "https://forum.example/t/1", "description": "A thread.",
+         "data": {"forum_name": "Laptops", "num_answers": 14, "score": "0.9", "question": "Which laptop?",
+                  "top_comment": "Get one with 16 GB."}},
+    ]},
+    "infobox": {"type": "graph", "results": [
+        {"type": "infobox", "title": "Laptop", "url": "https://encyclopedia.example/wiki/Laptop",
+         "description": "A portable computer.", "long_desc": "A laptop is a small, portable computer."},
+    ]},
+    "mixed": {"type": "mixed", "top": [], "side": [{"type": "infobox", "index": 0, "all": False}], "main": [
+        {"type": "web", "index": 0, "all": False}, {"type": "news", "all": True}, {"type": "web", "index": 1, "all": False},
+        {"type": "locations", "all": True}, {"type": "videos", "all": True}, {"type": "discussions", "all": True},
+        {"type": "faq", "all": True},
+    ]},
+}  # fmt: skip
+
+
 class Api(BaseHTTPRequestHandler):
     """Brave's Search API, Google's Programmable Search JSON API and a SearXNG instance, as documented."""
 
@@ -73,20 +117,32 @@ class Api(BaseHTTPRequestHandler):
             if query == "rate limited" and offset:
                 return self._send(429, {"type": "ErrorResponse", "error": {"code": "RATE_LIMITED"}})
             size = 2  # (a small page, to see pages go)
+            asked = {"rate limited": "budget laptop", "budget laptopp": "budget laptop"}.get(query, query)
             results = [{"title": t, "url": u, "description": d, "extra_snippets": [d], "page_age": "2026-09-01"}
-                       for u, t, d in _page(query.replace("rate limited", "budget laptop"), offset * size, size)]  # fmt: skip
+                       for u, t, d in _page(asked, offset * size, size)]  # fmt: skip
             faq = {"type": "faq", "results": [{"question": "Is 8 GB enough?", "answer": "For most.", "title": "FAQ",
                                                "url": "https://faq.example/8gb"}]}  # fmt: skip
-            return self._send(200, {"type": "search", "query": {"original": query}, "faq": faq,
-                                    "web": {"type": "search", "results": results}})  # fmt: skip
+            answer = {"type": "search", "query": {"original": query}, "web": {"type": "search", "results": results},
+                      "mixed": {"type": "mixed", "main": [{"type": "web", "index": i, "all": False}
+                                                          for i in range(len(results))]}}  # fmt: skip
+            if offset == 0:  # the boxes are on the first page
+                answer.update(faq=faq, **(BRAVE_BOXES if asked == "budget laptop" else {}))
+            if asked != query:  # a misspelling, searched as corrected
+                answer["query"]["altered"] = asked
+            return self._send(200, answer)
         if parts.path == "/customsearch/v1":  # Google: key and cx as parameters; start is the first result's number
             if q.get("key") != "google-key" or q.get("cx") != "engine-1":
                 return self._send(403, {"error": {"code": 403, "message": "The request is missing a valid API key."}})
             start, num = int(q.get("start", 1)), int(q.get("num", 10))
             items = [{"kind": "customsearch#result", "title": t, "link": u, "snippet": d,
                       "displayLink": urlsplit(u).hostname} for u, t, d in _page(query, start - 1, num)]  # fmt: skip
-            return self._send(200, {"kind": "customsearch#search", "items": items,
-                                    "searchInformation": {"totalResults": str(len(FOUND.get(query, [])))}})  # fmt: skip
+            answer = {"kind": "customsearch#search", "items": items,
+                      "searchInformation": {"totalResults": str(len(FOUND.get(query, [])))}}  # fmt: skip
+            if query == "cheap laptop":  # the engine's promotion, and a spelling it suggests
+                answer["promotions"] = [{"title": "Laptop sale", "link": "https://shop.example/sale",
+                                         "displayLink": "shop.example", "bodyLines": [{"title": "Up to 30% off"}]}]  # fmt: skip
+                answer["spelling"] = {"correctedQuery": "cheap laptops", "htmlCorrectedQuery": "cheap <b>laptops</b>"}
+            return self._send(200, answer)
         if parts.path == "/search":  # SearXNG: JSON when its settings allow it
             if q.get("format") != "json":
                 return self._send(403, {"error": "format not allowed"})
@@ -94,9 +150,23 @@ class Api(BaseHTTPRequestHandler):
             results = [{"url": u, "title": t, "content": d, "engine": "duckduckgo", "engines": ["duckduckgo"],
                         "score": 1.0, "category": "general", "publishedDate": None}
                        for u, t, d in _page(query, (pageno - 1) * 10, 10)]  # fmt: skip
-            return self._send(200, {"query": query, "number_of_results": 0, "results": results, "answers": [],
-                                    "corrections": [], "infoboxes": [], "unresponsive_engines": [],
-                                    "suggestions": ["budget laptop 2026", "best cheap laptop"]})  # fmt: skip
+            answer = {"query": query, "number_of_results": 0, "results": results, "answers": [], "corrections": [],
+                      "infoboxes": [], "unresponsive_engines": [],
+                      "suggestions": ["budget laptop 2026", "best cheap laptop"]}  # fmt: skip
+            if query == "budget laptop" and pageno == 1:  # a news result among them, an infobox, an answer
+                results.insert(1, {"url": "https://news.example/laptops", "title": "Laptop prices fall",
+                                   "content": "Down 10%.", "engine": "bing news", "category": "news",
+                                   "publishedDate": "2026-09-25T10:00:00"})  # fmt: skip
+                answer["infoboxes"] = [{"infobox": "Laptop", "id": "https://encyclopedia.example/wiki/Laptop",
+                                        "content": "A portable computer.", "engine": "wikipedia",
+                                        "urls": [{"title": "Encyclopedia", "url": "https://encyclopedia.example/wiki/Laptop"}]}]  # fmt: skip
+                answer["answers"] = [{"answer": "Budget laptops cost $300 to $500.", "url": "https://answers.example/a",
+                                      "engine": "demo"}]  # fmt: skip
+            elif query == "cheap laptop":
+                answer["answers"] = ["Cheap laptops start at $199."]  # (older instances answer with text)
+            elif query == "gaming mouse":
+                answer["corrections"] = ["gaming mice"]
+            return self._send(200, answer)
         return self._send(404, {})
 
 
@@ -128,6 +198,33 @@ def test_brave(api, monkeypatch) -> None:
     assert answer.questions == [
         {"question": "Is 8 GB enough?", "answer": "For most.", "url": "https://faq.example/8gb"}
     ]
+    # the page's boxes, placed where "mixed" puts them: the news in one place, the infobox beside the results
+    assert [r.rank for r in answer.results] == [1, 3, 8, 9]  # (page two's continue)
+    assert [(m.type, m.position, m.rank) for m in answer.modules] == [
+        ("news", 1, 2), ("news", 2, 2), ("video", 1, 5), ("location", 1, 4), ("discussion", 1, 6),
+        ("question", 1, 7), ("infobox", 1, None),
+    ]  # fmt: skip
+    news, school, video, shop, thread, _, infobox = answer.modules
+    assert (news.domain, news.date, news.details) == ("news.example", "2026-09-25T10:00:00",
+                                                      {"publisher": "News Example", "breaking": True})  # fmt: skip
+    assert school.details == {"publisher": "Reviews Example"}  # (not breaking: not said)
+    assert video.details == {
+        "duration": "12:31",
+        "creator": "Tech Reviews",
+        "publisher": "Video Example",
+        "views": 12000,
+    }
+    assert (shop.title, shop.domain, shop.details) == ("Laptop Shop", "shop.example", {
+        "address": "1 Rue Example, 75001 Paris", "telephone": "+33 1 23 45 67 89", "rating": 4.5, "reviews": 120,
+        "latitude": 48.8566, "longitude": 2.3522, "price_range": "€€",
+    })  # fmt: skip
+    assert (thread.domain, thread.details) == ("forum.example", {"forum": "Laptops", "answers": 14})
+    assert (infobox.title, infobox.snippet) == ("Laptop", "A portable computer.")
+    record = shop.to_dict()
+    assert list(record)[:4] == ["query", "type", "position", "rank"] and record["reviews"] == 120
+    assert read_results([record]) == [shop]  # read back as it was
+    corrected = search("budget laptopp", endpoint=api + "/res/v1/web/search", delay=0)
+    assert [(m.type, m.title) for m in corrected.modules][-1] == ("correction", "budget laptop")  # searched instead
     limited = search("rate limited", endpoint=api + "/res/v1/web/search", pages=3, delay=0)
     assert len(limited.results) == 2 and "rate limit (HTTP 429) stopped the search at page 2" in limited.notes[0]
     with pytest.raises(ConfigurationError, match=r"refused the request \(HTTP 401\): check the key in BRAVE_SEARCH"):
@@ -145,6 +242,11 @@ def test_google(api, monkeypatch) -> None:
         "https://reviews.example/laptops/cheap", "https://www.laptops.example/best-budget",
     ]  # fmt: skip
     assert answer.total == 4 and answer.results[0].snippet == "We tested 30."
+    assert [r.rank for r in answer.results] == [1, 2, 3, 4]  # (one list: its order)
+    assert [(m.type, m.title, m.domain) for m in answer.modules] == [
+        ("promotion", "Laptop sale", "shop.example"),
+        ("correction", "cheap laptops", ""),
+    ]
     with pytest.raises(WintergrabError) as error:  # a failure never shows the key (Google's is a parameter)
         search("cheap laptop", provider="google", endpoint="http://127.0.0.1:1/customsearch/v1", timeout=2)
     assert "google-key" not in str(error.value)
@@ -157,7 +259,18 @@ def test_searxng(api, monkeypatch) -> None:
     monkeypatch.setenv("SEARXNG_URL", api)  # the instance; /search is added
     answer = search("budget laptop", provider="searxng")
     assert len(answer.results) == 4 and answer.results[2].domain == "shop.example"
+    assert [(r.position, r.rank) for r in answer.results] == [(1, 1), (2, 3), (3, 4), (4, 5)]  # a news result 2nd
+    assert [(m.type, m.position, m.rank, m.title) for m in answer.modules] == [
+        ("news", 1, 2, "Laptop prices fall"),  # (its category: news)
+        ("infobox", 1, None, "Laptop"),
+        ("answer", 1, None, "Budget laptops cost $300 to $500."),
+        ("related", 1, None, "budget laptop 2026"),
+        ("related", 2, None, "best cheap laptop"),
+    ]
+    assert answer.modules[1].url == "https://encyclopedia.example/wiki/Laptop"  # (an infobox's id is its URL)
     assert answer.related == ["budget laptop 2026", "best cheap laptop"]
+    assert search("cheap laptop", provider="searxng").modules[0].title == "Cheap laptops start at $199."
+    assert search("gaming mouse", provider="searxng").modules[0].to_dict()["type"] == "correction"
     monkeypatch.delenv("SEARXNG_URL")
     with pytest.raises(ConfigurationError, match="set SEARXNG_URL"):
         search("budget laptop", provider="searxng")
@@ -205,26 +318,100 @@ def test_what_results_say() -> None:
     assert read_results(records) == results and read_results([{"query": "x", "position": "zero"}]) == []
 
 
+def test_history_and_boxes() -> None:
+    def searched(when: str, found: dict[str, list[str]]) -> list[SearchResult]:
+        return [SearchResult(query=q, position=n, url=u, fetched=when) for q, urls in found.items()
+                for n, u in enumerate(urls, 1)]  # fmt: skip
+
+    laptops, reviews, shop = "https://www.laptops.example/b", "https://reviews.example/c", "https://shop.example/c/l"
+    mice, forum = "https://mice.example/gaming", "https://forum.example/t/1"
+    first, second, third = "2026-09-01T09:00:00+00:00", "2026-09-08T09:00:00+00:00", "2026-09-15T09:00:00Z"
+    week1 = searched(first, {"budget laptop": [laptops, reviews, shop], "cheap laptop": [reviews, laptops, forum],
+                             "gaming mouse": [mice, "https://reviews.example/mice"]})  # fmt: skip
+    week2 = searched(second, {"budget laptop": [shop, laptops, reviews], "cheap laptop": [reviews, shop]})
+    week3 = searched(third, {"budget laptop": [laptops, shop], "gaming mouse": [mice, "https://reviews.example/mice"]})
+    boxes = [
+        SearchResult(query="budget laptop", position=1, url="https://shop.example/stores/1", title="Shop",
+                     type="location", rank=1, fetched=first),  # (an older search's)
+        SearchResult(query="budget laptop", position=1, url="https://news.example/l", title="Prices fall",
+                     type="news", rank=2, fetched=third),
+        SearchResult(query="budget laptop", position=1, title="cheap laptops", type="related", fetched=third),
+        SearchResult(query="gaming mouse", position=1, url="https://shop.example/stores/2", title="Shop",
+                     type="location", rank=1, details={"rating": 4.5}, fetched=third),
+    ]  # fmt: skip
+    results = [*week1, *week2, *week3, *boxes]
+    # what they say now: each query's latest web results (budget laptop's and gaming mouse's of week 3...)
+    ranked = competitors(results, domain="shop.example")
+    assert [v.domain for v in ranked] == ["reviews.example", "laptops.example", "mice.example"]
+    assert visibility_score(results, "shop.example") == round((1 / 2 + 1 / 2) / 3, 3)
+    assert modules(results, domain="shop.example") == [
+        Module(type="location", queries=1, results=1, average_rank=1.0, domains={"shop.example": 1}, own=1),
+        Module(type="news", queries=1, results=1, average_rank=2.0, domains={"news.example": 1}, own=0),
+        Module(type="related", queries=1, results=1, average_rank=None, domains={}, own=0),
+    ]
+    history = ranking_history(results, "shop.example")
+    assert [
+        (h["query"], [p["position"] for p in h["positions"]], h["best"], h["latest"], h["change"]) for h in history
+    ] == [
+        ("budget laptop", [3, 1, 2], 1, 2, "down"),
+        ("cheap laptop", [None, 2], 2, 2, "new"),
+    ]  # fmt: skip  (gaming mouse: never ranked)
+    assert [p["fetched"] for p in history[0]["positions"]] == [first, second, third]
+    changes = {c["query"]: c["change"] for c in ranking_changes(week1, [*week2, *week3], "shop.example")}
+    assert changes == {"budget laptop": "up", "cheap laptop": "new"}  # (week 3's budget laptop against week 1's)
+    assert read_results(r.to_dict() for r in results) == results
+    one_moment = [SearchResult(query="q", position=1, url="https://a.example/", fetched="2026-09-15T09:00:00Z"),
+                  SearchResult(query="q", position=2, url="https://b.example/", fetched="2026-09-15T09:00:00+00:00")]  # fmt: skip
+    assert [v.domain for v in competitors(one_moment)] == ["a.example", "b.example"]  # one search, however written
+    kept = read_results([{"query": "q", "position": 2, "rank": "n/a", "url": "https://a.example/"}])
+    assert [(r.position, r.rank) for r in kept] == [(2, None)]  # (a rank that is not a number: no rank)
+
+
 def test_the_search_command(api, monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setenv("SEARXNG_URL", api)
     out = tmp_path / "serp.jsonl"
     assert main(["-q", "search", "budget laptop", "cheap laptop", "gaming mouse", "--provider", "searxng",
                  "--delay", "0", "-o", str(out)]) == 0  # fmt: skip
     rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == 10 and rows[0]["query"] == "budget laptop" and rows[0]["source"] == "searxng"
+    assert len([r for r in rows if r["type"] == "web"]) == 10 and rows[0]["query"] == "budget laptop"
+    assert rows[0]["source"] == "searxng" and rows[0]["rank"] == 1
+    others = Counter(r["type"] for r in rows if r["type"] != "web")
+    assert others == {"related": 6, "answer": 2, "news": 1, "infobox": 1, "correction": 1}
     capsys.readouterr()
     assert main(["search", "budget laptop", "--provider", "searxng", "--delay", "0"]) == 0
     shown = capsys.readouterr().out
     assert (
         "budget laptop  (4 results)" in shown and "3. shop.example" in shown and "related: budget laptop 2026" in shown
     )
+    assert "news (place #2): Laptop prices fall (news.example)" in shown and "infobox: Laptop (encyclopedia." in shown
     before = tmp_path / "before.jsonl"
     before.write_text("".join(json.dumps({**r, "position": r["position"] + 1}) + "\n" for r in rows), encoding="utf-8")
     assert main(["search", "--report", str(out), "--domain", "shop.example", "--before", str(before)]) == 0
     report = capsys.readouterr().out
-    assert "10 results for 3 queries" in report and "shop.example: visibility 0.111" in report
+    assert "10 results for 3 queries\n" in report and "shop.example: visibility 0.111" in report
     assert "reviews.example" in report and "budget laptop | cheap laptop" in report
+    assert "related      in 3 of 3 queries\n" in report
+    assert "news         in 1 of 3 queries, place #2 on the page: news.example (1)\n" in report
     assert "Gaps: 2 queries" in report and "budget laptop" in report.split("Changes since")[1]
+    assert "History" not in report  # (one search of each)
+
+    # an earlier search (shop.example not in it), and this one added: the history
+    history = tmp_path / "history.jsonl"
+    history.write_text("".join(json.dumps({**r, "fetched": "2026-09-01T09:00:00+00:00"}) + "\n" for r in rows
+                               if r.get("domain") != "shop.example"), encoding="utf-8")  # fmt: skip
+    assert main(["-q", "search", "budget laptop", "--provider", "searxng", "--delay", "0", "-o", str(history),
+                 "--append"]) == 0  # fmt: skip
+    assert main(["search", "--report", str(history), "--domain", "shop.example"]) == 0
+    report = capsys.readouterr().out
+    assert "searched up to 2 times (2026-09-01 to " in report and "reads each query's latest" in report
+    assert re.search(r"\n  budget laptop +- 3 +best #3, new\n", report)
+    assert main(["search", "--report", str(out), "--pages", "2"]) == 2
+    assert "--pages: for searching" in capsys.readouterr().err
+    assert main(["search", "--report", str(out), "--before", str(before)]) == 2
+    assert "say which with --domain" in capsys.readouterr().err
+    assert main(["search", "budget laptop", "--domain", "shop.example", "--depth", "5"]) == 2
+    assert "--domain, --depth: for --report" in capsys.readouterr().err
+    assert main(["search", "budget laptop", "--append"]) == 2 and "with -o FILE" in capsys.readouterr().err
     assert main(["search"]) == 2
 
 

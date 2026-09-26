@@ -644,6 +644,24 @@ an error that says so, not a setting silently ignored
   sites a search API ranks for it, shown for the user to pick one.
 - `WinterGrab.search(query)` asks under the entry point's network policy and
   timeout.
+- The rest of the page is read too, where the provider gives it, as records
+  with a `type`: Brave's news, videos, local results (with address,
+  telephone, rating, reviews and coordinates), discussions, questions and
+  infobox; SearXNG's results of other categories, infoboxes, answers,
+  corrections and related searches; Google's promotions and spelling
+  correction (`SearchAnswer.modules`). A result's `rank` is its place among
+  the page's results and boxes where the provider gives their order
+  (Brave's `mixed`, one list's order). The report says which boxes the pages
+  have, where, and whose results are in them (`modules()`).
+- A history of rankings: `-o FILE --append` adds each search to the output,
+  the report reads each query's latest collection (the results of one
+  search share their `fetched` time), and `ranking_history()` gives a
+  domain's position in each, shown by `--report --domain`. The analyses read
+  web results only.
+- Related searches and questions were printed but not saved with `-o`: they
+  are records now. An option of the other mode (`--domain` when searching,
+  `--pages` when reading a report, `--before` without `--domain`, `--append`
+  without `-o`) is an error instead of being ignored.
 
 ### Browser actions (`wintergrab.fetchers.actions`)
 
