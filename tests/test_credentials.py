@@ -168,24 +168,20 @@ def test_in_a_browser(sites) -> None:
     # (Playwright fetches a page with headers itself, and it cannot find wg.localhost: localhost is the site here)
     club = Credentials("localhost", headers={"X-Token": "s3cret"}, cookies={"session": "abc"})
 
-    # (A page the browser is handed has no address it knows, and Chromium refuses its requests to other sites'
-    # private addresses: Private Network Access. Every site is on this machine here, so that is off.)
-    local = ["--disable-features=BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights,"
-             "PrivateNetworkAccessRespectPreflightResults,LocalNetworkAccessChecks"]  # fmt: skip
-
     async def fetch(path: str) -> Any:
-        async with AsyncBrowserFetcher(
-            credentials=[club], block_resources=(), wait_until="networkidle", launch_args=local
-        ) as browser:
+        async with AsyncBrowserFetcher(credentials=[club], block_resources=(), wait_until="networkidle") as browser:
             return await browser.get(sites.url("localhost", path))
 
     page = asyncio.run(fetch("/page"))
     assert page.status == 200 and page.css("h1::text").get() == "members"
     assert sites.got("localhost", "/page") == ("s3cret", "session=abc")
     assert sites.got("localhost", "/image") == ("s3cret", "session=abc")  # what the page loads from its site
-    assert sites.got("127.0.0.1", "/pixel") == (None, None)  # and from another
-    landed = asyncio.run(fetch("/to/127.0.0.1/landed"))
+    landed = asyncio.run(fetch("/to/127.0.0.1/landed"))  # a redirect off the site
     assert landed.url == sites.url("127.0.0.1", "/landed") and sites.got("127.0.0.1", "/landed") == (None, None)
+    # Nothing that went to the other site carried them: the image the page loads from it (which Chromium may
+    # refuse to load at all, the page having no address it knows: Private Network Access) and the redirect.
+    assert [(path, token, cookie) for host, path, token, cookie in sites.seen if host == "127.0.0.1"
+            and (token or cookie)] == []  # fmt: skip
 
 
 def _project(tmp_path, sites: _Sites) -> Project:
