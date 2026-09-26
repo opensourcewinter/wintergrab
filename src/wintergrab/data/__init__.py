@@ -14,6 +14,8 @@
 * :mod:`~wintergrab.data.quality` - dataset quality metrics and degradation alerts.
 * :mod:`~wintergrab.data.entities` - entity resolution: which names are the same company,
   brand, product, person or place, with evidence.
+* :mod:`~wintergrab.data.versions` - dataset versions, and what was added, removed and
+  changed between two datasets.
 
 See ``docs/data.md`` for a guided tour.
 """
@@ -61,6 +63,7 @@ from .similarity import (
     simhash_similarity,
 )
 from .validate import Rule, is_valid, validate_record
+from .versions import DatasetDiff, DatasetVersions, diff_records
 
 __all__ = [
     "FIELD_TYPES",
@@ -69,6 +72,8 @@ __all__ = [
     "Compute",
     "ConfigLoader",
     "ConvertCurrency",
+    "DatasetDiff",
+    "DatasetVersions",
     "Deduplicate",
     "Deduplicator",
     "Enrich",
@@ -105,6 +110,7 @@ __all__ = [
     "Validate",
     "compile_expression",
     "content_hash",
+    "diff_records",
     "explain_inference",
     "get_path",
     "hamming",

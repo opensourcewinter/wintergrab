@@ -160,6 +160,19 @@
 - Measured: about 3,800 mentions per second on 20,000 generated company
   names (`benchmarks/bench_data.py`).
 
+### Dataset versions and differences (`wintergrab.data.versions`)
+
+- `diff_records(old, new, key=...)`: added, removed, changed (with field-level
+  old and new values, and deltas for numbers and same-currency prices) and
+  unchanged records; keys normalized like duplicate keys, URLs compared
+  normalized, metadata fields (`_...`) skipped; per-field summaries (up/down
+  and median change, common transitions such as InStock -> OutOfStock).
+- `DatasetVersions(directory)`: v1, v2, v3... as gzipped JSON Lines with a
+  manifest of record counts, order-independent digests and the differences
+  from the previous version; identical data is not saved twice.
+- CLI: `wintergrab data commit DIR INPUT`, `data log DIR`, `data diff OLD NEW`
+  (files or `DIR@VERSION`, `--exit-code` for CI).
+
 ### Page and site intelligence (`wintergrab.intel`)
 
 - `classify_page(page)`: product, category, listing, article, news, job,

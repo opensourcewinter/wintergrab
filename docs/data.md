@@ -14,6 +14,8 @@ tells you when a dataset's quality drops.
   company, brand, product, person or place under different names is
   [entity resolution](entities.md).
 - [Quality](#quality): completeness, validity, drift and collapse detection.
+- [Versions and differences](#versions-and-differences): what was added, removed
+  and changed since the last run.
 - [Command line](#command-line): `wintergrab data ...`.
 
 Everything here runs locally with the standard library (YAML files need
@@ -423,6 +425,61 @@ report.compare(previous_report)   # [Issue(...), ...]
 report.save("quality.json")
 ```
 
+## Versions and differences
+
+`diff_records` compares two datasets record by record:
+
+```python
+from wintergrab.data import diff_records
+
+diff = diff_records(yesterday, today, key="url")
+print(diff.describe())
+```
+
+```
++1 added, -1 removed, ~3 changed, 0 unchanged
+fields changed:
+  price              2 records: 1 up, 1 down, median +7.8%
+  availability       2 records: InStock -> OutOfStock 1, OutOfStock -> InStock 1
+```
+
+Records are matched by `key` (one field, several, or dotted paths), normalized
+like [duplicate](#duplicates) keys: `?utm_source=` does not make a new page,
+nor does case or punctuation make a new SKU. Compared values ignore extra
+whitespace, `None` equals a missing field, URLs are compared normalized, and
+fields starting with `_` (`_confidence`, `_provenance`) are skipped unless
+`private=True`; `ignore=["scraped_at"]` skips others. Records without the key
+(or all records, without a key) are matched by content: added or removed,
+never changed.
+
+`diff.added`, `diff.removed`, `diff.changed` (each change with its
+`FieldChange`s: `old`, `new`, and for numbers and same-currency prices
+`delta` and `ratio`) and `diff.unchanged` hold the details; `diff.fields()`
+summarizes each field (up/down and median change for numbers, the most
+common transitions for short values); `diff.rows()` flattens it all for a
+file.
+
+### Versions
+
+`DatasetVersions` keeps a directory of versions of a dataset, the way you
+would keep releases of any other artifact:
+
+```python
+from wintergrab.data import DatasetVersions
+
+versions = DatasetVersions("prices", key="url")
+versions.commit(records, message="daily run")   # v1, v2, v3... (nothing new is saved if nothing changed)
+versions.latest.changes                         # {'added': 1, 'removed': 1, 'changed': 3, 'unchanged': 0}
+versions.diff("v1", "latest")                   # a DatasetDiff
+versions.load("previous")                       # the records of a version
+```
+
+Each version is a gzipped JSON Lines file (`v3.jsonl.gz`); `versions.json`
+lists them with their time, record count, message, key, an order-independent
+SHA-256 digest of the records and their differences from the version before.
+Files are written through a temporary file and renamed, so an interrupted
+save never leaves half a version.
+
 ## Command line
 
 ```bash
@@ -432,6 +489,10 @@ wintergrab data run pipeline.yaml items.jsonl -o clean.csv
 wintergrab data quality items.jsonl --schema product.schema.json --save quality.json
 wintergrab data quality items.jsonl --baseline quality.json
 wintergrab data entities companies.jsonl --field name --attribute website -o entities.jsonl
+wintergrab data commit prices/ today.jsonl --key url -m "daily run"
+wintergrab data log prices/
+wintergrab data diff prices/@previous prices/@latest -o changes.jsonl
+wintergrab data diff yesterday.jsonl today.jsonl --key sku --exit-code
 
 wintergrab crawl https://shop.example --field ... --pipeline pipeline.yaml -o items.jsonl
 ```

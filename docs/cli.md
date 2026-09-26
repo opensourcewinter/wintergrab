@@ -155,6 +155,9 @@ wintergrab data run PIPELINE INPUT [-o OUTPUT] [--allow-imports]
 wintergrab data quality INPUT [--schema SCHEMA] [--baseline REPORT] [--save REPORT] [--json]
 wintergrab data entities INPUT --field NAME [--kind KIND] [--attribute ATTR=FIELD] [-o ENTITIES]
                          [--review-output FILE] [--annotate FILE] [--merge P] [--review P]
+wintergrab data commit DIR INPUT [--key FIELD] [-m MESSAGE] [--force]   # save the next version
+wintergrab data log DIR                                                  # list the versions
+wintergrab data diff OLD NEW [--key FIELD] [--ignore FIELD] [-o CHANGES] [--json] [--exit-code]
 ```
 
 Inputs are JSON Lines, JSON or CSV files (`-` reads JSON Lines from stdin);
@@ -166,7 +169,12 @@ completeness, validity, consistency and anomalies per field; with
 `--baseline` it compares with an earlier report and exits with status 1 when
 quality collapsed. `entities` groups the names in a field into companies,
 brands, products, people or places, with evidence, and prints the pairs it
-did not dare merge. See [data.md](data.md) and [entities.md](entities.md).
+did not dare merge. `commit` saves a dataset as the next version in a
+versions directory and prints what changed; `diff` compares two files or two
+versions (`DIR@v2`, `DIR@previous`, `DIR@latest`), prints the counts and the
+fields that changed, writes the details with `-o`, and with `--exit-code`
+exits with status 1 when they differ. See [data.md](data.md) and
+[entities.md](entities.md).
 
 ## `wintergrab shell`: explore interactively
 

@@ -25,9 +25,20 @@ from typing import Any
 from ..urls import normalize_url
 from .similarity import MinHashLSH, content_hash, minhash, normalize_for_hash
 
-__all__ = ["Deduplicator"]
+__all__ = ["Deduplicator", "normalize_key"]
 
 _NUM_PERM = 64  # MinHash slots per record: +-0.05 on the similarity estimate, 512 bytes of memory
+
+
+def normalize_key(name: str, value: Any) -> str:
+    """A record key's value as compared: URLs normalized (``url``, ``*_url`` fields, or values
+    that look like URLs), other text without case, punctuation and extra spaces."""
+    if isinstance(value, str) and (name == "url" or name.endswith("_url") or value.startswith(("http://", "https://"))):
+        try:
+            return normalize_url(value)
+        except ValueError:
+            return value
+    return normalize_for_hash(str(value)) if not isinstance(value, (dict, list)) else content_hash(value)
 
 
 class Deduplicator:
@@ -64,16 +75,7 @@ class Deduplicator:
         self.duplicates: dict[str, int] = {"key": 0, "content": 0, "near": 0}
 
     # -- identity ----------------------------------------------------------- #
-    @staticmethod
-    def _norm(name: str, value: Any) -> str:
-        if isinstance(value, str) and (
-            name == "url" or name.endswith("_url") or value.startswith(("http://", "https://"))
-        ):
-            try:
-                return normalize_url(value)
-            except ValueError:
-                return value
-        return normalize_for_hash(str(value)) if not isinstance(value, (dict, list)) else content_hash(value)
+    _norm = staticmethod(normalize_key)
 
     def _key_of(self, record: Mapping[str, Any]) -> tuple[str, ...] | None:
         if not self.key:

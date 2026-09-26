@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .errors import FetchError, WintergrabError, describe
+from .errors import ConfigurationError, FetchError, WintergrabError, describe
 from .fetchers import AsyncBrowserFetcher, AsyncFetcher, Response
 from .parser import Selector
 from .proxy import ProxyRotator
@@ -66,6 +66,9 @@ EPILOG_DATA = """examples:
   wintergrab data quality items.jsonl --baseline quality.json    # exit status 1 if quality collapsed
   wintergrab data entities companies.jsonl --field name --attribute website --attribute phone -o entities.jsonl
   wintergrab data entities products.jsonl --field brand --kind brand --annotate products.resolved.jsonl
+  wintergrab data commit prices/ today.jsonl --key url -m "daily run"   # save a version
+  wintergrab data diff prices/@previous prices/@latest                    # what changed since the last one
+  wintergrab data diff yesterday.jsonl today.jsonl --key sku -o changes.jsonl
 
 Inputs are JSON Lines, JSON or CSV files ("-" reads JSON Lines from stdin).
 """
@@ -856,6 +859,99 @@ def cmd_data_entities(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dataset(ref: str, limit: int | None = None) -> tuple[list[dict[str, Any]], list[str] | None, str]:
+    """Records from a file, a versions directory (its latest version) or DIR@VERSION; the
+    versions' key; a label."""
+    from .data.io import read_records
+    from .data.versions import DatasetVersions
+
+    base, _, version = ref.rpartition("@") if "@" in ref else (ref, "", "")
+    directory = Path(base or ref)
+    if (directory / DatasetVersions.MANIFEST).is_file():
+        versions = DatasetVersions(directory)
+        found = versions.get(version or "latest")
+        return versions.load(found.number)[:limit], versions.key, f"{directory}@{found.name}"
+    return list(read_records(ref, limit=limit)), None, ref
+
+
+def cmd_data_diff(args: argparse.Namespace) -> int:
+    from .data.versions import diff_records
+
+    try:
+        old, old_key, old_label = _dataset(args.old)
+        new, new_key, new_label = _dataset(args.new)
+    except ConfigurationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    key = args.key or old_key or new_key
+    if key is None and any(isinstance(r, dict) and "url" in r for r in [*old[:100], *new[:100]]):
+        key = ["url"]
+    diff = diff_records(old, new, key, ignore=args.ignore or (), private=args.private)
+    if args.output:
+        _write_records(diff.rows(), args.output)
+    if args.json:
+        print(json.dumps({"old": old_label, "new": new_label, "key": key, **diff.to_dict()}, indent=2, default=str))
+    else:
+        matched = f"by {', '.join(key)}" if key else "by content (no --key)"
+        print(f"{old_label} -> {new_label}, records matched {matched}")
+        print(diff.describe(args.fields))
+        if diff.stats.get("duplicate_keys"):
+            print(f"note: {diff.stats['duplicate_keys']:,} record(s) repeated a key; the last one was compared")
+        if key and diff.stats.get("unkeyed"):
+            print(f"note: {diff.stats['unkeyed']:,} record(s) had no key and were matched by content")
+    if args.output and args.verbose >= 0:
+        print(f"wrote the differences to {args.output}", file=sys.stderr)
+    return 1 if args.exit_code and diff else 0
+
+
+def cmd_data_commit(args: argparse.Namespace) -> int:
+    from .data.io import read_records
+    from .data.versions import DatasetVersions
+
+    try:
+        versions = DatasetVersions(args.directory)
+    except ConfigurationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    latest = versions.latest
+    key = args.key or versions.key
+    if key is None:
+        print("error: say which field(s) identify a record with --key (remembered for later versions)", file=sys.stderr)
+        return 2
+    version = versions.commit(read_records(args.input), message=args.message, key=key, force=args.force)
+    if latest is not None and version.number == latest.number:
+        print(f"no changes since {version.name}: nothing saved (--force to save anyway)")
+        return 0
+    changes = ""
+    if version.changes:
+        c = version.changes
+        changes = (
+            f": +{c['added']:,} added, -{c['removed']:,} removed, ~{c['changed']:,} changed, "
+            f"{c['unchanged']:,} unchanged"
+        )
+    print(f"saved {version.name} ({version.records:,} records){changes}")
+    return 0
+
+
+def cmd_data_log(args: argparse.Namespace) -> int:
+    from .data.versions import DatasetVersions
+
+    directory = Path(args.directory)
+    if not (directory / DatasetVersions.MANIFEST).is_file():
+        print(f"error: {directory} holds no versions (save one with `wintergrab data commit`)", file=sys.stderr)
+        return 2
+    try:
+        versions = DatasetVersions(directory)
+    except ConfigurationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    key = f", key {', '.join(versions.key)}" if versions.key else ""
+    print(f"{directory}: {len(versions.versions)} version(s){key}")
+    for version in reversed(versions.versions):
+        print(f"  {version.describe()}")
+    return 0
+
+
 def cmd_data_quality(args: argparse.Namespace) -> int:
     from .data import QualityMonitor, QualityReport, load_schema
     from .data.io import read_records
@@ -1149,6 +1245,34 @@ def build_parser() -> argparse.ArgumentParser:
     ent.add_argument("--show", type=int, default=10, metavar="N", help="entities and review pairs to print (10)")
     ent.add_argument("--limit", type=int, metavar="N", help="only the first N records")
     ent.set_defaults(func=cmd_data_entities)
+    dif = actions.add_parser("diff", help="what was added, removed and changed between two datasets")
+    dif.add_argument("old", metavar="OLD", help="a file, or DIR@VERSION (DIR@v2, DIR@previous) saved by `data commit`")
+    dif.add_argument("new", metavar="NEW", help="a file, or DIR@VERSION (DIR@latest)")
+    dif.add_argument(
+        "--key",
+        action="append",
+        metavar="FIELD",
+        help="field(s) identifying a record (default: the versions' key, or url)",
+    )
+    dif.add_argument("--ignore", action="append", metavar="FIELD", help="a field not to compare (repeatable)")
+    dif.add_argument("--private", action="store_true", help="also compare fields starting with _")
+    dif.add_argument(
+        "-o", "--output", metavar="FILE", help="write the differences: added and removed records, changed fields"
+    )
+    dif.add_argument("--json", action="store_true", help="print the summary as JSON")
+    dif.add_argument("--fields", type=int, default=10, metavar="N", help="changed fields to list (10)")
+    dif.add_argument("--exit-code", action="store_true", help="exit with status 1 when the datasets differ")
+    dif.set_defaults(func=cmd_data_diff)
+    com = actions.add_parser("commit", help="save a dataset as the next version in a versions directory")
+    com.add_argument("directory", metavar="DIR", help="the versions directory (created if missing)")
+    com.add_argument("input", metavar="INPUT")
+    com.add_argument("--key", action="append", metavar="FIELD", help="field(s) identifying a record")
+    com.add_argument("-m", "--message", help="a note saved with the version")
+    com.add_argument("--force", action="store_true", help="save a version even if nothing changed")
+    com.set_defaults(func=cmd_data_commit)
+    log = actions.add_parser("log", help="list the versions saved in a versions directory")
+    log.add_argument("directory", metavar="DIR")
+    log.set_defaults(func=cmd_data_log)
 
     s = sub.add_parser("shell", help="interactive Python shell with a page loaded")
     s.add_argument("url", nargs="?")
