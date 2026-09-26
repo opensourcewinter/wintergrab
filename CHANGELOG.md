@@ -941,6 +941,10 @@ an error that says so, not a setting silently ignored
 
 ### Fixes
 
+- A fetcher's retry log lines showed the whole URL, a key in its query
+  included (Google's search API takes its key there). Log lines now mask
+  query parameters named like credentials (`key=***`, `api_key=***`) with
+  `redact_query()`; requests are unchanged.
 - The SQLite output stopped with an `OverflowError` on an integer beyond 64
   bits; such integers are now text, as in the other outputs.
 - A browser's recorded calls (`capture=True`) were in the order their

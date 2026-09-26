@@ -17,6 +17,7 @@ from curl_cffi.requests import exceptions as curl_exc
 from ..errors import ConfigurationError, FetchError, FetchTimeout, NetworkError, PolicyError, ProxyError, describe
 from ..netpolicy import NetworkPolicy
 from ..proxy import ProxyRotator, proxy_label
+from ..redact import redact_query
 from ..request import Request
 from ..utils import ensure_scheme, resolve_verify
 from .cache import CacheLayer, HTTPCache
@@ -415,7 +416,7 @@ class Fetcher(_HTTPBase):
                 if attempt + 1 < attempts and err.retryable:
                     switch = True
                     delay = self._retry_delay(attempt)
-                    log.info("retrying %s in %.1fs (%s)", req.url, delay, describe(exc))
+                    log.info("retrying %s in %.1fs (%s)", redact_query(req.url), delay, redact_query(describe(exc)))
                     time.sleep(delay)
                     continue
                 raise err from exc
@@ -425,7 +426,7 @@ class Fetcher(_HTTPBase):
                 # The site's own answer (429, 503...) is asked for again the same way, through the same proxy.
                 switch = response.status in PROXY_FAILURE_STATUSES
                 delay = self._retry_delay(attempt, response)
-                log.info("retrying %s in %.1fs (HTTP %s)", req.url, delay, response.status)
+                log.info("retrying %s in %.1fs (HTTP %s)", redact_query(req.url), delay, response.status)
                 time.sleep(delay)
                 continue
             return self._finish(req, response, stale)
@@ -609,7 +610,7 @@ class AsyncFetcher(_HTTPBase):
                 if attempt + 1 < attempts and err.retryable:
                     switch = True
                     delay = self._retry_delay(attempt)
-                    log.info("retrying %s in %.1fs (%s)", req.url, delay, describe(exc))
+                    log.info("retrying %s in %.1fs (%s)", redact_query(req.url), delay, redact_query(describe(exc)))
                     await asyncio.sleep(delay)
                     continue
                 raise err from exc
@@ -619,7 +620,7 @@ class AsyncFetcher(_HTTPBase):
                 # The site's own answer (429, 503...) is asked for again the same way, through the same proxy.
                 switch = response.status in PROXY_FAILURE_STATUSES
                 delay = self._retry_delay(attempt, response)
-                log.info("retrying %s in %.1fs (HTTP %s)", req.url, delay, response.status)
+                log.info("retrying %s in %.1fs (HTTP %s)", redact_query(req.url), delay, response.status)
                 await asyncio.sleep(delay)
                 continue
             return self._finish(req, response, stale)

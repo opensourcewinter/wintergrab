@@ -132,6 +132,32 @@ def test_credentials_are_not_kept(site, tmp_path, capsys) -> None:
     assert main(["replay", "last", "--workspace", str(workspace)]) == 0  # without the options left out
 
 
+def test_redact_query() -> None:
+    from wintergrab.redact import redact_query
+
+    url = "https://www.googleapis.com/customsearch/v1?key=AIza123&cx=e1&q=laptop&access_token=t0k&page=2"
+    assert (
+        redact_query(url) == "https://www.googleapis.com/customsearch/v1?key=***&cx=e1&q=laptop&access_token=***&page=2"
+    )
+    assert (
+        redact_query("failed: https://u:pw@h.example/?api_key=s3 (timeout)")
+        == "failed: https://***@h.example/?api_key=*** (timeout)"
+    )
+    assert redact_query("https://shop.example/?sort=price&page=2") == "https://shop.example/?sort=price&page=2"
+
+
+def test_the_fetchers_log_no_key(caplog) -> None:
+    import logging
+
+    from wintergrab import Fetcher
+    from wintergrab.errors import FetchError
+
+    with caplog.at_level(logging.INFO, logger="wintergrab"), Fetcher(retries=1, timeout=1) as fetcher:
+        with pytest.raises(FetchError):
+            fetcher.get("http://127.0.0.1:1/search?q=x&key=s3cr3t")  # refused: retried once, logged
+    assert "retrying http://127.0.0.1:1/search?q=x&key=***" in caplog.text and "s3cr3t" not in caplog.text
+
+
 def test_redact_argv() -> None:
     from wintergrab.redact import redact_argv
 

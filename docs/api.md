@@ -1169,4 +1169,5 @@ checks that it is up to date.
 - **`is_sensitive(name: Any) -> bool`**. Whether a setting, header or field named ``name`` holds a credential (``X-Api-Key``, ``accessToken`` and ``session_id`` do; ``tokenizer`` does not).
 - **`redact(value: Any, name: Any = None) -> Any`**. ``value`` (a setting, a header mapping, JSON data...) with its credentials replaced, recursively.
 - **`redact_argv(argv: Sequence[str]) -> list[str]`**. A command line with its credentials replaced: URL user information, the values of headers and ``NAME=VALUE`` settings named like credentials (``-H "Authorization: ..."``, ``-s token=...``), and credentials inside JSON values (``-s 'default_headers={"Cookie": "..."}'``).
+- **`redact_query(text: str) -> str`**. A URL (or a message holding URLs) for a log line: without user information, and with the values of query parameters named like credentials (``api_key``, ``access_token``, ``key``, ``sig``...) as ``***``.
 - **`redact_url(url: str) -> str`**. ``url`` without its user information (``http://***@proxy:8080``).
