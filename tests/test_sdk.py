@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from wintergrab import NetworkPolicy, NetworkPolicyError, WinterGrab
+from wintergrab import ConfigurationError, NetworkPolicy, NetworkPolicyError, WinterGrab
 from wintergrab.goals import GoalPlan
 from wintergrab.intel import read_sitemaps
 
@@ -19,6 +19,8 @@ def test_from_a_goal_to_records(site, tmp_path) -> None:
     result = wg.run(plan)
     assert result.counts["records"] == 5 and all(r["price"] < 20 for r in result.records)
     assert asyncio.run(wg.arun(plan)).counts["records"] == 5  # the same from async code
+    with pytest.raises(ConfigurationError, match="plan the goal again"):
+        wg.run(plan, sites=["https://more.example"])  # a plan is made: it is not quietly changed
     out = tmp_path / "books.jsonl"
     wg.run("the first 2 books with title and price", str(out), sites=[site.url + "/books/"], sample=15)
     names = [json.loads(line)["name"] for line in out.read_text(encoding="utf-8").splitlines()]
@@ -35,6 +37,9 @@ def test_pages_and_sites(site) -> None:
     assert sources.richest() == ("html", "article.product_pod", 4, 5)
     survey = wg.inspect(site.url, pages=5)
     assert survey.robots_found and survey.profile.pages == 5
+    mine = wg.goal("products with name and price")
+    assert wg.plan(mine, sites=[site.url], sample=3).goal.sites == [site.url]
+    assert mine.sites == []  # planned with a site added, the goal given is left as it was
 
 
 def test_settings_hold_everywhere(site) -> None:

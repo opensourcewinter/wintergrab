@@ -25,6 +25,7 @@ and every lower level stays in reach.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
@@ -98,8 +99,8 @@ class WinterGrab:
 
         if isinstance(goal, str):
             goal = self.goal(goal, sites=sites)
-        elif sites:
-            goal.sites = list(dict.fromkeys([*goal.sites, *sites]))
+        elif sites:  # a copy: the caller's goal stays as it was
+            goal = dataclasses.replace(goal, sites=list(dict.fromkeys([*goal.sites, *sites])))
         return plan_goal(
             goal,
             sample=sample,
@@ -123,8 +124,11 @@ class WinterGrab:
         """Collect a goal's records into ``output`` (``.jsonl``, ``.csv``, a database URL...; kept in
         ``result.records`` when there is none). A goal that is not planned yet is planned first (:meth:`plan`).
         ``settings``: more :class:`~wintergrab.Spider` settings for this run."""
+        from .errors import ConfigurationError
         from .goals import GoalPlan
 
+        if isinstance(goal, GoalPlan) and sites:
+            raise ConfigurationError("a plan's sites are those it surveyed: plan the goal again to add sites")
         plan = goal if isinstance(goal, GoalPlan) else self.plan(goal, sites=sites, sample=sample)
         options = {"obey_robots_txt": self.obey_robots, "timeout": self.timeout, **self._spider_settings(), **settings}
         return plan.run(output, max_pages=max_pages, log_level=self.log_level, **options)
