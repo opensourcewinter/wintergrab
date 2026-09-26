@@ -172,6 +172,7 @@ class Engine:
         self._history_run: int | None = None
         self._own_history = False
         self.profiler: Any = None  # a SiteProfiler with ``profile``
+        self._whole_crawl = False  # this run started the crawl (not a resume, not only dead letters)
 
     # ------------------------------------------------------------------ #
     # control (thread-safe entry points)
@@ -258,6 +259,7 @@ class Engine:
         try:
             state = self._load_state(resume)
             frontier_existed = self._open_frontier(resume)
+            self._whole_crawl = state is None and not frontier_existed and not spider.retry_dead_letters
             # A frontier that survived a crash means earlier output is part of this crawl.
             self._setup_output(append=state is not None or frontier_existed)
             self.budget.start(append=state is not None or frontier_existed)
@@ -528,10 +530,11 @@ class Engine:
             self.stats.inc("profile_errors")
             log.error("could not profile %s: %s", response.url, describe(exc))
 
-    def _close_profiler(self) -> Any:
+    def _close_profiler(self, status: str) -> Any:
         if self.profiler is None:
             return None
         try:
+            self.profiler.topology.start_urls(str(url) for url in self.spider.start_urls)
             if self.profiler.robots is None and self.robots is not None and self.spider.start_urls:
                 origin = RobotsPolicy.origin(str(self.spider.start_urls[0]))
                 if origin in self.robots.texts:
@@ -539,7 +542,9 @@ class Engine:
                     self.profiler.add_robots(text, found=text is not None)
             if self.history is not None and self._history_run is not None and self.profiler.change_frequency is None:
                 self.profiler.change_frequency = self.history.change_frequency(self._history_run)
-            profile = self.profiler.profile()
+            # A crawl that ran to the end in this run followed every link it could, so a sitemap page none
+            # points to is an orphan. (A resumed crawl's profile has only the pages of the last run.)
+            profile = self.profiler.profile(complete=status == "finished" and self._whole_crawl)
             if isinstance(self.spider.profile, (str, Path)):
                 Path(self.spider.profile).write_text(
                     json.dumps(profile.to_dict(), indent=2, ensure_ascii=False, default=str), encoding="utf-8"
@@ -757,7 +762,7 @@ class Engine:
         self.stats["status"] = status
         if self.dead_letters is not None and self.dead_letters.added:
             self.stats["dead_letters"] = self.dead_letters.added
-        profile = self._close_profiler()
+        profile = self._close_profiler(status)
         changes = self._close_history(status)
         result = CrawlResult(
             items=self.items,
@@ -1431,7 +1436,7 @@ class Engine:
             self.stats.inc("offsite_filtered")
             return
         if self.url_rules is not None:
-            reason = self.url_rules.check(request.url)
+            reason = self.url_rules.check(request.url, sitemap=request.callback == "_parse_sitemap")
             if reason is not None:
                 self.stats.inc("rules_filtered")
                 self.stats.inc(f"rules_filtered/{reason}")

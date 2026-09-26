@@ -375,8 +375,10 @@ class URLRules:
                 raise ConfigurationError(str(exc), key="url_rules") from exc
         raise ConfigurationError(f"expected True, a dict or URLRules, got {value!r}", key="url_rules")
 
-    def check(self, url: str) -> str | None:
-        """``None`` if ``url`` may be queued, else a short reason."""
+    def check(self, url: str, *, sitemap: bool = False) -> str | None:
+        """``None`` if ``url`` may be queued, else a short reason. For a ``sitemap`` (or feed) URL
+        found in a sitemap index, file extensions (``.xml.gz``, ``.rss``) and ``allow`` patterns,
+        which are about pages, do not apply."""
         if self.max_url_length is not None and len(url) > self.max_url_length:
             return "url-too-long"
         try:
@@ -391,7 +393,7 @@ class URLRules:
         if self.denied_domains and _domain_in(host, self.denied_domains):
             return "denied-domain"
         path = parts.path
-        if self.deny_extensions:
+        if self.deny_extensions and not sitemap:
             ext = _extension(path)
             if ext and ext in self.deny_extensions:
                 return "extension"
@@ -410,7 +412,7 @@ class URLRules:
             and len(parse_qsl(parts.query, keep_blank_values=True)) > self.max_query_params
         ):
             return "too-many-params"
-        if self._allow and not any(rx.search(url) for rx in self._allow):
+        if self._allow and not sitemap and not any(rx.search(url) for rx in self._allow):
             return "not-allowed"
         if self._deny and any(rx.search(url) for rx in self._deny):
             return "deny"

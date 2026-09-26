@@ -216,11 +216,36 @@
   JavaScript-only pages, bot protection), latency, errors and, with a
   history, change frequency. `inspect` reads robots.txt and the sitemaps
   and visits a sample of pages spread across them.
+- Site topology: `TopologyBuilder` (and `profile.topology`) arranges every
+  URL known (listed in a sitemap, visited, or linked) into a tree of
+  sections, named after the site's menus and breadcrumbs (links and
+  schema.org `BreadcrumbList`), with ids generalized (`/blog/{id}`) and
+  items clustered (`/p/{slug}`, `/p/{slug}/reviews`), URL counts and page
+  types. It also has the main navigation with its submenus, feeds, HTML
+  sitemaps, paginated listings, dead ends, duplicate routes (same text, or a
+  canonical link to another URL) and, for a crawl that ran to the end,
+  orphans (listed in a sitemap, linked from no page visited). `inspect`
+  prints it (`--depth`, `--show`); `wintergrab crawl ... --profile FILE`
+  saves the profile and topology of a crawl.
+- A profiler reads the sitemaps and feeds a crawl fetches.
 - Paths ending in `/page/N` count as listing pages, and `/products/page/N`
   is no longer taken for a product.
 - Measured: 3.0 ms to classify and 0.9 ms to profile an 11 KB product page;
   20 ms and 12 ms for a page with 480 KB of text; `classify_url` 11 µs;
-  6.3 ms per page for a site profile's full analysis.
+  6.9 ms per page for a site profile's full analysis, 2.3 ms after the
+  first 500 pages (topology included).
+
+### Fixes
+
+- Spiders with URL rules (`wintergrab crawl URL --sitemap ...`) skipped the
+  `.xml.gz` sitemaps of a sitemap index as archive downloads. Sitemap URLs
+  are no longer held to the extension and `allow` rules, which are about
+  pages.
+- `next_page()` resolves URLs only for candidate links and looks for
+  numbered pagination only around links whose text is a number: 0.25 ms
+  instead of 1.1 ms on an 11 KB page without pagination, with the same
+  answers (checked against the previous version on 120,000 generated
+  pages).
 
 ## 0.2.0
 

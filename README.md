@@ -230,7 +230,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Extraction](https://github.com/opensourcewinter/wintergrab/blob/main/docs/extraction.md) | Typed records from any page with a strategy hierarchy, provenance and confidence |
 | [Entities](https://github.com/opensourcewinter/wintergrab/blob/main/docs/entities.md) | Which names are the same company, brand, product, person or place |
 | [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |
-| [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies and site profiles (`wintergrab inspect`), with the evidence |
+| [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies, site profiles and topology (`wintergrab inspect`), with the evidence |
 | [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `data` and `shell` reference |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 

@@ -56,6 +56,8 @@ EPILOG_CRAWL = """examples:
   wintergrab crawl https://books.toscrape.com --follow ".pager a" --follow "h3 a" \\
       --each "article.product_page" --field title=h1::text --field price=.price_color::text \\
       -o books.jsonl --max-pages 200
+  wintergrab crawl https://shop.example --sitemap https://shop.example/sitemap.xml --follow a \\
+      --profile site.json -o pages.jsonl         # also the site's sections, dead ends, orphans
 
 Press Ctrl+C once to pause (state is saved when --crawl-dir is set); run the
 same command again to resume. Press Ctrl+C twice to force quit.
@@ -64,6 +66,7 @@ same command again to resume. Press Ctrl+C twice to force quit.
 EPILOG_INSPECT = """examples:
   wintergrab inspect https://shop.example                 # 30 pages, robots.txt and sitemaps
   wintergrab inspect https://shop.example --pages 100 -o shop.profile.json
+  wintergrab inspect https://shop.example --depth 4 --show 20   # more of the section tree
   wintergrab inspect https://app.example --browser        # render pages, record their XHR/fetch calls
 """
 
@@ -570,7 +573,7 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     if args.json:
         print(data)
     else:
-        print(profile.describe(args.show))
+        print(profile.describe(args.show, depth=args.depth))
         if args.output:
             print(f"saved the full profile to {args.output}", file=sys.stderr)
     return 0
@@ -670,6 +673,7 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         "crawl_order": args.order,
         "event_log": args.events,
         "history": args.history,
+        "profile": args.profile,
     }
     if args.retry_failed:
         overrides["retry_dead_letters"] = True
@@ -735,6 +739,8 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     if result.changes is not None and result.changes.old is not None and args.verbose >= 0:
         print(f"changes since run {result.changes.old.id} ({args.history or spider.history}):", file=sys.stderr)
         print(result.changes.summary(), file=sys.stderr)
+    if result.profile is not None and args.profile:
+        print(f"site profile saved to {args.profile}", file=sys.stderr)
     incomplete = getattr(spider, "incomplete", 0)
     if incomplete:
         print(f"{incomplete} page(s) had no complete record (a required field was missing)", file=sys.stderr)
@@ -1350,6 +1356,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     c.add_argument("--history-html", action="store_true", help="keep every page's HTML in the history too")
     c.add_argument(
+        "--profile",
+        metavar="FILE",
+        help="save the site's profile and topology (sections, dead ends, orphans...) here as JSON",
+    )
+    c.add_argument(
         "--skip-fresh", action="store_true", help="with --history: skip pages that have probably not changed"
     )
     c.add_argument("--fresh", action="store_true", help="ignore saved state and start over")
@@ -1516,7 +1527,8 @@ def build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (default 20)")
     ins.add_argument("-o", "--output", metavar="FILE", help="save the full profile as JSON")
     ins.add_argument("--json", action="store_true", help="print the profile as JSON")
-    ins.add_argument("--show", type=int, default=8, metavar="N", help="entries per section (8)")
+    ins.add_argument("--show", type=int, default=8, metavar="N", help="entries per list (8)")
+    ins.add_argument("--depth", type=int, default=2, metavar="N", help="levels of the section tree (2)")
     ins.set_defaults(func=cmd_inspect)
 
     h = sub.add_parser(

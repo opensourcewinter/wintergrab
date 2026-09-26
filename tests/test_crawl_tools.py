@@ -58,6 +58,11 @@ def test_sitemap_spider_with_rules(site) -> None:
     incremental = FromSitemap(sitemap_since="2026-05-01", sitemap_follow=[r"products"]).run()
     assert [i["name"] for i in incremental.items] == ["Product 5"]
 
+    # URL rules are about pages: they do not stop a sitemap index's .xml.gz sitemaps
+    ruled = FromSitemap(url_rules={"allow": [r"/product/"]}).run()
+    assert sorted(i["name"] for i in ruled.items) == [f"Product {i}" for i in range(1, 6)]
+    assert "rules_filtered" not in ruled.stats
+
 
 def test_sqlite_output_with_upsert(site, tmp_path) -> None:
     db = tmp_path / "items.db"

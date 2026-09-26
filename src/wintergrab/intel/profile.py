@@ -13,7 +13,9 @@ Spiders build one with ``profile = True`` (``result.profile``), and
 and prints one. The profile holds the site's technologies, languages and
 regions, page types, template clusters (pages with the same layout, and
 their URL pattern), structured data, links, the API endpoints its pages call,
-latency and error rate, and what makes it easy or hard to crawl.
+latency and error rate, what makes it easy or hard to crawl, and its
+:mod:`topology <wintergrab.intel.topology>`: its sections, navigation, dead
+ends, duplicate routes and orphans.
 
 Endpoints come from the pages themselves: calls in inline scripts
 (``fetch("/api/...")``, axios, jQuery), API-looking paths (``/api/``,
@@ -38,8 +40,10 @@ from ..data.similarity import hamming
 from ..extraction.page import PageContext
 from ..fetchers.resources import registrable_domain
 from ..history.snapshot import snapshot_page
+from ..sitemaps import parse_sitemap
 from .classify import classify_page
 from .tech import detect_technologies
+from .topology import Topology, TopologyBuilder
 
 __all__ = ["Endpoint", "SiteProfile", "SiteProfiler", "TemplateCluster"]
 
@@ -133,12 +137,13 @@ class SiteProfile:
     crawlability: dict[str, Any]
     sitemaps: dict[str, Any] | None = None
     change_frequency: float | None = None
+    topology: Topology | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    def describe(self, limit: int = 8) -> str:
-        """The profile as a short report."""
+    def describe(self, limit: int = 8, *, depth: int = 2) -> str:
+        """The profile as a short report: ``limit`` entries per list, ``depth`` levels of sections."""
         ok = sum(n for s, n in self.statuses.items() if 200 <= s < 400)
         errors = ", ".join(f"{s} x{n}" for s, n in sorted(self.statuses.items()) if s >= 400)
         latency = f", {self.average_latency:.2f} s per response" if self.average_latency is not None else ""
@@ -189,6 +194,11 @@ class SiteProfile:
         lines.append("crawlability: " + "; ".join(_crawlability_lines(self.crawlability)))
         if self.change_frequency is not None:
             lines.append(f"change frequency: {self.change_frequency:.2f} change(s) per page per day (median)")
+        if self.topology is not None and self.topology.root.children:
+            lines.append("sections:")
+            lines.extend("  " + line for line in self.topology.render(depth=depth, width=limit).splitlines())
+        if self.topology is not None:
+            lines.extend(self.topology.summary(limit))
         return "\n".join(lines)
 
 
@@ -264,11 +274,13 @@ class SiteProfiler:
 
     Args:
         detailed: How many HTML pages get the full analysis (page type, technologies, layout,
-            structured data); every page counts for statuses, latency, links and endpoints.
+            structured data); every page counts for statuses, latency, links, endpoints and the
+            topology.
     """
 
     def __init__(self, *, detailed: int = 500) -> None:
         self.detailed = detailed
+        self.topology = TopologyBuilder()
         self._pages = 0
         self._analyzed = 0
         self._statuses: Counter[int] = Counter()
@@ -288,7 +300,7 @@ class SiteProfiler:
         self._crawl: Counter[str] = Counter()
         self._protection: set[str] = set()
         self.robots: dict[str, Any] | None = None
-        self.sitemaps: dict[str, Any] | None = None
+        self._sitemaps: Counter[str] = Counter()
         self.change_frequency: float | None = None
 
     # -- observing ------------------------------------------------------------------------------ #
@@ -315,16 +327,35 @@ class SiteProfiler:
                 status=captured.status,
                 content_type=(captured.headers or {}).get("content-type", "").split(";")[0] or None,
             )
-        if not (200 <= status < 300) or not getattr(response, "is_html", False):
+        if not (200 <= status < 300):
+            return
+        if not getattr(response, "is_html", False):
+            self._maybe_sitemap(response, url)
             return
         ctx = PageContext(response)
-        self._links_and_endpoints(ctx, url)
+        links = self._links_and_endpoints(ctx, url)
         self._crawlability(ctx, response)
+        page_type = None
         if self._analyzed < self.detailed:
             self._analyzed += 1
-            self._analyze(ctx, response, url)
+            page_type = self._analyze(ctx, response, url)
+        self.topology.observe(ctx, page_type=page_type, links=links)
 
-    def _analyze(self, ctx: PageContext, response: Any, url: str) -> None:
+    def _maybe_sitemap(self, response: Any, url: str) -> None:
+        """A sitemap or a feed the crawl fetched (``sitemap_urls``): the pages it lists."""
+        kind = str(getattr(response, "headers", {}).get("content-type", "")).lower()
+        path = urlsplit(url).path.lower()
+        if "xml" not in kind and not path.endswith((".xml", ".xml.gz", ".rss", ".atom")):
+            return
+        try:
+            root, entries = parse_sitemap(response.body, url)
+        except Exception:  # not a sitemap after all (or a broken one): nothing to count
+            return
+        if root in ("urlset", "sitemapindex", "feed"):
+            pages = [e for e in entries if e.kind == "url"]
+            self.add_sitemaps(1, int(root == "sitemapindex"), pages)
+
+    def _analyze(self, ctx: PageContext, response: Any, url: str) -> str:
         page_type = classify_page(ctx)
         self._types[page_type.type] += 1
         for tech in detect_technologies(ctx):
@@ -357,9 +388,12 @@ class SiteProfiler:
         locale = str((ctx.structured.get("opengraph") or {}).get("locale") or "").replace("_", "-")
         if "-" in locale and len(locale.split("-")[-1]) == 2:
             self._regions[locale.split("-")[-1].upper()] += 1
+        return page_type.type
 
-    def _links_and_endpoints(self, ctx: PageContext, url: str) -> None:
+    def _links_and_endpoints(self, ctx: PageContext, url: str) -> list[str]:
+        """Counts the page's links and endpoints; returns its links to the site."""
         site = registrable_domain(urlsplit(url).hostname or "")
+        internal: list[str] = []
         for element in ctx.selector.css("a[href]"):
             href = (element.attr("href") or "").strip()
             if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
@@ -370,6 +404,7 @@ class SiteProfiler:
                 continue
             if registrable_domain(host) == site:
                 self._internal.add(link)
+                internal.append(link)
             elif link not in self._external:
                 self._external.add(link)
                 self._external_domains[registrable_domain(host)] += 1
@@ -399,6 +434,7 @@ class SiteProfiler:
                 self._endpoint(endpoint, "GET", "link")
         for method, endpoint in found:
             self._endpoint(endpoint, method, "script")
+        return internal
 
     def _endpoint(self, url: str, method: str | None, source: str, **extra: Any) -> None:
         if source == "captured":
@@ -453,14 +489,28 @@ class SiteProfiler:
         self.robots = {"found": True, "disallow_all": disallow_all, "crawl_delay": delay, "sitemaps": sitemaps}
 
     def add_sitemaps(self, sitemaps: int, indexes: int, entries: Iterable[Any]) -> None:
-        """How many sitemaps (and indexes) the site has, and the pages they list."""
+        """Sitemaps (and sitemap indexes) read, and the pages they list (:class:`~wintergrab.SitemapEntry`
+        objects or URLs). Calls add up."""
         rows = list(entries)
-        dated = sum(1 for e in rows if getattr(e, "lastmod", None))
-        self.sitemaps = {
-            "sitemaps": sitemaps,
-            "indexes": indexes,
-            "pages": len(rows),
-            "lastmod_share": round(dated / len(rows), 3) if rows else 0.0,
+        self._sitemaps.update(
+            sitemaps=sitemaps,
+            indexes=indexes,
+            pages=len(rows),
+            dated=sum(1 for e in rows if getattr(e, "lastmod", None)),
+        )
+        self.topology.add_urls(e if isinstance(e, str) else e.loc for e in rows)
+
+    @property
+    def sitemaps(self) -> dict[str, Any] | None:
+        """``{"sitemaps", "indexes", "pages", "lastmod_share"}`` for the sitemaps read, if any."""
+        if not self._sitemaps["sitemaps"]:
+            return None
+        pages = self._sitemaps["pages"]
+        return {
+            "sitemaps": self._sitemaps["sitemaps"],
+            "indexes": self._sitemaps["indexes"],
+            "pages": pages,
+            "lastmod_share": round(self._sitemaps["dated"] / pages, 3) if pages else 0.0,
         }
 
     # -- the profile ---------------------------------------------------------------------------- #
@@ -484,7 +534,9 @@ class SiteProfiler:
             )
         return sorted(out, key=lambda t: -t.pages)
 
-    def profile(self) -> SiteProfile:
+    def profile(self, *, complete: bool = False) -> SiteProfile:
+        """The profile so far. ``complete``: the crawl visited the whole site (see
+        :meth:`TopologyBuilder.topology`)."""
         errors = sum(n for s, n in self._statuses.items() if s >= 400)
         # the same URL found with its method (axios.post("/api/cart")) and without it (the path alone)
         with_method = {url for method, url in self._endpoints if method is not None}
@@ -526,4 +578,5 @@ class SiteProfiler:
             crawlability=crawl,
             sitemaps=self.sitemaps,
             change_frequency=self.change_frequency,
+            topology=self.topology.topology(complete=complete),
         )

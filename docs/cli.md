@@ -110,6 +110,7 @@ Options for any crawl:
 | `--max-requests N`, `--max-bytes N`, `--max-runtime SEC` | budgets (see [spiders.md](spiders.md#budgets)) |
 | `--order bfs\|dfs` | `crawl_order` |
 | `--events FILE` | `event_log` (structured events as JSON lines) |
+| `--profile FILE` | `profile`: save the [site profile](intelligence.md#site-profiles) and [topology](intelligence.md#site-topology) as JSON |
 | `--retry-failed` | `retry_dead_letters = True`: fetch only what an earlier run gave up on |
 | `--no-robots` | `obey_robots_txt = False` |
 | `--proxy URL`, `--proxy-file FILE` | `proxies` |
@@ -180,14 +181,17 @@ exits with status 1 when they differ. See [data.md](data.md) and
 
 ```bash
 wintergrab inspect URL [--pages N] [--browser] [--no-robots] [--no-sitemaps] [-o PROFILE.json] [--json]
+                       [--depth N] [--show N]
 ```
 
 Reads the site's robots.txt and sitemaps, visits `--pages` pages (30): the
 start page and a sample spread across the sitemaps, obeying robots.txt. It
 prints the site's technologies, languages, page types, templates, structured
-data, links, API endpoints, sitemaps and crawlability. `--browser` renders
-the pages and records their XHR/fetch calls. See
-[intelligence.md](intelligence.md#site-profiles).
+data, links, API endpoints, sitemaps and crawlability, then its sections as
+a tree (`--depth` levels, 2), its navigation, feeds, paginated listings,
+dead ends and duplicate routes. `--show` sets how many entries each list
+shows (8). `--browser` renders the pages and records their XHR/fetch calls.
+See [intelligence.md](intelligence.md#site-profiles).
 
 ## `wintergrab history`: what changed between crawls
 

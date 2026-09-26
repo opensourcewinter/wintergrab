@@ -214,6 +214,7 @@ a sample spread across the sitemaps, so that more templates show up.)
 | crawlability | robots.txt (allowed, crawl-delay), `noindex` pages, canonical links, pages that need JavaScript (little text and an app shell), 403/429 answers, bot protection seen (reCAPTCHA, hCaptcha, Turnstile) |
 | latency, errors | average response time, statuses, error rate |
 | change frequency | with a [history](history.md): the median change rate of the pages |
+| topology | the site's [sections, navigation and odd pages](#site-topology) |
 
 In code:
 
@@ -229,10 +230,99 @@ profile.to_dict()                         # everything, as JSON-ready data
 ```
 
 A spider builds one with `profile = True` (`result.profile`), or
-`profile = "site.json"` to save it too. Every page counts for statuses,
-latency, links and endpoints; the full analysis (page type, technologies,
-layout, structured data) runs on the first `detailed` pages (500) and
-costs about 6.3 ms per page on one core, 1.9 ms per page after that.
+`profile = "site.json"` to save it too (`wintergrab crawl ... --profile
+site.json`). Every page counts for statuses, latency, links, endpoints and
+the topology; the full analysis (page type, technologies, layout,
+structured data) runs on the first `detailed` pages (500). On one core, an
+11 KB product page costs 6.9 ms with the full analysis and 2.3 ms after
+that, parsing included (`SiteProfiler` columns of
+`benchmarks/bench_pages.py`). Sitemaps and feeds that a crawl fetches
+(`sitemap_urls`) are read into the profile as well.
+
+## Site topology
+
+The profile's `topology` says how the site is organized: its sections as a
+tree, its main navigation, and its odd pages.
+
+```
+shop.example  (361 URLs, 11 visited)
+├── P  /p  (301, product)
+│   └── {slug}  /p/{slug}  (301, product)
+├── Journal  /blog  (49, article)
+│   └── {id}  /blog/{id}  (48, article)
+│       └── {id}  /blog/{id}/{id}  (48, article)
+├── C  /c  (6, category)
+│   ├── Phones  /c/phones  (5, category)
+│   │   ├── Android  /c/phones/android  (1, category)
+│   │   └── iPhone  /c/phones/iphone  (1, category)
+│   └── Laptops  /c/laptops  (1, category)
+└── Help  /help  (2)
+    ├── Returns  /help/returns  (1)
+    └── Shipping  /help/shipping  (1)
+navigation: Phones (Android, iPhone), Laptops, Journal, Help (Shipping, Returns)
+feeds: https://shop.example/blog/feed
+HTML sitemaps: https://shop.example/sitemap.html
+paginated listings: /c/phones (2)
+dead ends: 1 page linking nowhere on the site (https://shop.example/spring-sale)
+duplicate routes: 2 group(s), such as https://shop.example/p/phone-1 = https://shop.example/p/phone-1-black (same text)
+orphans: 1 page listed in sitemaps and linked from no page visited (https://shop.example/spring-sale)
+```
+
+(Eleven generated pages of a shop and a sitemap of 350 URLs, with
+`complete=True`.)
+
+- **The tree** is made of the paths of every URL known: listed in a
+  sitemap, visited, or linked from a visited page. Numbers and hex ids are
+  generalized (`/blog/{id}`), and more than 50 unnamed paths side by side
+  are items rather than sections: they become one cluster, `/p/{slug}`,
+  whose sub-paths add up (`/p/{slug}/reviews`). A path much bigger than its
+  siblings (ten URLs or more, five times the median) stays a section. Each
+  section has the number of URLs under it and its page type, when a quarter
+  of them or more have it (read from the pages that were classified, guessed
+  from the URLs otherwise). Names come from the site's menus and
+  breadcrumbs (links and schema.org `BreadcrumbList` data), or from the
+  path (`/help` is "Help"). The site's other hosts (`blog.shop.example`)
+  get their own trees.
+- **navigation**: the entries of `<nav>`, `<header>` and
+  `role="navigation"` menus found on at least half the pages, in page
+  order, with their submenus (`Help` is a heading that is not a link).
+- **feeds** (RSS and Atom links), **HTML sitemaps** (a page named like a
+  site map that links to 30 or more pages), **paginated listings** (the
+  sections whose pages have a "next page" link).
+- **dead ends**: pages with no link to another page of the site (their
+  links are built by JavaScript, or they have none).
+- **duplicate routes**: pages with the same visible text (200 characters or
+  more, whitespace aside) at several URLs, and pages whose canonical link
+  names another URL.
+- **orphans**: pages listed in a sitemap that no visited page links to.
+  They are only reported for a crawl that ran to the end in one go (a
+  spider's `profile` when the crawl finishes and was not resumed, `inspect`
+  when the site has fewer pages than `--pages`), and only in terms of the
+  pages the crawl visited: a crawl limited by `allow`/`deny` rules may not
+  have seen the page that links to one.
+
+`wintergrab inspect` prints the tree two levels deep (`--depth`), with
+`--show` sections per level. In code:
+
+```python
+from wintergrab.intel import TopologyBuilder
+
+builder = TopologyBuilder()                    # or profiler.topology
+builder.add_urls(sitemap_urls)
+for response in responses:
+    builder.observe(response)                  # observe(response, page_type="product") when known
+builder.start_urls(["https://shop.example/"])  # reached without a link: never orphans
+topology = builder.topology(complete=True)
+topology.render(depth=3, width=8)              # the tree as text
+topology.find("phones")                        # sections by name or path
+topology.to_dict()                             # everything, as JSON-ready data
+```
+
+It remembers 200,000 distinct URLs (`TopologyBuilder(max_urls=...)`,
+about 200 bytes each); past that, new URLs are not counted and
+`counts["truncated"]` says so. The tree follows the URLs: a site whose URLs
+do not mirror its structure (every product at `/p/{slug}`) shows it in its
+navigation instead.
 
 ## Speed
 

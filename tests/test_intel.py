@@ -447,3 +447,164 @@ def test_spiders_and_inspect_build_profiles(site, tmp_path, capsys) -> None:
     assert data["sitemaps"]["pages"] > 0 and data["pages"] <= 12
     assert main(["inspect", site.url + "/", "--pages", "3", "--json", "--no-sitemaps"]) == 0
     assert json.loads(capsys.readouterr().out)["sitemaps"] is None
+
+
+# ------------------------------------------------------------------------------------------- topology
+MENU = """<header><nav><ul>
+<li><a href="/products">Products</a><ul>
+  <li><a href="/products/phones">Phones</a></li><li><a href="/products/laptops">Laptops</a></li></ul></li>
+<li><a href="/blog">Blog</a></li>
+<li><button>Company</button><ul><li><a href="/about">About us</a></li><li><a href="/contact">Contact</a></li></ul></li>
+</ul></nav></header>"""
+
+
+def shop_page(url: str, body: str, head: str = "") -> Response:
+    return page(MENU + body, "<title>Shop</title>" + head, url=url)
+
+
+def test_topology_tree_navigation_and_odd_pages() -> None:
+    from wintergrab.intel import TopologyBuilder
+
+    builder = TopologyBuilder()
+    builder.add_urls([f"https://shop.example/p/{i}" for i in range(1, 40)] + ["https://shop.example/hidden-offer"])
+    builder.start_urls(["https://shop.example/"])
+    cards = "".join(f'<a href="/p/{i}">Item {i}</a>' for i in range(1, 30))
+    crumbs = '<ol class="breadcrumbs"><a href="/">Home</a> <a href="/products">All products</a></ol>'
+    pages = [
+        shop_page(
+            "https://www.shop.example/", cards[:200], '<link rel="alternate" type="application/rss+xml" href="/feed">'
+        ),
+        shop_page("https://shop.example/products/phones", crumbs + cards + '<a rel="next" href="?page=2">Next</a>'),
+        shop_page("https://shop.example/p/1", f"<p>{LOREM * 2}</p>"),
+        shop_page("https://shop.example/p/1-copy", f"<p>{LOREM * 2}</p>"),
+        shop_page("https://shop.example/p/2", "<p>two</p>", '<link rel="canonical" href="https://shop.example/p/1">'),
+    ]
+    for response in pages:
+        builder.observe(response)
+    builder.observe(page("<h1>Landing</h1><a href='/landing'>again</a>", url="https://shop.example/landing"))
+    builder.observe(page("<h1>Offer</h1><a href='/hidden-offer'>again</a>", url="https://shop.example/hidden-offer"))
+
+    topology = builder.topology()
+    assert topology.site == "shop.example" and topology.orphans is None  # the crawl was not complete
+    sections = {node.path: node for node in topology.root.walk()}
+    assert sections["/products"].label == "Products"  # the menu's name beats the breadcrumb's
+    assert sections["/products/phones"].label == "Phones" and sections["/about"].label == "About us"
+    assert sections["/p/{id}"].urls == 39 and sections["/p"].page_type == "product"
+    assert [n.path for n in topology.find("phone")] == ["/products/phones"]
+    assert [(e["label"], e["url"], [c["label"] for c in e["children"]]) for e in topology.navigation] == [
+        ("Products", "https://shop.example/products", ["Phones", "Laptops"]),
+        ("Blog", "https://shop.example/blog", []),
+        ("Company", None, ["About us", "Contact"]),  # a heading that is not a link
+    ]
+    assert topology.feeds == ["https://www.shop.example/feed"]
+    assert topology.paginated == {"/products/phones": 1}
+    # pages whose only link is to themselves lead nowhere
+    assert topology.dead_ends == ["https://shop.example/landing", "https://shop.example/hidden-offer"]
+    assert topology.duplicates == [
+        {
+            "reason": "same text",
+            "urls": ["https://shop.example/p/1", "https://shop.example/p/1-copy"],
+            "canonical": None,
+        },
+        {"reason": "canonical link", "urls": ["https://shop.example/p/2"], "canonical": "https://shop.example/p/1"},
+    ]
+    assert topology.counts["visited"] == 7 and topology.counts["listed"] == 40
+
+    complete = builder.topology(complete=True)
+    # listed, and linked from no page but itself; the start page is reached without a link
+    assert complete.orphans == ["https://shop.example/hidden-offer"] + [
+        f"https://shop.example/p/{i}" for i in range(30, 40)
+    ]
+    assert complete.counts["orphans"] == 11
+    text = complete.render()
+    assert text.splitlines()[0] == "shop.example  (50 URLs, 7 visited)"  # listed, visited or linked
+    assert "├── Products  /products  (4, product)" in text and "│   ├── Phones  /products/phones  (2" in text
+    summary = "\n".join(complete.summary())
+    assert "navigation: Products (Phones, Laptops), Blog, Company (About us, Contact)" in summary
+    assert "orphans: 11 pages listed in sitemaps and linked from no page visited" in summary
+    assert json.loads(json.dumps(complete.to_dict()))["root"]["urls"] == 50
+
+
+def test_topology_clusters_items_but_keeps_sections() -> None:
+    from wintergrab.intel import TopologyBuilder
+
+    builder = TopologyBuilder()
+    urls = [f"https://shop.example/p/item-{i}" for i in range(3000)]
+    urls += [f"https://shop.example/p/item-{i}/reviews" for i in range(2000)]
+    urls += [
+        f"https://shop.example/blog/{year}/{month:02d}/post-{i}"
+        for year in (2024, 2025)
+        for month in range(1, 13)
+        for i in range(3)
+    ]
+    urls += [f"https://shop.example/t/thread-{i}/{n}" for i in range(80) for n in range(1, 20)]
+    urls += [f"https://shop.example/post-{i}" for i in range(300)] + ["https://shop.example/about"]
+    urls += ["https://blog.shop.example/a", "https://blog.shop.example/b/c", "https://blog.shop.example/b/d"]
+    builder.add_urls(urls)
+    topology = builder.topology()
+    tops = {node.path: node for node in topology.root.children}
+    # many unnamed paths side by side are items: one cluster, whose sub-paths add up
+    assert tops["/p"].children[0].path == "/p/{slug}" and tops["/p"].children[0].urls == 5000
+    assert [(n.path, n.urls) for n in tops["/p"].children[0].children] == [("/p/{slug}/reviews", 2000)]
+    assert tops["/t"].children[0].children[0].path == "/t/{slug}/{id}"  # numbers are ids
+    assert tops["/blog"].urls == 72 and tops["/blog"].children[0].path == "/blog/{id}"  # a section all the same
+    assert tops["/{slug}"].urls == 301 and tops["/{slug}"].page_type is None  # one /about is not a "company" section
+    assert tops["/p"].page_type == "product" and tops["/p"].types["product"] == 5000
+    assert [(h.label, h.urls) for h in topology.hosts] == [("blog.shop.example", 3)]
+    assert len(json.dumps(topology.to_dict())) < 10_000
+
+    wide = TopologyBuilder()
+    wide.add_urls(f"https://docs.example/{section}/{page}" for section in range(70) for page in ("a", "b"))
+    wide.add_urls(["https://docs.example/start"])
+    root = wide.topology().root
+    assert len(root.children) == 1 and root.children[0].path == "/{id}"  # 70 numbered sections are one pattern
+
+    # sections the site names are kept, however many; 50 per section are listed, the rest counted
+    menu = "".join(f'<nav><a href="/topic-{i}/intro">Topic {i}</a></nav>' for i in range(60))
+    named = TopologyBuilder()
+    named.observe(page(menu, url="https://docs.example/"))
+    root = named.topology().root
+    assert len(root.children) == 50 and (root.other_sections, root.other_urls) == (10, 10)
+    assert root.children[0].children[0].label == "Topic 0"
+    assert "└── ... 10 more section(s) (10 URLs)" in named.topology().render(width=50)
+
+    empty = TopologyBuilder().topology(complete=True)  # a crawl that saw no page (only a sitemap index)
+    assert (empty.site, empty.root.urls, empty.orphans) == ("", 0, None)
+    assert empty.render() == "site  (0 URLs, 0 visited)" and empty.summary() == []
+
+    small = TopologyBuilder(max_urls=3)
+    small.observe(page(menu, url="https://docs.example/"))
+    assert small.topology().counts == {
+        "urls": 3, "listed": 0, "visited": 1, "linked": 2, "dead_ends": 0, "duplicates": 0, "truncated": 1
+    }  # fmt: skip
+
+
+def test_crawl_profile_and_inspect_show_the_topology(site, tmp_path, capsys) -> None:
+    from wintergrab.cli import main
+
+    saved = tmp_path / "site.json"
+    args = ["-q", "crawl", site.url + "/", "--sitemap", site.url + "/sitemap_index.xml", "--follow", "a"]
+    assert main([*args, "--profile", str(saved), "-o", str(tmp_path / "pages.jsonl"), "--no-autothrottle"]) == 0
+    data = json.loads(saved.read_text(encoding="utf-8"))
+    assert data["sitemaps"]["sitemaps"] == 3 and data["sitemaps"]["pages"] == 8  # the .xml.gz one too
+    topology = data["topology"]
+    # a crawl that ran to the end: pages only a sitemap lists (and that only link to themselves) are orphans
+    assert topology["orphans"] == [site.url + f"/item/{i}" for i in range(3)]
+    assert topology["paginated"]["/products"] == 4 and topology["navigation"][0]["label"] == "Quotes"
+    tops = {node["path"]: node for node in topology["root"]["children"]}
+    assert tops["/product"]["urls"] == 20 and tops["/product"]["page_type"] == "product"
+    capsys.readouterr()
+
+    # a crawl resumed after a limit has only the last run's pages in its profile: no orphans then
+    first = [*args, "--profile", str(saved), "--crawl-dir", str(tmp_path / "crawl"), "-o", str(tmp_path / "p.jsonl")]
+    assert main([*first, "--max-pages", "1"]) == 0  # the sitemap index only: its sitemaps come after the resume
+    assert json.loads(saved.read_text(encoding="utf-8"))["topology"]["orphans"] is None  # stopped early
+    assert main(first) == 0
+    resumed = json.loads(saved.read_text(encoding="utf-8"))
+    assert resumed["sitemaps"]["pages"] == 8 and resumed["topology"]["orphans"] is None
+    capsys.readouterr()
+
+    assert main(["inspect", site.url + "/", "--pages", "10", "--depth", "1"]) == 0
+    out = capsys.readouterr().out
+    assert "sections:" in out and "├── Product  /product  (" in out and "{id}  /product/{id}" not in out  # depth 1
+    assert "paginated listings: /products" in out

@@ -423,7 +423,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `history` | `None` | A history file (or `PageHistory`): record page fingerprints and items, report changes since the last run in `result.changes`. |
 | `history_html` | `False` | Keep each page's HTML in the history too. |
 | `skip_fresh` | `False` | With `history`: don't fetch pages that have probably not changed (start URLs always are). |
-| `profile` | `False` | Build a [site profile](intelligence.md#site-profiles) while crawling (`result.profile`): `True`, a path to save it as JSON, or a `SiteProfiler`. |
+| `profile` | `False` | Build a [site profile](intelligence.md#site-profiles) and [topology](intelligence.md#site-topology) while crawling (`result.profile`): `True`, a path to save it as JSON, or a `SiteProfiler`. A crawl that finishes reports orphan pages. |
 | `log_level` | `"INFO"` | Level for the `wintergrab` logger (`None` = leave logging alone). |
 | `log_interval` | `30` | Seconds between progress lines. |
 

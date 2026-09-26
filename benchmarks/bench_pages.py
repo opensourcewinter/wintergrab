@@ -1,10 +1,12 @@
-"""Speed of page analysis: extraction, classification, technology detection, snapshots (no network).
+"""Speed of page analysis: extraction, classification, technologies, snapshots, site profiles (no network).
 
     .venv/bin/python benchmarks/bench_pages.py [--repeat 5] [--rounds 200]
 
 Every measurement builds a fresh Response per page, so HTML parsing is
 included, as in a crawl; the "parse only" row is that baseline. Each row is
-the median of ``--repeat`` runs of ``--rounds`` pages.
+the median of ``--repeat`` runs of ``--rounds`` pages. The profiler columns
+are what ``SiteProfiler.observe`` adds per page: with the full analysis (the
+first 500 pages by default) and without it (counts and topology only).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ from wintergrab.data import Schema
 from wintergrab.extraction import Extractor
 from wintergrab.fetchers.response import Headers, Response
 from wintergrab.history import snapshot_page
-from wintergrab.intel import classify_page, classify_url, detect_technologies
+from wintergrab.intel import SiteProfiler, classify_page, classify_url, detect_technologies
 
 SCHEMA = Schema.from_dict(
     {
@@ -133,6 +135,8 @@ def main() -> None:
         ("classify_page", classify_page),
         ("detect_technologies", detect_technologies),
         ("snapshot_page", snapshot_page),
+        ("SiteProfiler, full", SiteProfiler(detailed=10**9).observe),
+        ("SiteProfiler, counts", SiteProfiler(detailed=0).observe),
     ]
     print(f"wintergrab {__version__}, Python {platform.python_version()}, {platform.machine()}, "
           f"median of {args.repeat} runs of {args.rounds} pages\n")  # fmt: skip
