@@ -63,6 +63,7 @@ Options:
 | `--css SEL`, `--xpath XPATH` | Print what matches (repeatable). |
 | `--each SEL`, `--field NAME=SEL` | Build records (repeatable). |
 | `--extract SCHEMA`, `--all`, `--container SEL`, `--explain`, `--provenance` | Typed extraction with a [data schema](extraction.md). |
+| `--heal DIR`, `--review FILE`, `--why FIELD` | (`--extract`) A [self-healing extractor](healing.md) kept in DIR, a review queue for what needs a person, and why FIELD is what it is on the page. |
 | `-f/--format`, `-o/--output FILE` | Output format and destination. |
 | `--main-content` | Markdown/text of the main content only. |
 | `--adaptive` | Use [adaptive selectors](adaptive-selectors.md). |
@@ -120,6 +121,7 @@ Options for any crawl:
 | `--normalize-urls` | `url_normalizer = True` |
 | `--block-trackers` | `resource_filter = True` |
 | `--extract SCHEMA` | (URL mode) extract typed records with [the extractor](extraction.md) (`--all`, `--container`, `--provenance`) |
+| `--heal DIR`, `--review FILE` | (with `--extract`) a [self-healing extractor](healing.md): versions in DIR, selectors repaired when the site changes, questions in FILE |
 | `--pipeline FILE` | appends a [data pipeline](data.md#pipelines-as-configuration) to `pipelines` (`--allow-imports` if it names Python functions) |
 | `-s/--set NAME=VALUE` | any attribute; values are parsed as JSON when possible (`-s retries=5`, `-s 'allowed_statuses=[404]'`) |
 
@@ -210,6 +212,33 @@ Plans of more than `--confirm-over` requests (200) ask first, or need `--yes`
 without a terminal. `--plan-only` shows the plan and stops; `--save-plan`
 keeps it as JSON to edit and run later with `--plan`; `--explain` says what
 each estimate rests on. See [goals.md](goals.md).
+
+## `wintergrab heal`: a self-healing extractor's versions
+
+```bash
+wintergrab heal DIR [--review FILE]            # versions, fields' health (after applying FILE's decisions)
+wintergrab heal DIR --log                      # every repair, confirmation, rollback and decision applied
+wintergrab heal DIR --diff A B                 # what changed between versions A and B
+wintergrab heal DIR --rollback | --activate N | --import SCHEMA  [--note TEXT]
+wintergrab heal DIR --check                    # the regression fixtures against the active version
+```
+
+DIR is the directory of `get`/`crawl --extract SCHEMA --heal DIR`. `--check`
+exits with 1 when the active version reads a confirmed page differently.
+See [healing.md](healing.md).
+
+## `wintergrab review`: decide what an extractor was unsure of
+
+```bash
+wintergrab review FILE [--all] [--json]
+wintergrab review FILE --accept ID [--choice B] | --reject ID | --correct ID VALUE  [--note TEXT]
+```
+
+Lists the pending items of a review queue (`--review FILE`): low-confidence
+values with their candidates, selector repairs waiting for a person, and
+fields whose selectors broke. Decisions are kept in the file. The extractor
+applies them the next time it runs: repairs become versions, and confirmed
+values become regression fixtures.
 
 ## `wintergrab history`: what changed between crawls
 

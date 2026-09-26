@@ -15,13 +15,15 @@ import argparse
 import json
 import platform
 import statistics
+import tempfile
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from wintergrab import __version__
 from wintergrab.data import Schema
-from wintergrab.extraction import Extractor
+from wintergrab.extraction import Extractor, HealingExtractor
 from wintergrab.fetchers.response import Headers, Response
 from wintergrab.history import snapshot_page
 from wintergrab.intel import SiteProfiler, classify_page, classify_url, detect_technologies
@@ -43,6 +45,19 @@ SCHEMA = Schema.from_dict(
             "image": "url",
             "description": "text",
             "url": "url",
+        },
+    }
+)
+
+#: The same fields, three of them read with selectors (what a HealingExtractor watches).
+WITH_SELECTORS = Schema.from_dict(
+    {
+        "name": "product",
+        "fields": {
+            **SCHEMA.to_dict()["fields"],
+            "name": {"type": "string", "required": True, "selectors": ["h1"]},
+            "price": {"type": "money", "required": True, "selectors": [".product-price .price"]},
+            "description": {"type": "text", "selectors": [".description"]},
         },
     }
 )
@@ -146,6 +161,13 @@ def main() -> None:
         rounds = max(1, args.rounds // 20) if len(body) > 100_000 else args.rounds
         cells = [f"{per_page(fn, url, body, rounds, args.repeat) * 1000:.2f} ms" for _, fn in operations]
         print(f"| {label} ({len(body) // 1000} KB) | " + " | ".join(cells) + " |")
+    url, body = PAGES["product page, JSON-LD"]
+    with tempfile.TemporaryDirectory() as tmp:
+        healing = HealingExtractor(Path(tmp) / "product", WITH_SELECTORS)
+        watched = per_page(healing.extract, url, body, args.rounds, args.repeat)
+        plain = per_page(Extractor(WITH_SELECTORS).extract, url, body, args.rounds, args.repeat)
+    print(f"\nHealingExtractor.extract, 3 of 13 fields read with selectors, product page with JSON-LD: "
+          f"{watched * 1000:.2f} ms ({plain * 1000:.2f} ms with Extractor.extract)")  # fmt: skip
     urls = [f"https://shop.example/{kind}/{i}" for i in range(1000) for kind in ("p", "blog", "search", "category")]
     start = time.perf_counter()
     for url in urls:

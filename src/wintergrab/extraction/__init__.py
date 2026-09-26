@@ -12,14 +12,17 @@
     record.fields["price"].confidence         # 0.98
     print(record.explain())                   # where every value came from
 
-See ``docs/extraction.md``.
+See ``docs/extraction.md``; ``HealingExtractor`` (``docs/healing.md``) repairs a schema's selectors
+when a site changes, with a ``ReviewQueue`` for what needs a person.
 """
 
 from __future__ import annotations
 
 from .engine import DEFAULT_PRIORS, ExtractedRecord, Extractor, FieldValue, value_key
+from .healing import ExtractorVersion, ExtractorVersions, HealingExtractor, RepairResult
 from .model import ExtractionModel, ModelField, ModelRequest, grounding
 from .page import PageContext, schema_types
+from .review import ReviewItem, ReviewQueue
 from .strategies import (
     STRATEGIES,
     Candidate,
@@ -44,7 +47,10 @@ __all__ = [
     "ExtractedRecord",
     "ExtractionModel",
     "Extractor",
+    "ExtractorVersion",
+    "ExtractorVersions",
     "FieldValue",
+    "HealingExtractor",
     "LabelledValues",
     "MetaTags",
     "ModelField",
@@ -52,6 +58,9 @@ __all__ = [
     "PageContext",
     "Patterns",
     "RecordFields",
+    "RepairResult",
+    "ReviewItem",
+    "ReviewQueue",
     "Selectors",
     "Strategy",
     "StructuredData",

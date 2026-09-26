@@ -355,6 +355,11 @@ def cmd_get(args: argparse.Namespace) -> int:
                     print(record.explain(), file=sys.stderr)
                 row = record.to_dict(provenance=args.provenance)
                 rows.append({"url": page.url, **row} if multi and "url" not in row else row)
+            if getattr(args, "why", None):
+                if not hasattr(extractor, "why"):
+                    print("error: --why needs --heal DIR", file=sys.stderr)
+                    return 2
+                print(extractor.why(args.why, page), file=sys.stderr)
             continue
         if examples or schema:
             if schema is None:
@@ -411,6 +416,8 @@ def cmd_get(args: argparse.Namespace) -> int:
             else:
                 chunks.append(page.markdown(main_content=args.main_content))
 
+    if extractor is not None and hasattr(extractor, "close"):
+        extractor.close()  # a healing extractor keeps what it learned
     if records or json_modes or fmt in ("json", "jsonl", "csv"):
         _write_rows(rows, fmt, args.output, single=bool(json_modes))
         if args.output:
@@ -442,6 +449,10 @@ class QuickSpider(Spider):
     extract_all: bool = False
     container: str | None = None
     provenance: bool = False
+    #: A directory of extractor versions: repair selectors when the site changes (--heal).
+    heal: str | None = None
+    #: A review queue file for what the healing extractor wants a person to decide (--review).
+    review: str | None = None
     #: Pages where --extract found no complete record (a required field missing).
     incomplete: int = 0
     #: Follow every same-domain link when no --follow/--paginate is given.
@@ -452,9 +463,15 @@ class QuickSpider(Spider):
     def _records(self, response: Response) -> Any:
         extractor = self.__dict__.get("_extractor")
         if extractor is None:
-            from .extraction import Extractor
+            if self.heal:
+                from .extraction.healing import HealingExtractor
 
-            extractor = self.__dict__["_extractor"] = Extractor(self.extract, provenance=self.provenance)  # type: ignore[arg-type]
+                extractor = HealingExtractor(self.heal, self.extract, review=self.review, provenance=self.provenance)
+            else:
+                from .extraction import Extractor
+
+                extractor = Extractor(self.extract, provenance=self.provenance)  # type: ignore[arg-type]
+            self.__dict__["_extractor"] = extractor
         if self.extract_all or self.container:
             found = extractor.extract_all(response, container=self.container)
         else:
@@ -466,8 +483,13 @@ class QuickSpider(Spider):
             row = record.to_dict()
             yield row if "url" in row else {"url": response.url, **row}
 
+    def on_close(self, result: Any) -> None:
+        extractor = self.__dict__.get("_extractor")
+        if extractor is not None and hasattr(extractor, "close"):
+            extractor.close()  # a healing extractor keeps what it learned for the next run
+
     def parse(self, response: Response) -> Any:
-        if self.extract:
+        if self.extract or self.heal:
             if response.is_html:
                 yield from self._records(response)
         elif self.schema:
@@ -602,6 +624,95 @@ def cmd_goal(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    from .extraction.review import ReviewQueue
+
+    try:
+        queue = ReviewQueue(args.file)
+        if args.accept or args.reject or args.correct:
+            if args.accept:
+                item = queue.decide(args.accept, "accept", choice=_choice(args.choice), note=args.note or "")
+            elif args.reject:
+                item = queue.decide(args.reject, "reject", note=args.note or "")
+            else:
+                item_id, value = args.correct
+                item = queue.decide(item_id, "correct", value=value, note=args.note or "")
+            print(f"{item.id}: {item.status}" + (f" ({item.chosen!r})" if item.chosen is not None else ""))
+            print("the extractor applies it the next time it runs", file=sys.stderr)
+            return 0
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    items = list(queue) if args.all else queue.pending()
+    if args.json:
+        print(json.dumps([{k: v for k, v in i.to_dict().items() if k != "html"} for i in items], indent=2, default=str))
+        return 0
+    if not items:
+        print("nothing to review" if not args.all else "the queue is empty")
+        return 0
+    for item in items:
+        print(item.describe())
+    if not args.all:
+        print(
+            f"\n{len(items)} item(s) to review: --accept ID [--choice B], --reject ID, --correct ID VALUE",
+            file=sys.stderr,
+        )
+    return 0
+
+
+def _choice(text: str | None) -> int | None:
+    """``--choice``: a candidate's letter (``B``) or number (``2``), as an index."""
+    if not text:
+        return None
+    text = text.strip()
+    if text.isdigit() and int(text) >= 1:
+        return int(text) - 1
+    if len(text) == 1 and text.isalpha():
+        return ord(text.upper()) - ord("A")
+    raise ConfigurationError(f"--choice is a candidate's letter (A, B...) or number (1, 2...), not {text!r}")
+
+
+def cmd_heal(args: argparse.Namespace) -> int:
+    from .data import Schema
+    from .extraction.healing import HealingExtractor
+
+    try:
+        extractor = HealingExtractor(args.directory, review=args.review)
+        versions = extractor.versions
+        if args.rollback:
+            version = versions.rollback(reason=args.note or "rolled back by hand", by="human")
+            print(f"version {version.number} is active again")
+        elif args.activate:
+            versions.activate(args.activate, reason=args.note or "activated by hand", by="human")
+            print(f"version {args.activate} is active")
+        elif args.import_schema:
+            version = versions.add(
+                Schema.load(args.import_schema), reason=f"imported from {args.import_schema}", by="human"
+            )
+            print(f"version {version.number} (from {args.import_schema}) is active")
+        elif args.diff:
+            for line in versions.diff(*args.diff) or ["no difference"]:
+                print(line)
+        elif args.check:
+            failures = versions.check_fixtures()
+            count = len(versions.fixtures())
+            print(f"{count} fixture(s): " + ("all reproduced" if not failures else f"{len(failures)} value(s) differ"))
+            for line in failures:
+                print(f"  {line}")
+            return 1 if failures else 0
+        elif args.log:
+            for entry in versions.history():
+                when = time.strftime("%Y-%m-%d %H:%M", time.localtime(entry.get("at", 0)))
+                facts = ", ".join(f"{k}={v}" for k, v in entry.items() if k not in ("at", "event", "candidates"))
+                print(f"{when}  {entry.get('event')}: {facts}")
+        else:
+            print(extractor.status())
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def load_spider_class(target: str) -> type[Spider]:
     """Load ``path/to/file.py`` or ``path/to/file.py:ClassName``."""
     path_str, _, class_name = target.partition(".py:")
@@ -667,6 +778,8 @@ def cmd_crawl(args: argparse.Namespace) -> int:
             extract_all=args.all,
             container=args.container,
             provenance=args.provenance,
+            heal=args.heal,
+            review=args.review,
         )
         if args.sitemap:
             overrides["sitemap_urls"] = list(args.sitemap)
@@ -1280,11 +1393,21 @@ def _add_typed_extract_options(p: Any) -> None:
     p.add_argument("--all", action="store_true", help="(--extract) every record of a listing page")
     p.add_argument("--container", metavar="SELECTOR", help="(--extract) the elements holding one record each")
     p.add_argument("--provenance", action="store_true", help="(--extract) add where each value came from")
+    p.add_argument(
+        "--heal",
+        metavar="DIR",
+        help="(--extract) keep versions of the extractor in DIR and repair its selectors when the site changes",
+    )
+    p.add_argument("--review", metavar="FILE", help="(--heal) queue what needs a person in FILE (wintergrab review)")
 
 
 def _extractor(args: argparse.Namespace) -> Any:
-    if not getattr(args, "extract", None):
+    if not getattr(args, "extract", None) and not getattr(args, "heal", None):
         return None
+    if getattr(args, "heal", None):
+        from .extraction.healing import HealingExtractor
+
+        return HealingExtractor(args.heal, args.extract, review=args.review, provenance=args.provenance)
     from .extraction import Extractor
 
     return Extractor(args.extract, provenance=args.provenance)
@@ -1347,6 +1470,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--headful", action="store_true", help="(browser) show the browser window")
     g.add_argument("--screenshot", metavar="FILE", help="(browser) save a full-page screenshot")
     g.add_argument("--capture", action="store_true", help="(browser) record the page's own JSON API calls")
+    g.add_argument("--why", metavar="FIELD", help="(--heal) say why FIELD is what it is (or empty) on the page")
     g.add_argument(
         "--auto-browser",
         action="store_true",
@@ -1616,6 +1740,37 @@ def build_parser() -> argparse.ArgumentParser:
     gp.add_argument("-o", "--output", metavar="FILE", help="save the records (.jsonl, .csv, .json); default stdout")
     gp.add_argument("--json", action="store_true", help="print the plan as JSON (and collect nothing)")
     gp.set_defaults(func=cmd_goal)
+
+    rv = sub.add_parser(
+        "review",
+        help="decide what a healing extractor was unsure of: values, selector repairs",
+        description="List the items of a review queue (--review FILE of get/crawl --heal), and decide them.",
+    )
+    rv.add_argument("file", metavar="FILE", help="the review queue (JSON Lines)")
+    rv.add_argument("--all", action="store_true", help="every item, decided ones too")
+    rv.add_argument("--accept", metavar="ID", help="accept an item (its first candidate, or --choice)")
+    rv.add_argument("--choice", metavar="LETTER", help="(--accept) the candidate: A, B, C...")
+    rv.add_argument("--reject", metavar="ID", help="reject an item")
+    rv.add_argument("--correct", nargs=2, metavar=("ID", "VALUE"), help="give the right value (or selector)")
+    rv.add_argument("--note", metavar="TEXT", help="why (kept with the decision)")
+    rv.add_argument("--json", action="store_true", help="print the items as JSON")
+    rv.set_defaults(func=cmd_review)
+
+    he = sub.add_parser(
+        "heal",
+        help="a healing extractor's versions, health and repairs",
+        description="Show or change a self-healing extractor's versions (get/crawl --extract SCHEMA --heal DIR).",
+    )
+    he.add_argument("directory", metavar="DIR", help="the extractor's directory")
+    he.add_argument("--log", action="store_true", help="every repair, rollback and review applied")
+    he.add_argument("--rollback", action="store_true", help="go back to the version the active one came from")
+    he.add_argument("--activate", type=int, metavar="N", help="make version N the active one")
+    he.add_argument("--import", dest="import_schema", metavar="SCHEMA", help="a new version from a schema file")
+    he.add_argument("--diff", nargs=2, type=int, metavar=("A", "B"), help="what changed between two versions")
+    he.add_argument("--check", action="store_true", help="run the regression fixtures against the active version")
+    he.add_argument("--review", metavar="FILE", help="apply the decisions of this review queue first")
+    he.add_argument("--note", metavar="TEXT", help="why (kept in the log)")
+    he.set_defaults(func=cmd_heal)
 
     h = sub.add_parser(
         "history",

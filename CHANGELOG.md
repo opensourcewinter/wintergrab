@@ -285,6 +285,35 @@
 - CLI: `crawl --auto-browser [--fetch-stats FILE] [--render-if-missing SEL]`
   and `get --auto-browser`.
 
+### Self-healing extractors and the review queue (`wintergrab.extraction`)
+
+- `HealingExtractor(directory, schema, review=...)` is an `Extractor` that
+  keeps versions of its schema in a directory and watches the fields read
+  with selectors. When a field's selectors match at most half as often as
+  on the first pages (a baseline kept across runs), it looks for a
+  replacement on the failing pages. It relocates the element most like the
+  one they matched, and anchors on the value other strategies (JSON-LD,
+  meta tags...) still find. It tests each candidate selector on those pages
+  (coverage, agreement with other strategies, plausibility against past
+  values, regression fixtures). A candidate scoring 0.9 or more whose values
+  other strategies confirm becomes a new active version, on probation: it is
+  rolled back when it does not hold on the next pages, even if later repairs
+  were stacked on it. Other candidates, and fields with none, go to a person.
+  There is one question per field at a time.
+- `ReviewQueue(file)`: low-confidence values (with one or two competing
+  values and the page), selector repairs and broken fields, with decisions
+  (accept a candidate, reject, correct) kept with who made them. The
+  extractor applies them: accepted repairs become versions by `human`, and
+  confirmed values become fixtures that later repairs must reproduce.
+- `ExtractorVersions`: versions with reason, author and status, `diff()`,
+  `rollback()`, `revert()`, `activate()`, a repair log, fixtures and
+  `check_fixtures()`.
+- CLI: `get`/`crawl --extract SCHEMA --heal DIR [--review FILE]`, `get --why
+  FIELD` (why a field is what it is on a page), `wintergrab heal DIR` (versions,
+  health, `--log`, `--diff`, `--rollback`, `--activate`, `--import`,
+  `--check`), and `wintergrab review FILE` (`--accept`, `--choice`,
+  `--reject`, `--correct`, `--note`).
+
 ### Fixes
 
 - Spiders with URL rules (`wintergrab crawl URL --sitemap ...`) skipped the

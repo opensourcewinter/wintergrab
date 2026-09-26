@@ -288,6 +288,12 @@ pages (10 for the large page):
 
 `classify_url`: 11.5 µs per URL.
 
+A `HealingExtractor` watching three of the thirteen fields (read with
+selectors) takes 8.02 ms per product page with JSON-LD, against 7.68 ms for
+`Extractor.extract` with the same schema. The extra 0.3 ms covers counting
+the selectors' matches, remembering the elements they match, and saving
+its state every 50 pages.
+
 The large page is mostly text. Scanning long texts is where regular
 expressions without a literal start cost the most: the money pattern was
 restructured so every alternative starts with a literal character (36 ms to

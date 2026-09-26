@@ -173,6 +173,14 @@ wintergrab crawl https://shop.example --extract product.schema.json --max-pages 
 `_provenance`, `--all`/`--container` extract listings. A crawl keeps the
 records that have every required field and reports how many pages had none.
 
+## When the site changes
+
+`HealingExtractor` (`--heal DIR`) keeps versions of a schema and repairs the
+fields' selectors when they stop matching. It tests each repair on the pages
+where they failed and applies it only when other evidence confirms it.
+Otherwise a person decides, through a review queue (`--review FILE`,
+`wintergrab review`). See [healing](healing.md).
+
 ## Speed
 
 `benchmarks/bench_pages.py` (one core of a 4-vCPU cloud VM, Python 3.11,

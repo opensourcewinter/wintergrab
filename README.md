@@ -51,6 +51,11 @@ thousands of pages), the same API scales up.
   site (robots.txt, sitemaps, a sample of pages), shows a plan with what it
   will cost, and collects clean, typed records. Pages that need JavaScript go
   to a browser, the others stay on fast HTTP.
+- **Survives redesigns.** With `--heal`, an extractor notices when its
+  selectors stop matching and finds replacements. It tests them on the
+  failing pages and applies them only when other evidence on the page
+  agrees. Every change is a version you can roll back. When it isn't sure,
+  a person decides (`wintergrab review`).
 - **A small CLI.** `wintergrab get` and `wintergrab crawl` cover the common
   jobs with no code at all, including `--auto`, `--learn` and `--offline`.
 
@@ -237,7 +242,8 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |
 | [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies, site profiles and topology (`wintergrab inspect`), with the evidence |
 | [Goals](https://github.com/opensourcewinter/wintergrab/blob/main/docs/goals.md) | Say what data you want; wintergrab plans the crawl, shows its cost, and collects the records (`wintergrab goal`) |
-| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `history`, `data` and `shell` reference |
+| [Healing](https://github.com/opensourcewinter/wintergrab/blob/main/docs/healing.md) | Extractors that repair their selectors when a site changes, with versions, rollback and a review queue (`wintergrab heal`, `wintergrab review`) |
+| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `heal`, `review`, `history`, `data` and `shell` reference |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly
