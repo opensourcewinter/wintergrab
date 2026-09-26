@@ -110,6 +110,7 @@ EPILOG_DATA = """examples:
   wintergrab data quality items.jsonl --baseline quality.json    # exit status 1 if quality collapsed
   wintergrab data entities companies.jsonl --field name --attribute website --attribute phone -o entities.jsonl
   wintergrab data entities products.jsonl --field brand --kind brand --annotate products.resolved.jsonl
+  wintergrab data graph job=jobs.jsonl company=companies.jsonl -o graph.graphml   # the things they name, linked
   wintergrab data commit prices/ today.jsonl --key url -m "daily run"   # save a version
   wintergrab data diff prices/@previous prices/@latest                    # what changed since the last one
   wintergrab data diff yesterday.jsonl today.jsonl --key sku -o changes.jsonl
@@ -1590,6 +1591,53 @@ def cmd_data_entities(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_data_graph(args: argparse.Namespace) -> int:
+    from .data.graph import RELATIONS, KnowledgeGraph, Relation
+    from .data.io import read_records
+
+    try:
+        extra = [Relation.parse(text) for text in args.relation or ()]
+        graph = KnowledgeGraph(merge_threshold=args.merge, review_threshold=args.review)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    for spec in args.input:
+        kind, _, path = spec.partition("=") if "=" in spec and not Path(spec).exists() else ("", "", spec)
+        records = list(read_records(path, limit=args.limit))
+        kind = kind or args.kind or _record_kind(records)
+        if not kind:
+            print(f"error: what are the records of {path}? Say it: --kind KIND, or KIND={path}", file=sys.stderr)
+            return 2
+        relations = extra if args.only else [*RELATIONS.get(kind, ()), *extra]
+        if not relations:
+            print(f"warning: no relation for {kind} records: add --relation FIELD=RELATION:KIND", file=sys.stderr)
+        count = graph.add_records(records, kind, relations=relations)
+        if args.verbose >= 0:
+            print(f"{path}: {count:,} {kind} record(s)", file=sys.stderr)
+    graph.build()
+    if args.output:
+        try:
+            graph.save(args.output)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+    if args.verbose >= 0:
+        print(graph.describe(top=args.show), file=sys.stderr)
+        if args.output:
+            print(f"wrote the graph to {args.output}", file=sys.stderr)
+    return 0
+
+
+def _record_kind(records: list[dict[str, Any]]) -> str | None:
+    """What records are, from the extractor they name (``_provenance.extractor``: ``"product@1"``)."""
+    for record in records[:20]:
+        provenance = record.get("_provenance") if isinstance(record, dict) else None
+        extractor = provenance.get("extractor") if isinstance(provenance, dict) else None
+        if isinstance(extractor, str) and extractor:
+            return extractor.split("@")[0]
+    return None
+
+
 def _dataset(ref: str, limit: int | None = None) -> tuple[list[dict[str, Any]], list[str] | None, str]:
     """Records from a file, a versions directory (its latest version) or DIR@VERSION; the
     versions' key; a label."""
@@ -2152,6 +2200,31 @@ def build_parser() -> argparse.ArgumentParser:
     ent.add_argument("--show", type=int, default=10, metavar="N", help="entities and review pairs to print (10)")
     ent.add_argument("--limit", type=int, metavar="N", help="only the first N records")
     ent.set_defaults(func=cmd_data_entities)
+    gr = actions.add_parser(
+        "graph", help="a knowledge graph: the things records name, resolved, and how they relate, with sources"
+    )
+    gr.add_argument(
+        "input",
+        nargs="+",
+        metavar="[KIND=]INPUT",
+        help="records (job=jobs.jsonl for records of a kind; by default --kind, or what the records say)",
+    )
+    gr.add_argument("--kind", metavar="KIND", help="what the records are (product, job, article, event, company...)")
+    gr.add_argument(
+        "--relation",
+        action="append",
+        metavar="FIELD=RELATION:KIND",
+        help="another edge, e.g. seller=sold_by:company (repeatable)",
+    )
+    gr.add_argument("--only", action="store_true", help="only the --relation edges, not the kind's usual ones")
+    gr.add_argument("--merge", type=float, default=0.95, metavar="P", help="merge names scoring at least P (0.95)")
+    gr.add_argument("--review", type=float, default=0.5, metavar="P", help="list pairs scoring at least P (0.5)")
+    gr.add_argument(
+        "-o", "--output", metavar="FILE", help="write it: .json, .graphml, or a directory (nodes.csv, edges.csv)"
+    )
+    gr.add_argument("--show", type=int, default=5, metavar="N", help="nodes of each kind to print (5)")
+    gr.add_argument("--limit", type=int, metavar="N", help="only the first N records of each input")
+    gr.set_defaults(func=cmd_data_graph)
     dif = actions.add_parser("diff", help="what was added, removed and changed between two datasets")
     dif.add_argument("old", metavar="OLD", help="a file, or DIR@VERSION (DIR@v2, DIR@previous) saved by `data commit`")
     dif.add_argument("new", metavar="NEW", help="a file, or DIR@VERSION (DIR@latest)")

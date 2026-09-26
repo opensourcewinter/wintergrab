@@ -267,6 +267,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Data](https://github.com/opensourcewinter/wintergrab/blob/main/docs/data.md) | Normalizers, typed schemas, validation, pipelines, duplicates, quality monitoring |
 | [Extraction](https://github.com/opensourcewinter/wintergrab/blob/main/docs/extraction.md) | Typed records from any page with a strategy hierarchy, provenance and confidence |
 | [Entities](https://github.com/opensourcewinter/wintergrab/blob/main/docs/entities.md) | Which names are the same company, brand, product, person or place |
+| [Knowledge graphs](https://github.com/opensourcewinter/wintergrab/blob/main/docs/graph.md) | The things records name, resolved, and typed edges between them with their sources; JSON, GraphML, Neo4j CSV (`wintergrab data graph`) |
 | [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |
 | [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies, site profiles and topology (`wintergrab inspect`), with the evidence |
 | [Goals](https://github.com/opensourcewinter/wintergrab/blob/main/docs/goals.md) | Say what data you want; wintergrab plans the crawl, shows its cost, and collects the records (`wintergrab goal`) |

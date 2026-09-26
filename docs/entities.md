@@ -175,6 +175,13 @@ from (default `url`). `-o` writes one merged record per entity,
 the input records with `FIELD_entity` (the entity id) and `FIELD_canonical`
 (its name) added. `--merge` and `--review` set the thresholds.
 
+## A knowledge graph
+
+`wintergrab data graph` resolves the names in records and links them: products
+to their brands, jobs to their companies and places, articles to their
+authors. Each edge keeps the pages that state it. See
+[knowledge graphs](graph.md).
+
 ## Scale
 
 Mentions are only compared when they share a significant word, a pair of

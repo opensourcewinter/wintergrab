@@ -659,6 +659,26 @@ checks that it is up to date.
 - **`read_records(path: str | Path, *, limit: int | None = None) -> Iterator[dict[str, Any]]`**. The records in a file, one at a time.
 - **`register_reader(key: str, reader: Reader | str)`**. Read more: ``".ext"`` for files with that extension, ``"scheme"`` for ``scheme://`` URLs.
 
+## `wintergrab.data.graph`: Knowledge graphs
+
+- **`RELATIONS`**: a dict
+- **`Edge(source: str, relation: str, target: str, sources: list[str] = ..., count: int = 0, confidence: float | None = None)`** (class). A fact: ``source`` -``relation``-> ``target`` (node ids), the pages that state it, and how sure.
+  - `to_dict(self) -> dict[str, Any]`
+- **`KnowledgeGraph(*, merge_threshold: float = 0.95, review_threshold: float = 0.5)`** (class). Nodes and typed edges built from records (see the module docs).
+  - `add_records(self, records: Iterable[Mapping[str, Any]], kind: str, *, relations: Sequence[Relation] | None = None, source_field: str = 'url') -> int`: Add ``records`` of ``kind``, their relations (by default :data:`RELATIONS` ``[kind]``), and where they came from (``source_field``).
+  - `build(self) -> KnowledgeGraph`: Resolve the names and make the nodes and edges (again, after more :meth:`add_records`).
+  - `describe(self, *, top: int = 5) -> str`: The nodes and edges by kind, the most connected nodes of each kind that is linked to, and what to review.
+  - `find(self, name: str, kind: str | None = None) -> list[Node]`: Nodes spelled ``name`` (ignoring case), of ``kind`` if given.
+  - `classmethod from_records(cls, records: Iterable[Mapping[str, Any]], kind: str, *, relations: Sequence[Relation] | None = None, **options: Any) -> KnowledgeGraph`: A graph of ``records`` of ``kind`` (``relations``: the edges, by default :data:`RELATIONS`).
+  - `neighbors(self, node_id: str, relation: str | None = None, *, direction: str = 'out') -> list[tuple[Edge, Node]]`: The edges from (``"out"``), to (``"in"``) or at (``"both"``) a node, with the node at their other end.
+  - `node(self, node_id: str) -> Node`
+  - `save(self, path: str | Path) -> Path`: Write the graph: ``.json`` (nodes, edges and review), ``.graphml``, or a directory (``nodes.csv`` and ``edges.csv``, with the headers Neo4j's import reads).
+  - `to_dict(self) -> dict[str, Any]`
+- **`Node(id: str, kind: str, name: str, aliases: list[str] = ..., attributes: dict[str, list[Any]] = ..., sources: list[str] = ..., confidence: float = 1.0, count: int = 1)`** (class). A thing in the graph (see the module docs).
+  - `to_dict(self) -> dict[str, Any]`
+- **`Relation(field: str, relation: str, kind: str)`** (class). A field of a record that names another thing: an edge from the record to it.
+  - `classmethod parse(cls, text: str) -> Relation`: ``"FIELD=RELATION:KIND"``, as the command line takes it (``brand=manufactured_by:brand``).
+
 ## `wintergrab.goals`: Goals in plain words
 
 - **`ENTITIES`**: a dict

@@ -478,6 +478,29 @@
   read it, the rules do.
 - None is needed or called unless named.
 
+### Knowledge graphs (`wintergrab.data.graph`)
+
+- `wintergrab data graph [KIND=]INPUT... -o GRAPH` (`KnowledgeGraph`)
+  makes a graph of records and the things they name:
+  - each record is a node of its kind;
+  - the fields naming other things (a product's brand and category, a
+    job's company and location, an article's author and tags, an event's
+    venue and organizer...) are nodes too, linked by typed edges
+    (`manufactured_by`, `offered_by`, `written_by`, `located_in`...).
+    Each template has its relations, and `--relation
+    FIELD=RELATION:KIND` adds more.
+- Names are resolved by entity resolution, and what is unsure is listed
+  for review, not merged. Categories are matched by name. Products,
+  companies and people are resolved with their identifiers, so the same
+  product on two sites is one node. Several files of several kinds make
+  one graph.
+- Nodes keep their spellings, attributes, sources and resolution
+  confidence. Edges keep the pages that state them and the extraction's
+  confidence in the field behind them (`_provenance`, else `_confidence`).
+  Records extracted with `--provenance` name their own kind.
+- Written as JSON, GraphML, or `nodes.csv` and `edges.csv` for Neo4j's
+  import.
+
 ### Why a field is empty (`Extractor.why`)
 
 - `extractor.why(field, page)`, and `wintergrab get URL --extract SCHEMA

@@ -28,6 +28,7 @@ MODULES = [
     ("wintergrab.extraction.templates", "Ready-made schemas"),
     ("wintergrab.data", "Schemas, normalizing, validating, pipelines, quality"),
     ("wintergrab.data.io", "Reading records"),
+    ("wintergrab.data.graph", "Knowledge graphs"),
     ("wintergrab.goals", "Goals in plain words"),
     ("wintergrab.intel", "Page types, technologies, site profiles"),
     ("wintergrab.history", "What changed between crawls"),

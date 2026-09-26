@@ -504,6 +504,7 @@ wintergrab data quality items.jsonl --baseline quality.json
 wintergrab data entities companies.jsonl --field name --attribute website -o entities.jsonl
 wintergrab data commit prices/ today.jsonl --key url -m "daily run"
 wintergrab data log prices/
+wintergrab data graph job=jobs.jsonl company=companies.jsonl -o graph.graphml
 wintergrab data diff prices/@previous prices/@latest -o changes.jsonl
 wintergrab data diff yesterday.jsonl today.jsonl --key sku --exit-code
 
