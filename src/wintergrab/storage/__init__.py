@@ -5,6 +5,9 @@ Output                    What                                   Needs
 ========================  =====================================  ==============================
 ``items.parquet``         A Parquet file, a typed column a field  ``pip install "wintergrab[parquet]"``
 ``items.xlsx``            An Excel workbook, a column a field     ``pip install "wintergrab[xlsx]"``
+``items.duckdb``          A DuckDB database's table, a typed      ``pip install "wintergrab[duckdb]"``
+                          column a field, upserted on
+                          ``unique_key``
 ``postgresql://.../db``   Rows of a PostgreSQL table, upserted    ``pip install "wintergrab[postgres]"``
                           on ``unique_key``
 ``mysql://.../db``        Rows of a MySQL or MariaDB table,       ``pip install "wintergrab[mysql]"``

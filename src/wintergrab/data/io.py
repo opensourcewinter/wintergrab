@@ -1,5 +1,5 @@
-"""Reading records: JSON Lines, JSON, CSV, and through :mod:`wintergrab.storage` Parquet, Excel and
-PostgreSQL (writing uses the crawl exporters)."""
+"""Reading records: JSON Lines, JSON, CSV, SQLite, and through :mod:`wintergrab.storage` Parquet, Excel, DuckDB
+and databases (writing uses the crawl exporters)."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ READERS: dict[str, Reader | str] = {
     ".parquet": "wintergrab.storage.parquet:read_parquet",
     ".pq": "wintergrab.storage.parquet:read_parquet",
     ".xlsx": "wintergrab.storage.xlsx:read_xlsx",
+    ".duckdb": "wintergrab.storage.duckdb:read_duckdb",
+    ".ddb": "wintergrab.storage.duckdb:read_duckdb",
     ".sqlite": "wintergrab.spider.exporters:read_sqlite",
     ".sqlite3": "wintergrab.spider.exporters:read_sqlite",
     ".db": "wintergrab.spider.exporters:read_sqlite",
@@ -82,7 +84,7 @@ def read_records(path: str | Path, *, limit: int | None = None) -> Iterator[dict
 
     ``.jsonl``/``.ndjson``: one JSON object per line. ``.json``: a list of
     objects (or an object holding one under ``items``, ``records``, ``data``...).
-    ``.csv``: one record per row, values as strings. ``.parquet``, ``.xlsx``,
+    ``.csv``: one record per row, values as strings. ``.parquet``, ``.xlsx``, ``.duckdb``,
     ``postgresql://.../db?table=NAME``, ``mysql://.../db?table=NAME`` and
     ``mongodb://.../db?collection=NAME``, ``s3://bucket/items.jsonl``: see :mod:`wintergrab.storage`.
     ``"-"``: JSON Lines on standard input.

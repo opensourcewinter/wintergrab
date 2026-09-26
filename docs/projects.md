@@ -151,7 +151,7 @@ A **watched URL** can be a sitemap, an RSS or Atom feed, or any page:
   its data.
 
 A job can watch a **dataset** too: a file of records (`.jsonl`, `.csv`,
-`.json`, `.sqlite`, `.parquet`, `.xlsx`, from the project's directory when
+`.json`, `.sqlite`, `.parquet`, `.xlsx`, `.duckdb`, from the project's directory when
 relative) or a table's or an object's URL (`postgresql://`, `mysql://`,
 `mongodb://`, `s3://`: [what `data` commands read](storage.md)). Its records
 are compared by their contents, whatever their order ("3 new records, 1

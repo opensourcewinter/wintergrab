@@ -11,6 +11,7 @@ file extension or URL picks the format:
 | `items.sqlite` (`.sqlite3`, `.db`) | Rows of an `items` table, one column per field, upserted on `unique_key` | |
 | `items.parquet` (`.pq`) | A Parquet file, a typed column per field | `pip install "wintergrab[parquet]"` |
 | `items.xlsx` | An Excel workbook, a column per field | `pip install "wintergrab[xlsx]"` |
+| `items.duckdb` (`.ddb`) | The `items` table of a DuckDB database, a typed column per field, upserted on `unique_key` | `pip install "wintergrab[duckdb]"` |
 | `postgresql://user@host/db?table=NAME` | Rows of a PostgreSQL table, upserted on `unique_key` | `pip install "wintergrab[postgres]"` |
 | `mysql://user@host/db?table=NAME` (`mariadb://`) | Rows of a MySQL or MariaDB table, upserted on `unique_key` | `pip install "wintergrab[mysql]"` |
 | `mongodb://user@host/db?collection=NAME` (`mongodb+srv://`) | Documents of a MongoDB collection, upserted on `unique_key` | `pip install "wintergrab[mongodb]"` |
@@ -72,13 +73,60 @@ back as they were when read. The workbook also stays safe to open:
 - Integers beyond 2^53 are text, since Excel would round them.
 - Past 1,048,575 items, the rows continue on a new sheet.
 
-## Parquet and Excel files are written at the end
+## DuckDB
 
-Parquet and Excel files are written whole. While the crawl runs, its items
-wait in `.NAME.spool.jsonl` beside the file, and the file is written when
-the crawl ends. If the crawl stops (Ctrl+C, a crash), the spool keeps its
-items, and the resumed crawl continues it. `max_output_bytes` counts the
-items as JSON, since the file itself is compressed.
+[DuckDB](https://duckdb.org) is a database for analysis kept in one file.
+The items become its `items` table, ready for SQL:
+
+```bash
+pip install "wintergrab[duckdb]"
+wintergrab crawl https://shop.example/ --auto -o shop.duckdb --unique-key url
+duckdb shop.duckdb -c "SELECT currency, count(*), avg(price) FROM items GROUP BY currency"
+```
+
+Each field is a column, typed from all of its values: `BIGINT`, `DOUBLE`
+(integers and decimals mixed), `BOOLEAN`, `VARCHAR`, or `JSON` for nested
+values, which SQL reads as they are (`tags->>'$[0]'`,
+`offer->>'$.seller'`). A field whose values mix kinds (numbers and text)
+is text, and so are integers beyond 64 bits. Columns are named after the
+fields in lower case, with letters, digits and `_`: `Price (USD)` is
+`price_usd`, and `Name` beside `name` is `name_2`, since DuckDB's names
+ignore case. The names hold from one run to the next, and
+`_wintergrab_columns` says which field each column holds, so reading the
+file back gives the fields their own names.
+
+- **Upserts**: with `unique_key`, crawling again updates rows in their
+  place: the fields an item has replace the row's, the others keep theirs
+  (as in the other databases). Items without the field are rows of their
+  own.
+- **Fresh crawls**: without `unique_key`, a fresh crawl replaces the table,
+  and a resumed one adds to it.
+- **The rest of the database** (other tables, views on `items`) is left as
+  it is. An `items` table that wintergrab did not create is refused.
+
+The table is written when the crawl ends, in one transaction (below):
+the database has the new table or the one before, never half of one.
+`read_records("shop.duckdb")` reads it back, and reads any DuckDB database
+with an `items` table or a single table.
+
+## Parquet, Excel and DuckDB files are written at the end
+
+Parquet, Excel and DuckDB files are written whole. While the crawl runs,
+its items wait in `.NAME.spool.jsonl` beside the file, and the file is
+written when the crawl ends. If the crawl stops (Ctrl+C, a crash), the
+spool keeps its items, and the resumed crawl continues it. `max_output_bytes`
+counts the items as JSON, since the file itself is compressed.
+
+If the file cannot be written when the crawl ends (a full disk, a DuckDB
+file another program holds), the crawl says so and the spool keeps the
+items. Once the cause is gone, this writes them (with the crawl's
+`unique_key`, if it had one):
+
+```python
+from wintergrab.spider.exporters import open_exporter
+
+open_exporter("shop.duckdb", append=True, unique_key="url").close()
+```
 
 ## PostgreSQL
 
@@ -238,8 +286,14 @@ constructor then takes `unique_key` too. A URL exporter gets the URL.
   yet (their S3-compatible endpoints aside). Write a file and copy it, or
   register your own.
 - An object in S3 appears when the crawl ends, as a Parquet file does.
-- Parquet and Excel files appear when the crawl ends: follow a long crawl
-  in its spool, or write JSON Lines and convert them afterwards.
+- Parquet, Excel and DuckDB files appear when the crawl ends: follow a
+  long crawl in its spool, or write JSON Lines and convert them afterwards.
+- DuckDB lets a file be open in one program that writes to it, or in any
+  number that only read it. A crawl whose DuckDB file another program has
+  open for writing (the `duckdb` shell and `duckdb.connect()` open files
+  for writing unless told otherwise) says so when it starts. One that ends
+  while another program has the file open waits 5 seconds for it, then
+  keeps its items in the spool (above).
 - PostgreSQL, MySQL and MariaDB widen columns with `ALTER TABLE`. On a big
   table that rewrites it, once per widening.
 - Where the URL is shown or kept (the summary, logs, a run's record), its

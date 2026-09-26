@@ -403,7 +403,8 @@ def _scenario_outputs(rounds: int, stores: Sequence[str] = (), **_: Any) -> dict
         for i in range(count)
     ]  # fmt: skip
     formats = [".jsonl", ".csv", ".json", ".sqlite"]
-    formats += [f for f, module in ((".parquet", "pyarrow"), (".xlsx", "openpyxl")) if importlib.util.find_spec(module)]
+    formats += [f for f, module in ((".parquet", "pyarrow"), (".xlsx", "openpyxl"), (".duckdb", "duckdb"))
+                if importlib.util.find_spec(module)]  # fmt: skip
     results: dict[str, Any] = {}
     with tempfile.TemporaryDirectory(prefix="wintergrab-bench-") as directory:
         targets = [(f, str(Path(directory) / f"items{f}")) for f in formats] + [(redact_url(s), s) for s in stores]

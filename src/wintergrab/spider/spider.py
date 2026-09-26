@@ -295,10 +295,11 @@ class Spider:
     cache_ttl: float | None = None
 
     # -- output & state --------------------------------------------------- #
-    #: Stream items to this file (``.jsonl``, ``.json``, ``.csv`` or ``.sqlite``/``.db``).
+    #: Stream items to this file (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``,
+    #: ``.duckdb``) or database (``postgresql://``, ``mysql://``, ``mongodb://``), or an S3 object (``s3://``).
     output: str | None = None
-    #: Item field that identifies an item (e.g. ``"url"``): duplicates are dropped,
-    #: and SQLite output upserts on it so re-crawls update rows in place.
+    #: Item field that identifies an item (e.g. ``"url"``): duplicates are dropped, and the outputs that can
+    #: (SQLite, DuckDB, PostgreSQL, MySQL, MongoDB) upsert on it, so re-crawls update rows in place.
     unique_key: str | None = None
     #: Directory for pause/resume state. Setting it makes the crawl resumable.
     crawl_dir: str | None = None

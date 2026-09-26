@@ -325,7 +325,7 @@ checks that it is up to date.
 
 `Spider`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
 
-- **`open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter`**. Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``, ``s3://``).
+- **`open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter`**. Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``, ``.duckdb``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``, ``s3://``).
 - **`write_items(path: str | os.PathLike[str], items: list[Any]) -> Path`**. Write a list of items in one go (format chosen by extension).
 
 ## `wintergrab.spider.shared`: A frontier several processes share
@@ -1125,6 +1125,14 @@ checks that it is up to date.
   - `write(self, item: Any)`
 - **`read_xlsx(path: str | Path) -> Iterator[dict[str, Any]]`**. The rows of a workbook's sheets as records (the first row of each names the fields), with the JSON columns wintergrab wrote decoded again.
 - **`write_xlsx(path: Path, records: Any, *, sheet: str = 'items')`**. Write the records ``records()`` gives (called twice: once to find the columns) to ``path``.
+
+## `wintergrab.storage.duckdb`: DuckDB
+
+- **`DuckDBExporter(path: Path, *, append: bool, unique_key: str | None = None)`** (class). Items as the ``items`` table of a DuckDB database (see the module docs).
+  - `close(self)`
+  - `flush(self)`: Push buffered items to disk (called on checkpoints and at the end).
+  - `write(self, item: Any)`
+- **`read_duckdb(path: str | Path) -> Iterator[dict[str, Any]]`**. The records of a DuckDB database: its ``items`` table, or its only table.
 
 ## `wintergrab.storage.postgres`: PostgreSQL
 

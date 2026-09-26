@@ -43,6 +43,7 @@ speed = ["uvloop>=0.19; sys_platform != 'win32'", "orjson>=3.9"]
 yaml = ["pyyaml>=6.0"]
 parquet = ["pyarrow>=14"]
 xlsx = ["openpyxl>=3.1"]
+duckdb = ["duckdb>=1.2"]
 postgres = ["psycopg[binary]>=3.1"]
 mongodb = ["pymongo>=4.6"]
 mysql = ["pymysql[rsa]>=1.1"]
@@ -55,6 +56,7 @@ all = [
     "pyyaml>=6.0",
     "pyarrow>=14",
     "openpyxl>=3.1",
+    "duckdb>=1.2",
     "psycopg[binary]>=3.1",
     "pymongo>=4.6",
     "pymysql[rsa]>=1.1",
@@ -66,6 +68,7 @@ dev = [
     "pyyaml>=6.0",
     "pyarrow>=14",
     "openpyxl>=3.1",
+    "duckdb>=1.2",
     "psycopg[binary]>=3.1",
     "pymongo>=4.6",
     "pymysql[rsa]>=1.1",

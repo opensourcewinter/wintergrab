@@ -1864,6 +1864,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     for dist, what, extra in (
         ("pyarrow", "Parquet files", "parquet"),
         ("openpyxl", "Excel files", "xlsx"),
+        ("duckdb", "DuckDB files", "duckdb"),
         ("psycopg", "PostgreSQL output", "postgres"),
         ("pymysql", "MySQL and MariaDB output", "mysql"),
         ("pymongo", "MongoDB output", "mongodb"),
@@ -2566,7 +2567,10 @@ def _add_extract_options(p: argparse.ArgumentParser) -> None:
 def _add_crawl_options(c: argparse.ArgumentParser, *, extract_command: bool = False) -> None:
     """The options of ``crawl`` (and of ``extract``, where ``--schema`` names the records to extract)."""
     c.add_argument(
-        "-o", "--output", metavar="FILE", help="save items to .jsonl/.json/.csv (default: JSON lines on stdout)"
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="save items: .jsonl, .csv, .sqlite, .parquet, .duckdb... or a database URL (default: JSON lines on stdout)",
     )
     c.add_argument("--crawl-dir", metavar="DIR", help="directory for pause/resume state")
     c.add_argument(

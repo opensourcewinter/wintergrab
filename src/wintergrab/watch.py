@@ -14,7 +14,7 @@ What is compared:
 * a sitemap: its URLs and their ``lastmod`` (a sitemap index: its sitemaps and theirs);
 * an RSS or Atom feed: its items' links;
 * anything else: the page's visible text (scripts and styles aside), or a JSON document's data;
-* a dataset (``data/products.jsonl``, a ``.csv``, ``.sqlite`` or ``.parquet`` file,
+* a dataset (``data/products.jsonl``, a ``.csv``, ``.sqlite``, ``.parquet`` or ``.duckdb`` file,
   ``postgresql://.../db?table=NAME``... anything :func:`~wintergrab.data.io.read_records` reads): its records,
   by their contents, whatever their order. A record that changed is one gone and one new.
 

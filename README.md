@@ -38,7 +38,8 @@ thousands of pages), the same API scales up.
   and replays whole crawls offline. A disk-backed queue with a Bloom filter
   that keeps memory flat at millions of URLs and survives `kill -9`. Sitemap
   crawling, a live progress line, and output to JSON Lines, CSV, SQLite,
-  Parquet, Excel or PostgreSQL, with upserts on a key.
+  Parquet, Excel, DuckDB, PostgreSQL, MySQL or MongoDB, with upserts on a
+  key.
 - **Fast.** In a [reproducible benchmark](https://github.com/opensourcewinter/wintergrab/blob/main/benchmarks/README.md) against a
   local test shop, a wintergrab spider crawled about 1,000 pages/s on one
   core. That is 1.8× Crawlee and 3.8× Scrapy at the same concurrency, with
@@ -94,7 +95,7 @@ thousands of pages), the same API scales up.
 pip install wintergrab                 # HTTP fetching, parsing, spiders, CLI
 pip install "wintergrab[browser]"      # + headless browser support
 pip install "wintergrab[speed]"        # + uvloop and orjson
-pip install "wintergrab[parquet]"      # + Parquet output (also: [xlsx], [postgres])
+pip install "wintergrab[parquet]"      # + Parquet output (also: [xlsx], [duckdb], [postgres]...)
 pip install "wintergrab[pdf]"          # + reading PDFs (their text, tables and links)
 playwright install chromium            # one-time browser download (browser extra only)
 wintergrab doctor                      # check what is installed
@@ -278,7 +279,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Spiders](https://github.com/opensourcewinter/wintergrab/blob/main/docs/spiders.md) | Crawling, sessions, pause/resume, output, every setting |
 | [Power features](https://github.com/opensourcewinter/wintergrab/blob/main/docs/power-features.md) | Zero-selector extraction, cache & offline replay, API capture, cookie handoff, sitemaps, disk frontier, SQLite |
 | [Responsible access](https://github.com/opensourcewinter/wintergrab/blob/main/docs/responsible-access.md) | robots.txt, slowing down, blocked pages, honest browsers, logins, proxies, etiquette |
-| [Storage](https://github.com/opensourcewinter/wintergrab/blob/main/docs/storage.md) | Where items go: JSON Lines, JSON, CSV, SQLite, Parquet, Excel, PostgreSQL and MySQL (typed columns, upserts), MongoDB, S3 objects, and your own formats |
+| [Storage](https://github.com/opensourcewinter/wintergrab/blob/main/docs/storage.md) | Where items go: JSON Lines, JSON, CSV, SQLite, Parquet, Excel, DuckDB, PostgreSQL and MySQL (typed columns, upserts), MongoDB, S3 objects, and your own formats |
 | [Observability](https://github.com/opensourcewinter/wintergrab/blob/main/docs/observability.md) | Events, live metrics, Prometheus, failure reports, dead letters |
 | [Data](https://github.com/opensourcewinter/wintergrab/blob/main/docs/data.md) | Normalizers, typed schemas, validation, pipelines, duplicates, quality monitoring |
 | [Extraction](https://github.com/opensourcewinter/wintergrab/blob/main/docs/extraction.md) | Typed records from any page with a strategy hierarchy, provenance and confidence |

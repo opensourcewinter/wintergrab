@@ -42,7 +42,7 @@ fresh Python process, so its CPU time and peak memory are its own.
 | `extract` | the `product` template on product pages: structured data, then the heuristics | pages/s |
 | `data` | a pipeline normalizing and validating product records (prices in three formats, ratings, dates, weights) | records/s |
 | `dedupe` | making 10,000 URLs canonical (each page in five spellings: host case, port, parameter order, tracking parameters, fragment), with an empty cache; SimHash fingerprints of pages | URLs/s, pages/s |
-| `outputs` | 5,000 product records (numbers, booleans, a list, an object) written to each output a crawl can write, through the same code a crawl uses, and read back: JSON Lines, CSV, JSON, SQLite, and Parquet and Excel when installed. `--store URL` adds a database table or an S3 object | records/s written and read, the file's size |
+| `outputs` | 5,000 product records (numbers, booleans, a list, an object) written to each output a crawl can write, through the same code a crawl uses, and read back: JSON Lines, CSV, JSON, SQLite, and Parquet, Excel and DuckDB when installed. `--store URL` adds a database table or an S3 object | records/s written and read, the file's size |
 | `browser` | `--browser`: 5 to 30 product pages rendered in Chromium one after another, and the same pages over HTTP | pages/s, and how many times slower |
 
 Rates are the median of three runs of the scenario's work. The crawl runs

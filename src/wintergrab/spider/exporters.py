@@ -1,5 +1,5 @@
 """Write scraped items as they arrive: JSON Lines, JSON, CSV, SQLite, and through
-:mod:`wintergrab.storage` Parquet, Excel, PostgreSQL, MySQL, MongoDB and S3 (or any format registered with
+:mod:`wintergrab.storage` Parquet, Excel, DuckDB, PostgreSQL, MySQL, MongoDB and S3 (or any format registered with
 :func:`register_exporter`)."""
 
 from __future__ import annotations
@@ -497,6 +497,8 @@ EXPORTERS: dict[str, type[Exporter] | str] = {
     ".parquet": "wintergrab.storage.parquet:ParquetExporter",
     ".pq": "wintergrab.storage.parquet:ParquetExporter",
     ".xlsx": "wintergrab.storage.xlsx:XlsxExporter",
+    ".duckdb": "wintergrab.storage.duckdb:DuckDBExporter",
+    ".ddb": "wintergrab.storage.duckdb:DuckDBExporter",
 }
 #: Outputs by URL scheme (``postgresql://...``).
 URL_EXPORTERS: dict[str, type[Exporter] | str] = {
@@ -540,7 +542,7 @@ def _resolve(entry: type[Exporter] | str) -> type[Exporter]:
 
 def open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter:
     """Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``,
-    ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``, ``s3://``).
+    ``.parquet``, ``.xlsx``, ``.duckdb``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``, ``s3://``).
 
     ``"-"`` writes JSON Lines to standard output.
     """

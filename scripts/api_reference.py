@@ -52,6 +52,7 @@ MODULES = [
     ("wintergrab.plugins", "Plugins"),
     ("wintergrab.storage.parquet", "Parquet"),
     ("wintergrab.storage.xlsx", "Excel"),
+    ("wintergrab.storage.duckdb", "DuckDB"),
     ("wintergrab.storage.postgres", "PostgreSQL"),
     ("wintergrab.storage.mysql", "MySQL and MariaDB"),
     ("wintergrab.storage.mongodb", "MongoDB"),

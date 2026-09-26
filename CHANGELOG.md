@@ -927,6 +927,23 @@ an error that says so, not a setting silently ignored
   - `.xlsx` (`wintergrab[xlsx]`, openpyxl): text is never a formula
     (`=HYPERLINK(...)` from a page stays text), control characters are
     left out, and long crawls continue on new sheets;
+  - `.duckdb` (`wintergrab[duckdb]`, DuckDB 1.2 or later): the `items`
+    table of a DuckDB database, for SQL. Each field is a typed column
+    (`BIGINT`, `DOUBLE`, `BOOLEAN`, `VARCHAR`, or `JSON` for nested values,
+    which SQL queries as they are: `tags->>'$[0]'`), and with `unique_key`
+    rows are upserted in place, field by field, as in the other databases.
+    Columns are named after the fields (`Price (USD)` is `price_usd`;
+    `Name` beside `name` is `name_2`, DuckDB's names ignoring case) and keep
+    their names from run to run. The table is written when the crawl ends,
+    in one transaction; the rest of the database (other tables, views on
+    `items`) is left as it is, and an `items` table wintergrab did not
+    create is refused. A file another program holds is said at the start,
+    or waited for 5 seconds at the end, after which the items stay in the
+    spool. DuckDB 1.1 turned integers beyond 64 bits into approximations,
+    in text and JSON columns alike; 1.2 keeps them exact (both were tried).
+    Here (4 CPUs), 200,000 product records were written at about 45,000/s
+    and read at about 180,000/s (Parquet: 41,000 and 126,000; SQLite:
+    46,000 and 160,000);
   - `postgresql://user@host/db?table=NAME` (`wintergrab[postgres]`,
     psycopg 3): typed columns that widen when a value does not fit, `jsonb`
     for nested values, upserts on `unique_key`. It only writes tables it
@@ -950,12 +967,13 @@ an error that says so, not a setting silently ignored
     Credentials come from the AWS chain only (a URL holding some is
     refused), and a missing bucket or missing credentials are said at the
     start.
-- Parquet and Excel files are written when the crawl ends. Until then the
-  items are spooled beside them, so a stopped crawl loses nothing and a
-  resumed one continues.
+- Parquet, Excel and DuckDB files are written when the crawl ends. Until
+  then the items are spooled beside them, so a stopped crawl loses nothing
+  and a resumed one continues.
 - `read_records` (and every `wintergrab data` command) reads Parquet, Excel,
-  SQLite, PostgreSQL and MySQL tables, MongoDB collections and S3 objects
-  too. A SQLite output keeps the kinds of value each column has held, so
+  SQLite and DuckDB files (any DuckDB database: its `items` table, or its
+  only table), PostgreSQL and MySQL tables, MongoDB collections and S3
+  objects too. A SQLite output keeps the kinds of value each column has held, so
   lists, objects and booleans read back as they were.
 - `register_exporter(".ext" | "scheme", ...)` and `register_reader(...)` add
   formats. A class or `"module:Class"` works: optional libraries are

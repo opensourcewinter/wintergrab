@@ -1,4 +1,4 @@
-"""Storage adapters: Parquet, Excel and PostgreSQL outputs, their readers, and the registries."""
+"""Storage adapters: Parquet, Excel, DuckDB and database outputs, their readers, and the registries."""
 
 from __future__ import annotations
 
@@ -92,6 +92,150 @@ def test_sqlite_reads_back(tmp_path) -> None:
         list(read_records(tmp_path / "other.db"))
 
 
+def test_duckdb(tmp_path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    path = tmp_path / "items.duckdb"
+    exporter = write(
+        path, [*ITEMS, {"url": "https://s.example/5", "Price (USD)": 3, "Code": "c", "page": "x" * 17_000_000}]
+    )
+    assert exporter.count == 5 and exporter.bytes_written > 17_000_000  # the items as JSON (max_output_bytes)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        types = dict(connection.execute("SELECT column_name, data_type FROM information_schema.columns"
+                                        " WHERE table_name = 'items'").fetchall())  # fmt: skip
+        assert (types["price"], types["ok"], types["tags"], types["code"], types["big"]) == (
+            "DOUBLE", "BOOLEAN", "JSON", "VARCHAR", "VARCHAR")  # 10 and 12.5: numbers; 7 and "X7": text  # fmt: skip
+        assert (types["price_usd"], types["code_2"]) == ("BIGINT", "VARCHAR")  # "Code" beside "code"
+        assert connection.execute("SELECT tags->>'$[1]', offer->>'$.currency' FROM items ORDER BY _wg_rowid"
+                                  " LIMIT 2").fetchall() == [("b", None), (None, "EUR")]  # (JSON, for SQL) # fmt: skip
+    rows = list(read_records(path))
+    assert rows[0]["tags"] == ["a", "b"] and rows[1]["offer"] == {"amount": 9.99, "currency": "EUR"}  # as they were
+    assert (rows[0]["code"], rows[2]["big"], rows[3]["value"]) == ("7", str(2**70), "a plain value")
+    assert (rows[4]["Price (USD)"], rows[4]["Code"], len(rows[4]["page"])) == (3, "c", 17_000_000)  # own names
+    assert not list(tmp_path.glob(".*"))  # the spool is gone once the table is written
+
+    # a crawl that stopped: its items wait in the spool, and the resumed crawl adds to them
+    stopped = open_exporter(path, append=False)
+    stopped.write(ITEMS[0])
+    stopped.flush()  # (a checkpoint)
+    stopped.spool.close()  # (then the process dies: the table there is still the last run's)
+    assert len(list(read_records(path))) == 5
+    resumed = write(path, [ITEMS[1]], append=True)
+    assert resumed.count == 1 and [r["url"] for r in read_records(path)] == ["https://s.example/1",
+                                                                              "https://s.example/2"]  # fmt: skip
+    write(path, [ITEMS[2]], append=True)  # no spool left: the table's rows are continued
+    assert len(list(read_records(path))) == 3
+    write(path, [])  # a fresh crawl with nothing: an empty table
+    assert list(read_records(path)) == []
+    empty = tmp_path / "new.duckdb"
+    empty.touch()  # (a file made for it, with nothing in it yet)
+    write(empty, [{"a": 1}])
+    assert list(read_records(empty)) == [{"a": 1}]
+
+
+def test_duckdb_upserts_on_unique_key_and_leaves_the_rest_of_the_database(tmp_path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    path = tmp_path / "shop.duckdb"
+    write(path, [{"url": "/a", "Name": "A", "name": "a", "price": 10, "stock": 3}, {"url": "/b", "price": 5}],
+          unique_key="url")  # fmt: skip
+    with duckdb.connect(str(path)) as connection:
+        connection.execute("CREATE TABLE notes AS SELECT 'mine' AS note")
+        connection.execute("CREATE VIEW cheap AS SELECT url FROM items WHERE price BETWEEN 4 AND 8")
+    write(path, [{"url": "/a", "price": 12.5, "stock": None}, {"url": "/c", "NAME": "C"}, {"price": 1}, {"price": 2}],
+          unique_key="url")  # fmt: skip
+    rows = list(read_records(path))
+    assert rows == [
+        {"url": "/a", "Name": "A", "name": "a", "price": 12.5},  # updated in its place: the fields the item has
+        {"url": "/b", "price": 5.0},
+        {"url": "/c", "NAME": "C"},
+        {"price": 1.0},  # without the key: rows of their own
+        {"price": 2.0},
+    ]
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute("SELECT * FROM notes").fetchall() == [("mine",)]  # the rest is left as it is
+        assert connection.execute("SELECT * FROM cheap ORDER BY url").fetchall() == [("/b",)]
+        columns = connection.execute("SELECT key, col FROM _wintergrab_columns ORDER BY position").fetchall()
+    assert columns[:3] == [("url", "url"), ("Name", "name"), ("name", "name_2")] and ("NAME", "name_3") in columns
+    write(path, [{"name": "x", "Name": "y"}])  # a fresh crawl replaces the table; the columns keep their names
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute("SELECT name, name_2 FROM items").fetchall() == [("y", "x")]
+
+
+def test_duckdb_refuses_what_it_did_not_create(tmp_path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    theirs = tmp_path / "theirs.duckdb"
+    with duckdb.connect(str(theirs)) as connection:
+        connection.execute("CREATE TABLE items AS SELECT 1 AS a, '{\"b\": 2}'::JSON AS b")
+    with pytest.raises(ConfigurationError, match="already has an 'items' table that wintergrab did not create"):
+        open_exporter(theirs)
+    assert list(read_records(theirs)) == [{"a": 1, "b": {"b": 2}}]  # read as it is
+    viewed = tmp_path / "viewed.duckdb"
+    with duckdb.connect(str(viewed)) as connection:
+        connection.execute("CREATE TABLE products AS SELECT 'p' AS name")
+        connection.execute("CREATE VIEW items AS SELECT * FROM products")
+    with pytest.raises(ConfigurationError, match="already has an 'items' view that wintergrab did not create"):
+        open_exporter(viewed)
+    other = tmp_path / "other.duckdb"
+    with duckdb.connect(str(other)) as connection:
+        connection.execute("CREATE TABLE products AS SELECT 'p' AS name")
+    assert list(read_records(other)) == [{"name": "p"}]  # its only table
+    with duckdb.connect(str(other)) as connection:
+        connection.execute("CREATE TABLE sellers AS SELECT 's' AS name")
+    with pytest.raises(ConfigurationError, match="no 'items' table to read \\(its tables: products, sellers\\)"):
+        list(read_records(other))
+    notes = tmp_path / "notes.duckdb"
+    with duckdb.connect(str(notes)) as connection:
+        connection.execute("CREATE TABLE notes AS SELECT 'mine' AS note")
+    write(notes, [{"a": 1}], append=True)  # a database without an items table gets one, with the items alone
+    assert list(read_records(notes)) == [{"a": 1}]  # (not the notes: what is there is not continued)
+    with duckdb.connect(str(notes), read_only=True) as connection:
+        assert connection.execute("SELECT * FROM notes").fetchall() == [("mine",)]
+    (tmp_path / "text.duckdb").write_text("not a database\n" * 100)
+    with pytest.raises(ConfigurationError, match=r"cannot write items to .*not a valid DuckDB database"):
+        open_exporter(tmp_path / "text.duckdb")
+
+
+def test_duckdb_held_by_another_program(tmp_path, monkeypatch) -> None:
+    import subprocess
+
+    pytest.importorskip("duckdb")
+    from wintergrab.errors import ExportError
+    from wintergrab.storage import duckdb as storage
+
+    path = tmp_path / "items.duckdb"
+    write(path, [{"n": 1}])
+
+    def hold(seconds: float) -> subprocess.Popen[str]:
+        """Another process with the database open for writing (DuckDB lets a file have one writer)."""
+        code = f"import duckdb, sys, time\nc = duckdb.connect({str(path)!r})\nprint('open', flush=True)\ntime.sleep({seconds})"
+        holder = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+        assert holder.stdout is not None and holder.stdout.readline().strip() == "open"
+        return holder
+
+    holder = hold(0.5)  # (a reader's moment: waited for)
+    write(path, [{"n": 2}], append=True)
+    holder.wait(10)
+    assert [r["n"] for r in read_records(path)] == [1, 2]
+    monkeypatch.setattr(storage, "_LOCK_WAIT", 0.5)
+    exporter = open_exporter(path, unique_key="n")  # (a fresh crawl, upserting)
+    exporter.write({"n": 2, "seen": True})
+    exporter.write({"n": 3})
+    holder = hold(60)  # (held until the crawl ends, and after)
+    try:
+        with pytest.raises(
+            ConfigurationError, match=r"cannot write items to .*: IO Error: (Could not set lock|File is already open)"
+        ):
+            open_exporter(path, append=True)  # (a crawl starting now is told at once)
+        with pytest.raises(ExportError, match=r"could not write .*items are kept in .*\.items\.duckdb\.spool\.jsonl"):
+            exporter.close()
+    finally:
+        holder.kill()
+        holder.wait(10)
+    assert [r["n"] for r in read_records(path)] == [1, 2]  # (the table before)
+    open_exporter(path, append=True, unique_key="n").close()  # what docs/storage.md says to run then
+    assert list(read_records(path)) == [{"n": 1}, {"n": 2, "seen": True}, {"n": 3}]
+    assert not list(tmp_path.glob(".*"))
+
+
 def test_csv_widens_for_keys_later_items_bring(tmp_path) -> None:
     path = tmp_path / "items.csv"
     exporter = write(path, ITEMS)  # (its columns were the first item's: the others' keys were left out)
@@ -113,9 +257,10 @@ def test_csv_widens_for_keys_later_items_bring(tmp_path) -> None:
 def test_crawls_write_them_and_data_commands_read_them(site, tmp_path, capsys) -> None:
     pytest.importorskip("pyarrow")
     pytest.importorskip("openpyxl")
+    pytest.importorskip("duckdb")
     from wintergrab.cli import main
 
-    for name in ("books.parquet", "books.xlsx"):
+    for name in ("books.parquet", "books.xlsx", "books.duckdb"):
         out = str(tmp_path / name)
         assert main(["-q", "crawl", site.url + "/books/", "--allow", "/books/", "--max-pages", "6", "--auto", "-o", out,
                      "--no-progress"]) == 0  # fmt: skip
@@ -128,6 +273,9 @@ def test_missing_libraries_say_what_to_install(tmp_path, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "pyarrow", None)  # (import pyarrow fails)
     with pytest.raises(ConfigurationError, match=r'pip install "wintergrab\[parquet\]"'):
         open_exporter(tmp_path / "items.parquet")
+    monkeypatch.setitem(sys.modules, "duckdb", None)
+    with pytest.raises(ConfigurationError, match=r'DuckDB output needs duckdb: pip install "wintergrab\[duckdb\]"'):
+        open_exporter(tmp_path / "items.duckdb")
     with pytest.raises(ValueError, match="no output for ftp://"):
         open_exporter("ftp://files.example/items")
     with pytest.raises(ValueError, match=r"Unsupported output format '\.txt'"):
@@ -553,14 +701,17 @@ def test_s3(s3, site, tmp_path, capsys) -> None:
     measured.flush()
     assert measured.bytes_written > 10_000  # SQLite counts no bytes: its file does (max_output_bytes)
     measured.close()
-    formats = [".json", ".sqlite", *([".xlsx"] if __import__("importlib").util.find_spec("openpyxl") else [])]
+    installed = __import__("importlib").util.find_spec
+    formats = [".json", ".sqlite", *([".xlsx"] if installed("openpyxl") else []),
+               *([".duckdb"] if installed("duckdb") else [])]  # fmt: skip
     for suffix in formats:  # every file output, as an object
         target = f"s3://wg-bucket/crawls/items{suffix}?endpoint_url={endpoint}"
         write(target, ITEMS[:2], unique_key="url")
         write(target, [{"url": "https://s.example/2", "price": 13}], unique_key="url", append=True)
         rows = list(read_records(target))
         assert rows[0]["url"] == "https://s.example/1" and rows[-1]["url"] == "https://s.example/2", suffix
-        assert len(rows) == (2 if suffix == ".sqlite" else 3), suffix  # (SQLite upserts on the key)
+        assert len(rows) == (2 if suffix in (".sqlite", ".duckdb") else 3), suffix  # (upserted on the key)
+        assert rows[-1]["price"] == 13, suffix
 
     from wintergrab.cli import main
 

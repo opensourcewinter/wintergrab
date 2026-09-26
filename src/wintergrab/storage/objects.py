@@ -1,7 +1,7 @@
 """Object storage: any file output in an S3 bucket (``output = "s3://bucket/crawls/books.jsonl"``).
 
 Needs s3fs (``pip install "wintergrab[s3]"``). The key's extension picks the format, as a file's does:
-``.jsonl``, ``.json``, ``.csv``, ``.parquet``, ``.xlsx``, ``.sqlite``... While the crawl runs, the items are
+``.jsonl``, ``.json``, ``.csv``, ``.parquet``, ``.xlsx``, ``.duckdb``, ``.sqlite``... While the crawl runs, the items are
 written to a local file under ``.wintergrab/uploads/`` (``WINTERGRAB_UPLOADS`` to put it elsewhere), and the
 file is uploaded when the crawl ends: the object appears whole. A crawl that stops keeps its items there, and
 the resumed crawl continues them (from the object itself, if the local file is gone) and uploads them.
