@@ -140,6 +140,30 @@ crawlers out is not crawled.
 
 ## In code
 
+`WinterGrab` is one entry point for goals, pages and sites, with settings
+shared by all of them: a network policy, a cache, a browser, a model to
+read requests with, and any [spider setting](spiders.md#settings-reference).
+
+```python
+from wintergrab import WinterGrab
+
+wg = WinterGrab(network_policy="public")         # every survey, run and fetch refuses internal addresses
+plan = wg.plan("Find all laptops under $1000 on shop.example with name, price and rating")
+print(plan.describe())                           # the steps, and what they will cost
+result = wg.run(plan, "laptops.jsonl")           # or wg.run("Find all laptops ...") at once
+result = await wg.arun(plan)                     # the same from async code
+
+page = wg.get("https://shop.example/p/1")        # a Response (rendered, with browser=True)
+wg.extract(page, "product")                      # a typed record, from a template or a schema
+wg.sources("https://shop.example/catalog")       # where a page's data is
+wg.inspect("https://shop.example")               # robots.txt, sitemaps and a site profile
+wg.configure(browser=True).sources("https://shop.example/catalog")   # a copy, one setting changed
+```
+
+Its methods return what the rest of wintergrab uses (`GoalPlan`,
+`GoalResult`, `Response`, `SiteSurvey`...), so every lower level stays in
+reach. The same, a step at a time:
+
 ```python
 from wintergrab.goals import parse_goal, plan_goal
 

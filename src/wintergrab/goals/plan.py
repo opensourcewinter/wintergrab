@@ -37,6 +37,7 @@ import statistics
 import time
 import urllib.robotparser
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -374,6 +375,7 @@ def plan_goal(
     timeout: float = 20.0,
     surveys: dict[str, SiteSurvey] | None = None,
     log_level: str | None = "WARNING",
+    settings: Mapping[str, Any] | None = None,
 ) -> GoalPlan:
     """Plan ``goal`` for each of its sites (see the module docs).
 
@@ -382,6 +384,7 @@ def plan_goal(
         obey_robots: Obey robots.txt while sampling (the plan says what it allows either way).
         browser: Sample with a browser (slower; finds the API calls pages make).
         surveys: Surveys already made, by site URL (they are not made again).
+        settings: :class:`~wintergrab.Spider` settings for the surveys (``network_policy``, ``cache``...).
     """
     if not goal.sites:
         raise ConfigurationError("the goal names no site: add one (a URL or a domain such as shop.example)")
@@ -391,7 +394,7 @@ def plan_goal(
         if survey is None:
             survey = survey_for(
                 goal, site, sample=sample, obey_robots=obey_robots, browser=browser, timeout=timeout,
-                log_level=log_level,
+                log_level=log_level, settings=settings,
             )  # fmt: skip
         plans.append(_plan_site(goal, survey))
     return GoalPlan(goal=goal, sites=plans)
@@ -406,9 +409,11 @@ def survey_for(
     browser: bool = False,
     timeout: float = 20.0,
     log_level: str | None = "WARNING",
+    settings: Mapping[str, Any] | None = None,
 ) -> SiteSurvey:
     """Survey ``site`` for ``goal``, keeping the pages sampled: those in the part of the site given
-    first, then those like the goal's records (or, less, their listings) or its words."""
+    first, then those like the goal's records (or, less, their listings) or its words. ``settings``:
+    more :class:`~wintergrab.Spider` settings for the survey."""
     from ..intel.survey import survey_site
 
     kind = goal.kind
@@ -432,6 +437,7 @@ def survey_for(
         keep_pages=True,
         prefer=prefer,
         log_level=log_level,
+        **dict(settings or {}),
     )
 
 
@@ -743,7 +749,9 @@ def _steps(
     steps = []
     robots = (survey.profile.crawlability or {}).get("robots") or {}
     rules = (
-        "no robots.txt"
+        f"robots.txt could not be read ({robots['error']})"
+        if robots.get("error")
+        else "no robots.txt"
         if not robots.get("found")
         else "robots.txt forbids crawling"
         if robots.get("disallow_all")

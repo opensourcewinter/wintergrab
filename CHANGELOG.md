@@ -551,6 +551,16 @@ an error that says so, not a setting silently ignored
   `wintergrab.extraction.model` (still importable from
   `wintergrab.models`). docs/visual.md.
 
+### One entry point (`wintergrab.WinterGrab`)
+
+- `WinterGrab(...)` holds settings shared by goals, pages and sites (a
+  network policy, a cache, a browser, a model, spider settings) and
+  composes what exists: `plan(goal)`, `run(goal_or_plan, output)` and
+  `await arun(...)`, `get(url)`, `extract(page, schema)`, `sources(page)`,
+  `inspect(url)`, `configure(**changes)`. Each returns the usual objects
+  (`GoalPlan`, `GoalResult`, `Response`, `SiteSurvey`...).
+- `plan_goal(..., settings=)` passes spider settings to its surveys.
+
 ### Where a page's data is (`wintergrab.intel.sources`)
 
 - `get URL --sources` (`data_sources(response)`) lists every source a page
@@ -848,6 +858,13 @@ an error that says so, not a setting silently ignored
 
 ### Fixes
 
+- A site survey (`inspect`, `plan_goal`) read robots.txt and the sitemaps
+  (sitemap indexes included) outside the network policy, proxies and cache
+  given to it: a sitemap on an untrusted site could name an internal
+  address and have it requested. They are now read with the survey's own
+  settings, and a robots.txt that could not be read says why ("robots.txt
+  could not be read (Blocked by network policy: ...)") instead of "no
+  robots.txt".
 - A browser fetch of a URL the browser downloads rather than shows (an
   attachment, or a PDF where the browser has no viewer, as in Playwright's
   headless shell) failed with "Download is starting". The file is now the

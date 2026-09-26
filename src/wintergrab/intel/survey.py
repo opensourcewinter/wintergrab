@@ -16,7 +16,7 @@ link to, fetched politely: robots.txt is obeyed unless told otherwise.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -43,6 +43,21 @@ class SitemapRead:
     indexes: int = 0
     entries: list[SitemapEntry] = field(default_factory=list)  # the pages listed
     truncated: bool = False  # it stopped at a limit
+
+
+# Spider settings that are fetcher options too (a spider's default_headers are a fetcher's headers).
+_FETCH_SETTINGS = {
+    "network_policy": "network_policy", "proxies": "proxies", "cache": "cache", "impersonate": "impersonate",
+    "verify": "verify", "default_headers": "headers",
+}  # fmt: skip
+
+
+def _fetch_options(spider_settings: Mapping[str, Any], timeout: float) -> dict[str, Any]:
+    options: dict[str, Any] = {"timeout": timeout}
+    for setting, option in _FETCH_SETTINGS.items():
+        if spider_settings.get(setting) is not None:
+            options[option] = spider_settings[setting]
+    return options
 
 
 def read_sitemaps(
@@ -196,18 +211,21 @@ def survey_site(
     profiler = SiteProfiler()
     robots_text: str | None = None
     found = False
+    # robots.txt and the sitemaps are read as the pages are: through the same network policy, proxies and cache
+    fetch = _fetch_options(spider_settings, timeout)
     try:
-        with Fetcher(timeout=timeout) as fetcher:
+        with Fetcher(**fetch) as fetcher:
             robots = fetcher.get(origin + "/robots.txt")
         found = robots.status == 200
         robots_text = robots.text if found else None
         profiler.add_robots(robots_text, found=found)
     except WintergrabError as exc:
         log.warning("could not read robots.txt (%s)", exc)
+        profiler.add_robots(None, found=False, error=getattr(exc, "message", None) or str(exc))
     read = SitemapRead()
     samples: list[str] = []
     if sitemaps:
-        read = read_sitemaps(origin, robots_text, timeout=timeout)
+        read = read_sitemaps(origin, robots_text, **fetch)
         if read.sitemaps:
             profiler.add_sitemaps(read.sitemaps, read.indexes, read.entries)
         host = host_of(origin)

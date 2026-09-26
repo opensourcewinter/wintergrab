@@ -255,6 +255,16 @@ checks that it is up to date.
   - `check(self, url: str, *, sitemap: bool = False) -> str | None`: ``None`` if ``url`` may be queued, else a short reason.
   - `classmethod coerce(cls, value: Any) -> URLRules | None`
 - **`ValidationError`** (exception). A record or dataset failed validation.
+- **`WinterGrab(*, model: Any = None, browser: bool = False, obey_robots: bool = True, network_policy: Any = None, cache: Any = None, timeout: float = 20.0, log_level: str | None = 'WARNING', **settings: Any)`** (class). Goals, pages and sites with settings shared by all (see the module docs).
+  - `arun(self, goal: str | Goal | GoalPlan, output: str | None = None, **options: Any) -> GoalResult`: :meth:`run` from async code (the crawl runs in a thread of its own, with its own event loop).
+  - `configure(self, **changes: Any) -> WinterGrab`: A copy with some settings changed: ``wg.configure(browser=True).sources(url)``.
+  - `extract(self, page: str | Response, schema: Any, *, all: bool = False) -> ExtractedRecord | list[ExtractedRecord]`: A typed record from a page (a URL, fetched with :meth:`get`, or a :class:`~wintergrab.Response`), with where each value came from and how sure it is: ``schema`` is a template name (``"product"``), a schema file or a :class:`~wintergrab.data.Schema`.
+  - `get(self, url: str, **options: Any) -> Response`: One page: over HTTP, or rendered in a browser when this WinterGrab uses one (``browser=True``).
+  - `goal(self, text: str, *, sites: list[str] | None = None) -> Goal`: A request in plain words as a :class:`~wintergrab.goals.Goal`, read by the model when there is one.
+  - `inspect(self, url: str, *, pages: int = 30) -> SiteSurvey`: A site's robots.txt, sitemaps and ``pages`` pages, with its profile (``survey.profile.describe()``), as ``wintergrab inspect`` reads them.
+  - `plan(self, goal: str | Goal, *, sites: list[str] | None = None, sample: int = 30) -> GoalPlan`: Survey the goal's sites (robots.txt, sitemaps, ``sample`` pages each) and plan the crawl: what to fetch, how, and what it will cost.
+  - `run(self, goal: str | Goal | GoalPlan, output: str | None = None, *, sites: list[str] | None = None, sample: int = 30, max_pages: int | None = None, **settings: Any) -> GoalResult`: Collect a goal's records into ``output`` (``.jsonl``, ``.csv``, a database URL...; kept in ``result.records`` when there is none).
+  - `sources(self, page: str | Response) -> DataSources`: Where a page's data is (:func:`~wintergrab.intel.sources.data_sources`): its HTML records, JSON-LD, embedded JSON and, in a browser, the API calls it makes.
 - **`WintergrabError`** (exception). Base class for every error raised by wintergrab.
 - **`__version__`** = `'0.2.0'`
 - **`aget(url: str, **kwargs: Any) -> Response`**. Async :func:`get`.
@@ -776,7 +786,7 @@ checks that it is up to date.
 - **`model_reader(model: Any, *, now: datetime | None = None) -> Callable[[str], Mapping[str, Any]]`**. A ``parser`` for :func:`~wintergrab.goals.parse_goal` that asks ``model`` (a :class:`~wintergrab.models.ModelProvider`), and falls back on the built-in rules (see the module docs).
 - **`parse_goal(text: str, *, sites: list[str] | None = None, parser: Callable[[str], Mapping[str, Any]] | None = None, now: datetime | None = None) -> Goal`**. A :class:`Goal` from a request in plain words (see the module docs).
 - **`path_pattern(urls: list[str]) -> str`**. A path pattern covering ``urls``: segments they share stay, the others become ``*``.
-- **`plan_goal(goal: Goal, *, sample: int = 30, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, surveys: dict[str, SiteSurvey] | None = None, log_level: str | None = 'WARNING') -> GoalPlan`**. Plan ``goal`` for each of its sites (see the module docs).
+- **`plan_goal(goal: Goal, *, sample: int = 30, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, surveys: dict[str, SiteSurvey] | None = None, log_level: str | None = 'WARNING', settings: Mapping[str, Any] | None = None) -> GoalPlan`**. Plan ``goal`` for each of its sites (see the module docs).
 - **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, keep_pages: bool = False, log_level: str | None = 'INFO', progress: bool | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
 
 ## `wintergrab.intel`: Page types, technologies, site profiles
@@ -816,7 +826,7 @@ checks that it is up to date.
   - `describe(self, limit: int = 8, *, depth: int = 2) -> str`: The profile as a short report: ``limit`` entries per list, ``depth`` levels of sections.
   - `to_dict(self) -> dict[str, Any]`
 - **`SiteProfiler(*, detailed: int = 500)`** (class). Builds a :class:`SiteProfile` from the pages of a site (see the module docs).
-  - `add_robots(self, text: str | None, *, found: bool = True)`: What the site's robots.txt says for every crawler (``*``).
+  - `add_robots(self, text: str | None, *, found: bool = True, error: str | None = None)`: What the site's robots.txt says for every crawler (``*``); ``error``: why it could not be read.
   - `add_sitemaps(self, sitemaps: int, indexes: int, entries: Iterable[Any])`: Sitemaps (and sitemap indexes) read, and the pages they list (:class:`~wintergrab.SitemapEntry` objects or URLs).
   - `observe(self, response: Any, *, latency: float | None = None)`: Take a fetched page (a :class:`~wintergrab.Response`) into account.
   - `profile(self, *, complete: bool = False) -> SiteProfile`: The profile so far.

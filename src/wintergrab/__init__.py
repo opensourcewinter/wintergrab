@@ -66,6 +66,7 @@ from .netpolicy import NetworkPolicy
 from .parser.autoextract import LearnedSchema, RecordGroup
 from .proxy import ProxyRotator
 from .request import Request
+from .sdk import WinterGrab
 from .sitemaps import SitemapEntry, sitemap
 from .spider import AutoThrottle, CrawlResult, DropItem, IgnoreRequest, ItemPipeline, SessionManager, Spider
 from .urls import URLNormalizer, URLRules, normalize_url, url_template
@@ -125,6 +126,7 @@ __all__ = [
     "URLNormalizer",
     "URLRules",
     "ValidationError",
+    "WinterGrab",
     "WintergrabError",
     "__version__",
     "aget",

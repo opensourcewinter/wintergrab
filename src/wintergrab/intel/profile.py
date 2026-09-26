@@ -220,6 +220,8 @@ def _crawlability_lines(info: dict[str, Any]) -> list[str]:
     robots = info.get("robots")
     if robots is None:
         out.append("robots.txt not read")
+    elif robots.get("error"):
+        out.append(f"robots.txt could not be read ({robots['error']})")
     elif not robots.get("found"):
         out.append("no robots.txt")
     else:
@@ -506,10 +508,10 @@ class SiteProfiler:
         if len(text) < 200 and (scripts >= 3 or shell):
             self._crawl["js_required_pages"] += 1
 
-    def add_robots(self, text: str | None, *, found: bool = True) -> None:
-        """What the site's robots.txt says for every crawler (``*``)."""
+    def add_robots(self, text: str | None, *, found: bool = True, error: str | None = None) -> None:
+        """What the site's robots.txt says for every crawler (``*``); ``error``: why it could not be read."""
         if not found or text is None:
-            self.robots = {"found": False}
+            self.robots = {"found": False, **({"error": error} if error else {})}
             return
         disallow_all = False
         delay: float | None = None

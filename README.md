@@ -105,6 +105,18 @@ libraries too. The development version installs straight from GitHub:
 
 ## A quick tour
 
+### Say what you want
+
+```python
+from wintergrab import WinterGrab
+
+wg = WinterGrab(network_policy="public")
+plan = wg.plan("Find all laptops under $1000 on shop.example with name, price and rating")
+print(plan.describe())                   # what it will fetch, how, and what it will cost
+result = wg.run(plan, "laptops.jsonl")   # typed, validated, de-duplicated records
+print(result.summary())
+```
+
 ### Fetch and parse
 
 ```python
