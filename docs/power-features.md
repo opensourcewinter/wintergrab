@@ -11,6 +11,7 @@ scraping without writing selectors, crawling at scale, and speed.
 - [Handing a browser session to fast HTTP](#handing-a-browser-session-to-fast-http)
 - [Sitemaps](#sitemaps)
 - [Huge crawls: the disk frontier](#huge-crawls-the-disk-frontier)
+- [Crawling together: a shared frontier](#crawling-together-a-shared-frontier)
 - [Output: SQLite with upserts, de-duplication](#output-sqlite-with-upserts-de-duplication)
 - [Live progress](#live-progress)
 - [Speed extras](#speed-extras)
@@ -223,6 +224,55 @@ class Big(Spider):
   nothing. Requests that were in flight are delivered again on resume
   (at-least-once).
 - Resuming is instant: there's no giant pickle to load.
+
+## Crawling together: a shared frontier
+
+Several processes, on one machine or several, can crawl one site together
+through a queue in PostgreSQL (`pip install "wintergrab[postgres]"`):
+
+```python
+class Shop(Spider):
+    frontier = "postgresql://crawler@db.internal/crawls"            # the same in every process
+    output = "postgresql://crawler@db.internal/shop?table=products"  # one table for all (or a file each)
+    unique_key = "url"
+```
+
+```bash
+wintergrab crawl shop_spider.py:Shop      # on each machine, as many times as you like
+```
+
+- The first process to start the crawl seeds it; the others join it and
+  add to its output. It is named by the spider (or `?crawl=NAME`).
+- Each takes the best request that may start now, and leases it: a request
+  is fetched by one process at a time. A process renews its leases while it
+  runs; the requests of one that died go back to the queue within a minute.
+- The duplicate filter is shared: a URL one process queued is not queued
+  again by another.
+- So is each site's pace. A request to a site starts only when the site's
+  delay since the last request to it, by any process, has passed. A site
+  that asks to slow down (a 429, `Retry-After`) is slowed down for all of
+  them. (Concurrency per site counts in each process: with no delay,
+  several processes send requests at the same time.)
+- The crawl is finished when its queue is empty and nothing is leased; the
+  next start begins it again. `--fresh` (`run(resume=False)`) empties it for
+  every process.
+- Requests are kept as JSON, never as pickles, so the database holds data,
+  not code a process would run: their `meta`, `cb_kwargs` and bodies must be
+  JSON values (bytes too). Anything else is an error when the request is
+  queued.
+- Each process keeps its own stats, budgets (`max_pages` counts its own
+  pages), checkpoint and output. The password stays out of the URL
+  (`PGPASSWORD`, `~/.pgpass`).
+- A process whose database hangs up connects again, once, and carries on:
+  what it had not written yet is written then. If the database still does
+  not answer, the process stops with an error; what it leased goes back to
+  the queue, and starting it again continues the crawl.
+
+Measured here (4 CPUs, PostgreSQL 16 on the same machine, 20,000 requests
+over 50 sites with no delay, two runs), requests taken and acknowledged per
+second: 1,730 to 1,770 with one process, 2,120 to 2,210 with two, 3,560 to
+3,730 with four (`benchmarks/bench_shared_frontier.py`). A crawl's own
+pace and network are usually slower than that.
 
 ## Output: SQLite with upserts, de-duplication
 

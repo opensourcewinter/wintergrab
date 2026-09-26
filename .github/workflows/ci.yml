@@ -123,12 +123,12 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - name: Test the storage adapters against PostgreSQL, MongoDB and MySQL
+      - name: Test the storage adapters and the shared frontier against PostgreSQL, MongoDB and MySQL
         env:
           WINTERGRAB_TEST_POSTGRES: postgresql://postgres:wintergrab-ci@localhost:5432/postgres
           WINTERGRAB_TEST_MONGODB: mongodb://127.0.0.1:27017/wintergrab
           WINTERGRAB_TEST_MYSQL: mysql://root:wintergrab-ci@127.0.0.1:3306/wintergrab
-        run: python -m pytest -q -rs tests/test_storage.py
+        run: python -m pytest -q -rs tests/test_storage.py tests/test_shared_frontier.py
       - name: Test the MySQL output against MariaDB
         env:
           WINTERGRAB_TEST_MYSQL: mariadb://root:wintergrab-ci@127.0.0.1:3307/wintergrab

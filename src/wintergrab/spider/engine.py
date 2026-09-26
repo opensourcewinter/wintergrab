@@ -53,6 +53,7 @@ from .progress import ProgressDisplay
 from .robots import RobotsPolicy
 from .scheduler import Scheduler
 from .sessions import SessionManager
+from .shared import SharedScheduler
 from .spider import CrawlResult
 from .throttle import AutoThrottle
 
@@ -75,6 +76,11 @@ async def _deadline(coro: Any, seconds: float) -> Any:
         return await asyncio.wait_for(coro, seconds)
     async with timeout_cm(seconds):
         return await coro
+
+
+def _shared(frontier: Any) -> bool:
+    """Whether a spider's ``frontier`` names a shared one (a PostgreSQL database)."""
+    return isinstance(frontier, str) and frontier.startswith(("postgresql://", "postgres://"))
 
 
 class Stats(dict):  # type: ignore[type-arg]
@@ -110,8 +116,8 @@ class Engine:
         if order not in CRAWL_ORDERS:
             raise ConfigurationError(f"must be 'bfs' or 'dfs', not {spider.crawl_order!r}", key="crawl_order")
         self._lifo = CRAWL_ORDERS[order]
-        self.scheduler: Scheduler | DiskScheduler = Scheduler(dedupe=spider.dedupe, lifo=self._lifo)
-        self._persistent = False  # True with the disk frontier
+        self.scheduler: Scheduler | DiskScheduler | SharedScheduler = Scheduler(dedupe=spider.dedupe, lifo=self._lifo)
+        self._persistent = False  # True with the disk frontier, or a shared one
         self.throttle: AutoThrottle = spider.throttle or AutoThrottle(
             enabled=spider.autothrottle,
             base_delay=spider.download_delay,
@@ -231,7 +237,8 @@ class Engine:
         if self._stopping:
             return
         if status == "paused" and self.checkpoint is None:
-            log.warning("no crawl_dir set, so the crawl cannot be resumed; stopping instead")
+            if not isinstance(self.scheduler, SharedScheduler):  # (a shared crawl continues when started again)
+                log.warning("no crawl_dir set, so the crawl cannot be resumed; stopping instead")
             status = "stopped"
         self._stopping = True
         self._status = status
@@ -322,7 +329,7 @@ class Engine:
             # Only now may shutdown save/clear the checkpoint: a failure above
             # must leave an existing state file untouched.
             self._state_ready = True
-            if isinstance(self.scheduler, DiskScheduler):
+            if self._persistent and self.checkpoint is not None:
                 # The frontier starts recording acks right away, so the state it
                 # belongs to (stats, output mode) must exist from the start too.
                 self._save_state([])
@@ -489,15 +496,23 @@ class Engine:
             raise CheckpointError(
                 f"{self.checkpoint.dir} was saved with frontier='disk'; resume it with frontier='disk' too"
             )
+        if state is not None and state.get("frontier") == "shared" and not _shared(self.spider.frontier):
+            raise CheckpointError(f"{self.checkpoint.dir} was saved with a shared frontier; resume it with it too")
         return state
 
     def _open_frontier(self, resume: bool) -> bool:
-        """Open the disk frontier if configured. Returns whether an existing one was reopened."""
+        """Open the disk or shared frontier if configured. Returns whether an existing one was reopened (or a
+        shared crawl joined)."""
         kind = self.spider.frontier
         if kind == "memory":
             return False
+        if _shared(kind):
+            self.scheduler = SharedScheduler(kind, self.spider, dedupe=self.spider.dedupe, lifo=self._lifo,
+                                             fresh=not resume)  # fmt: skip
+            self._persistent = True
+            return self.scheduler.existed
         if kind != "disk":
-            raise ValueError(f"frontier must be 'memory' or 'disk', not {kind!r}")
+            raise ValueError(f"frontier must be 'memory', 'disk' or a postgresql:// URL, not {kind!r}")
         if self.checkpoint is None:
             raise ValueError("frontier='disk' needs a crawl_dir to keep the queue in")
         path = self.checkpoint.dir / "frontier.sqlite3"
@@ -742,9 +757,12 @@ class Engine:
         self.scheduler.duplicates = 0
         status = self._status if self._fatal is None else "stopped"
         disk = self.scheduler if isinstance(self.scheduler, DiskScheduler) else None
-        pending: list[Request] = [] if disk is not None else self._pending_requests()
+        shared = self.scheduler if isinstance(self.scheduler, SharedScheduler) else None
+        if shared is not None:
+            self._flush_delayed_to_frontier()  # (retries waiting here: the other processes may take them)
+        pending: list[Request] = [] if self._persistent else self._pending_requests()
         pending_count = (
-            len(self.scheduler) + len(self._delayed) + len(self._inflight) if disk is not None else len(pending)
+            len(self.scheduler) + len(self._delayed) + len(self._inflight) if self._persistent else len(pending)
         )
         keep = status in ("paused", "limit") or self._fatal is not None
         if self.checkpoint is not None and self._state_ready:
@@ -766,11 +784,15 @@ class Engine:
                 log.error("%s", exc)
                 if self._fatal is None:
                     self._fatal = exc
+        elif shared is not None and pending_count and status != "finished":
+            log.info("%d request(s) of the crawl left in the shared frontier", pending_count)
         elif pending_count and status != "finished":
             log.info("%d pending request(s) discarded", pending_count)
         for entry in self._delayed.values():
             entry[1].cancel()
         self._delayed.clear()
+        if shared is not None:
+            shared.close(finished=status == "finished" and self._fatal is None)
         if disk is not None:
             keep_frontier = keep and pending_count and self._state_ready
             disk.close()
@@ -909,7 +931,7 @@ class Engine:
         self._delayed.clear()
 
     def _ack(self, request: Request) -> None:
-        if isinstance(self.scheduler, DiskScheduler):
+        if isinstance(self.scheduler, (DiskScheduler, SharedScheduler)):
             self.scheduler.ack(request)
 
     def _save_state(self, pending: list[Request]) -> None:
@@ -924,11 +946,11 @@ class Engine:
         }
         if self._history_run is not None:
             state["history_run"] = self._history_run
-        if isinstance(self.scheduler, DiskScheduler):
+        if isinstance(self.scheduler, (DiskScheduler, SharedScheduler)):
             # The queue and seen-filter live in the frontier database already.
             self.scheduler.commit()
             self._last_commit = time.monotonic()
-            state["frontier"] = "disk"
+            state["frontier"] = "disk" if isinstance(self.scheduler, DiskScheduler) else "shared"
         else:
             state["pending"] = [r.to_dict(self.spider) for r in pending]
             state["seen"] = self.scheduler.seen
@@ -969,7 +991,7 @@ class Engine:
                         (self.budget.soft_limit or 0) * 100,
                         self._min_priority,
                     )
-        if isinstance(self.scheduler, DiskScheduler) and now - self._last_commit >= 1.0:
+        if isinstance(self.scheduler, (DiskScheduler, SharedScheduler)) and now - self._last_commit >= 1.0:
             # Output first, then the queue: a crash may redo work, never lose it.
             if self.exporter is not None:
                 self.exporter.flush()

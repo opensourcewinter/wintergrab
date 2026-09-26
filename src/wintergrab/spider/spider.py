@@ -278,7 +278,8 @@ class Spider:
     #: Drop requests for URLs already seen.
     dedupe: bool = True
     #: ``"memory"`` (fastest) or ``"disk"``: an SQLite queue + Bloom filter that keeps
-    #: memory flat for crawls of millions of URLs and survives crashes (needs ``crawl_dir``).
+    #: memory flat for crawls of millions of URLs and survives crashes (needs ``crawl_dir``);
+    #: or a ``postgresql://`` URL: a queue several processes share (see :mod:`wintergrab.spider.shared`).
     frontier: str = "memory"
 
     # -- caching ---------------------------------------------------------- #

@@ -328,6 +328,19 @@ checks that it is up to date.
 - **`open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter`**. Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``, ``s3://``).
 - **`write_items(path: str | os.PathLike[str], items: list[Any]) -> Path`**. Write a list of items in one go (format chosen by extension).
 
+## `wintergrab.spider.shared`: A frontier several processes share
+
+- **`SharedScheduler(url: str, spider: Spider | None, *, dedupe: bool = True, lifo: bool = False, fresh: bool = False, lease: float = 60.0)`** (class). The engine's queue for ``frontier = "postgresql://..."`` (see the module docs), with the interface of the disk frontier: ``pop_ready`` leases a request, ``ack`` forgets it, ``commit`` writes what changed.
+  - `ack(self, request: Request) -> bool`: The engine is done with a popped request: it is deleted at the next commit (after the requests queued since, so a crash never loses what came of it).
+  - `clear(self)`: Drop every queued request of the crawl (for every process; leased ones stay until acked).
+  - `close(self, *, finished: bool = False)`: Write what changed, give back what this process leased and did not finish, and, when the crawl is ``finished`` (nothing queued or leased by anyone), say so: the next start begins it again.
+  - `commit(self)`: Write what changed (queued requests, then acks), renew this process's leases, and tell the crawl which sites this process was told to leave alone for a while.
+  - `leased(self) -> int`: Requests this process popped and has not acked.
+  - `pending(self) -> list[Request]`: Every queued request of the crawl (highest priority first), without taking them.
+  - `pop_ready(self, throttle: AutoThrottle, now: float, *, retries_only: bool = False, min_priority: int | None = None) -> tuple[Request | None, float | None]`: The best request that may start now, leased; or ``(None, seconds until one might)``.
+  - `push(self, request: Request, *, force: bool = False) -> bool`: Queue a request (written at the next :meth:`commit`, or before the next pop).
+  - `restore_seen(self, fingerprints: Iterable[bytes])`: Mark fingerprints as seen, for every process.
+
 ## `wintergrab.extraction`: Typed records from pages
 
 - **`DEFAULT_PRIORS`**: a dict

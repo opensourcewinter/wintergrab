@@ -13,6 +13,7 @@ a very fast server, plus tooling to profile wintergrab's crawl path.
 | `run.py` | Runs the matrix (latency × concurrency × tool × repetitions). Each run is its own subprocess. Prints a markdown table and writes `results.json`. |
 | `results.json`, `results_eventloop.json` | The measured runs behind the tables below. |
 | `profile_wintergrab.py` | Runs the wintergrab crawl under cProfile, or reads `py-spy` stacks. Groups the time by layer: wintergrab, curl_cffi, lxml, asyncio, stdlib. |
+| `bench_shared_frontier.py` | How many requests a [shared frontier](../docs/power-features.md#crawling-together-a-shared-frontier) (PostgreSQL) hands out per second to 1, 2 and 4 processes: `.venv/bin/python benchmarks/bench_shared_frontier.py postgresql://user@host/db`. |
 
 ## Running it
 

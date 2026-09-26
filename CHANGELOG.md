@@ -974,6 +974,31 @@ an error that says so, not a setting silently ignored
   the file: the rows so far are rewritten under the wider header, their new
   cells empty. A resumed CSV's header is read past a byte-order mark.
 
+### A shared frontier (`wintergrab.spider.shared`)
+
+- `frontier = "postgresql://..."`: a queue in PostgreSQL that several
+  processes, on one machine or several, crawl from together. The first to
+  start a crawl seeds it, the others join it and add to its output. A
+  request is leased by one process at a time (`FOR UPDATE SKIP LOCKED`),
+  and deleted in the same transaction as the requests that came of it are
+  queued; leases are renewed while a process runs, so a dead one's
+  requests go back to the queue within a minute. The duplicate filter is
+  shared, and so is each site's pace: a request to a site starts once its
+  delay since the last request to it, by any process, has passed, and a
+  site that asked to slow down is slowed down for all. The crawl is
+  finished when nothing is queued or leased; `--fresh` empties it for
+  every process.
+- Requests are kept as JSON, never as pickles: the database holds data, not
+  code a process would run (a request whose `meta` holds something else is
+  an error when queued).
+- A process whose database hangs up connects again once and carries on,
+  writing what it had not (tried with the server ending its connection
+  mid-crawl: every page fetched once, the crawl finished).
+- Measured on 4 CPUs with PostgreSQL on the same machine: about 1,750
+  requests taken and acknowledged per second with one process, 3,600 with
+  four.
+- The CI's database job runs it against PostgreSQL 16.
+
 ### Documentation and contributing
 
 - CI audits the packages wintergrab installs, with every extra and their

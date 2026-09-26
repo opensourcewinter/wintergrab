@@ -50,8 +50,9 @@ where something happens. Users start with [getting started](getting-started.md).
 
 ## A request's way through a crawl
 
-1. **Queued.** A `Request` enters the scheduler (`spider/scheduler.py`, or
-   the disk frontier in `spider/frontier.py`). Duplicates are recognised by
+1. **Queued.** A `Request` enters the scheduler (`spider/scheduler.py`, the
+   disk frontier in `spider/frontier.py`, or the frontier several processes
+   share in `spider/shared.py`). Duplicates are recognised by
    a fingerprint of method, canonical URL and body. The URL rules and the
    normalizer (`urls.py`) run first.
 2. **Picked.** The engine (`spider/engine.py`) takes the highest-priority

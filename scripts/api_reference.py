@@ -26,6 +26,7 @@ MODULES = [
     ("wintergrab", "Fetching, parsing and the most used names"),
     ("wintergrab.fetchers.actions", "Browser actions"),
     ("wintergrab.spider", "Crawling"),
+    ("wintergrab.spider.shared", "A frontier several processes share"),
     ("wintergrab.extraction", "Typed records from pages"),
     ("wintergrab.extraction.templates", "Ready-made schemas"),
     ("wintergrab.parser.layout", "Rendered layouts"),
