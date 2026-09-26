@@ -348,6 +348,11 @@ def _default_rules() -> list[tuple[str, str, Rule]]:
     add("category", "repeated cards with prices", lambda f: 2.0 if f.repeated >= 8 and f.prices >= 3 else None)
     add("listing", "repeated cards", lambda f: 3.0 if f.repeated >= 8 and f.prices < 3 else None)
     add("listing", "pagination", lambda f: 1.0 if f.pagination and f.repeated >= 5 else None)
+    add(
+        "category",
+        "priced cards and a pager",
+        lambda f: 2.5 if f.pagination and f.repeated >= 3 and f.prices >= 3 else None,
+    )
     add("article", "long article text", lambda f: 3.0 if f.article_text >= 1500 else None)
     add("article", "many paragraphs", lambda f: 1.5 if f.paragraphs >= 6 else None)
     add("article", "byline and date", lambda f: 2.0 if f.byline and f.time_elements else None)

@@ -170,8 +170,8 @@ def test_extraction_and_quality_events(site, tmp_path) -> None:
     assert (changed["dataset"], changed["added"], changed["removed"]) == ("book", ["title"], ["price"])
     assert [e["code"] for e in second["quality_degraded"]] == ["field-disappeared"]
     third = crawl({"name": name, "isbn": {"type": "string", "selectors": [".isbn"], "required": True}})
-    failed = third["extraction_failed"]  # every book page: no ISBN on them
-    assert len(failed) == 15 and failed[0]["missing"] == ["isbn"] and failed[0]["schema"] == "book"
+    failed = third["extraction_failed"]  # every book page: no ISBN on them (the listing pages are no book's)
+    assert len(failed) == 12 and failed[0]["missing"] == ["isbn"] and failed[0]["schema"] == "book"
 
 
 def _project(tmp_path, site_url: str, hook_url: str, **extra: Any) -> Any:

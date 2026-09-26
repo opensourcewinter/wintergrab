@@ -444,6 +444,12 @@ checks that it is up to date.
 - **`is_pdf(body: bytes, content_type: str = '') -> bool`**. Whether a response holds a PDF: its type says so, or its body starts like one.
 - **`read_pdf(data: bytes, *, max_pages: int = 100) -> PdfDocument`**. Read a PDF's pages (at most ``max_pages``): their text where it is drawn, and their links.
 
+## `wintergrab.bench`: Benchmarks
+
+- **`SCENARIOS`** = `('startup', 'crawl', 'parse', 'extract', 'data', 'dedupe', 'browser')`
+- **`run_benchmark(*, scenarios: Sequence[str] = ('startup', 'crawl', 'parse', 'extract', 'data', 'dedupe'), pages: int = 100, items: int = 1000, latency: float = 0.0, concurrency: int = 32, rounds: int = 200, startup_runs: int = 5, on_result: Callable[[str, dict[str, Any]], None] | None = None) -> dict[str, Any]`**. Run the scenarios (see the module docs) and return ``{"environment": {...}, "results": {name: {...}}}``.
+- **`serve_shop(pages: int, items: int, *, latency: float = 0.0, port: int = 0)`**. Serve the shop from 127.0.0.1 until stopped, printing its address first (``latency``: seconds per response).
+
 ## `wintergrab.data`: Schemas, normalizing, validating, pipelines, quality
 
 - **`FIELD_TYPES`**: a dict

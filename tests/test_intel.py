@@ -98,6 +98,18 @@ def test_content_pages(make, expected: str, evidence: str) -> None:
     assert 0.3 < result.confidence <= 1
 
 
+def test_a_short_listing_with_a_pager() -> None:
+    cards = "".join(
+        f'<article class="pod"><h3><a href="/p/{i}">Book {i}</a></h3><p class="price">£{10 + i}.50</p></article>'
+        for i in range(4)
+    )
+    listing = page(f'<section>{cards}</section><ul class="pager"><li class="next"><a href="/page-2">next</a></li></ul>')
+    result = classify_page(listing)
+    assert result.type == "category" and "priced cards and a pager" in result.evidence
+    one = page('<h1>Book 1</h1><p class="price">£11.50</p><ul class="pager"><li><a href="/p/2">next book</a></li></ul>')
+    assert classify_page(one).type != "category"  # one price and a pager: no list
+
+
 def test_related_types_do_not_compete() -> None:
     # A news page is also an article: "article" scoring high must not make "news" unsure.
     result = classify_page(news_page())

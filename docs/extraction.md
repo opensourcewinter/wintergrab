@@ -270,6 +270,15 @@ wintergrab crawl https://shop.example --extract product.schema.json --max-pages 
 `--explain` prints the evidence table for each record, `--provenance` adds
 `_provenance`, `--all`/`--container` extract listings. A crawl keeps the
 records that have every required field and reports how many pages had none.
+`wintergrab extract URL --schema SCHEMA` is the same crawl, named for what it
+does (`--schema product` for a template).
+
+Without `--all`, a crawl reads no single record from a page that looks like
+a list of records: a category, search results, a pager over priced cards
+(its [page type](intelligence.md), with at least 40% confidence). Its title
+and first card would make a record that no page states. The crawl reports
+how many it left out; `--all` reads each of their records, and `-s
+skip_listings=false` reads them as single records anyway.
 
 ## Tests
 

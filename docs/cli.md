@@ -200,6 +200,30 @@ normalized, keeps those in a country, region or city or near a point, and
 with `--by` prints them grouped by place. See [data.md](data.md),
 [entities.md](entities.md) and [places.md](places.md).
 
+## `wintergrab extract`: records from a site
+
+```bash
+wintergrab extract URL --schema SCHEMA|TEMPLATE [-o OUT] [--follow SELECTOR] [--max-pages N] [...]
+```
+
+The same as `crawl URL --extract SCHEMA`, with every crawl option: it
+crawls the site and keeps a record from every page holding one (every
+required field found). Pages that look like lists of records give none
+unless `--all` reads each of their records. `--follow` keeps the crawl to
+the links leading to record pages. For a crawl planned from what you want,
+see `wintergrab goal`.
+
+## `wintergrab benchmark`: how fast, on this machine
+
+```bash
+wintergrab benchmark [--scenario NAME]... [--browser] [--pages N] [--items N] [--latency MS]
+                     [--concurrency N] [--rounds N] [--quick] [--json] [-o FILE]
+```
+
+Start-up, a crawl of a synthetic shop served from 127.0.0.1, parsing,
+extraction, validation, URL deduplication and (`--browser`) rendering, each
+in a process of its own. See [benchmarks](benchmarks.md).
+
 ## `wintergrab inspect`: profile a website
 
 ```bash

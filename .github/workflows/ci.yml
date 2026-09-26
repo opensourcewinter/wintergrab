@@ -103,6 +103,7 @@ jobs:
           /tmp/clean/bin/python -c "import wintergrab as wg; page = wg.parse('<p class=x>ok</p>'); assert page.css('.x::text').get() == 'ok'"
           /tmp/clean/bin/python -c "from importlib.resources import files; assert all((files('wintergrab') / 'static' / n).is_file() for n in ('builder.html', 'builder.js', 'builder.css'))"
           /tmp/clean/bin/python -c "from wintergrab.intel import detect_language; assert detect_language('Le conseil municipal a vote le budget pour la nouvelle annee, et les habitants de la ville sont contents.')[0] == 'fr'"
+          /tmp/clean/bin/wintergrab benchmark --quick --scenario crawl --scenario extract
       - uses: actions/upload-artifact@v4
         with:
           name: dist

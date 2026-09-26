@@ -526,6 +526,25 @@
   `wintergrab.extraction.model` (still importable from
   `wintergrab.models`). docs/visual.md.
 
+### `wintergrab benchmark` and `wintergrab extract`
+
+- `wintergrab benchmark` (`wintergrab.bench`) measures WINTERGRAB on this
+  machine, against a synthetic shop served from 127.0.0.1 by a process of
+  its own. Each scenario runs in a fresh process:
+  - start-up (`import wintergrab`, `wintergrab --version`);
+  - a crawl: pages/s, items/s, latency p50/p90, CPU, peak memory;
+  - parsing, extraction with the product template, and normalizing and
+    validating records;
+  - canonical URLs with an empty cache, and near-duplicate fingerprints;
+  - `--browser`: rendering against HTTP.
+
+  `--latency MS` delays the shop's responses as a network would; `--json`
+  and `-o` keep the report. docs/benchmarks.md, with the numbers of a
+  4-vCPU VM.
+- `wintergrab extract URL --schema SCHEMA|TEMPLATE`: `crawl URL --extract`
+  under its own name, with every crawl option (the crawl's options now
+  live in one place for both).
+
 ### PDFs (`wintergrab.parser.pdf`)
 
 - With `pypdf` (`pip install "wintergrab[pdf]"`), a response holding a PDF
@@ -780,6 +799,14 @@
   code in a part of its own or beside the city, and a street only where
   one is written (a house number, a street word), and it notes a code
   naming several places rather than choosing one.
+- A crawl extracting one record per page (`crawl --extract`, `extract`)
+  made one from listing pages too: the page's title and its first card's
+  price, a record no page states. Without `--all`, a page that looks like a
+  list of records (a category, search results, a pager over three priced
+  cards or more) now gives none, and the crawl says how many it left out
+  (`-s skip_listings=false` reads them anyway). `get --extract` on such a
+  page points to `--all`. Page classification counts a pager over priced
+  cards as a category page.
 - A product's category read from a breadcrumb was the next-to-last link
   even when the page itself was not linked: "Books" rather than "Poetry"
   in Home > Books > Poetry > A Light in the Attic. The last link is left

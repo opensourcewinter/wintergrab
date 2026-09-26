@@ -62,6 +62,25 @@ Press Ctrl+C once to pause (state is saved when --crawl-dir is set); run the
 same command again to resume. Press Ctrl+C twice to force quit.
 """
 
+EPILOG_EXTRACT = """examples:
+  wintergrab extract https://books.toscrape.com/ --schema product -o books.jsonl
+  wintergrab extract https://shop.example/ --schema product.schema.json --max-pages 500 --provenance
+  wintergrab extract https://jobs.example/ --schema job --follow "a.job-link" -o jobs.csv
+
+A page without the schema's required field gives no record, so crawling a whole site keeps only the
+pages that hold one. --follow limits the crawl to the links that lead to them.
+"""
+
+EPILOG_BENCHMARK = """examples:
+  wintergrab benchmark                          # everything but the browser, about 10 seconds
+  wintergrab benchmark --browser                # and pages rendered in Chromium
+  wintergrab benchmark --scenario crawl --pages 1000 --items 10000 --concurrency 64
+  wintergrab benchmark --latency 50 --json -o bench.json   # as over a network: 50 ms per response
+
+Everything runs on this machine: a synthetic shop served from 127.0.0.1, and each scenario in a
+process of its own. Compare runs on one machine; see docs/benchmarks.md for the method.
+"""
+
 EPILOG_INSPECT = """examples:
   wintergrab inspect https://shop.example                 # 30 pages, robots.txt and sitemaps
   wintergrab inspect https://shop.example --pages 100 -o shop.profile.json
@@ -307,6 +326,19 @@ def _render_where_needed(args: argparse.Namespace, urls: list[str], results: lis
     return results
 
 
+_LISTING_TYPES = frozenset({"listing", "category", "search", "archive", "directory"})
+
+
+def _is_listing(page: Response, schema_name: str) -> bool:
+    """Whether ``page`` looks like a list of records (a category, search results...), for a schema of one record."""
+    if schema_name in _LISTING_TYPES:
+        return False  # the schema describes listing pages themselves
+    from .intel import classify_page
+
+    kind = classify_page(page)
+    return kind.type in _LISTING_TYPES and kind.confidence >= 0.4
+
+
 def cmd_get(args: argparse.Namespace) -> int:
     urls = [ensure_scheme(u) for u in args.urls]
     if args.capture_filter:
@@ -385,6 +417,8 @@ def cmd_get(args: argparse.Namespace) -> int:
             found = extractor.extract_all(page, container=args.container) if listing else [extractor.extract(page)]
             if listing and not found:
                 print(f"warning: no records found on {page.url}", file=sys.stderr)
+            elif not listing and args.verbose >= 0 and _is_listing(page, extractor.schema.name):
+                print(f"note: {page.url} looks like a list of records: --all reads each of them", file=sys.stderr)
             for record in found:
                 if args.explain:
                     print(record.explain(), file=sys.stderr)
@@ -493,6 +527,11 @@ class QuickSpider(Spider):
     model_url: str | None = None
     #: Pages where --extract found no complete record (a required field missing).
     incomplete: int = 0
+    #: Without --all, a page that looks like a listing (a category, search results) gives no single record: its
+    #: title and first card would make one that no page states (``-s skip_listings=false`` reads them anyway).
+    skip_listings: bool = True
+    #: Pages left out for that.
+    listing_pages: int = 0
     #: Follow every same-domain link when no --follow/--paginate is given.
     wander: bool = True
     #: Skip links to images, media, archives and crawler traps (``-s url_rules=null`` turns it off).
@@ -519,6 +558,9 @@ class QuickSpider(Spider):
         if self.extract_all or self.container or extractor.schema.container:
             found = extractor.extract_all(response, container=self.container)
         else:
+            if self.skip_listings and _is_listing(response, extractor.schema.name):
+                self.listing_pages += 1
+                return
             found = [extractor.extract(response)]
         for record in found:
             missing = [name for name, fv in record.fields.items() if fv.validation == "missing"]
@@ -1347,6 +1389,10 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     incomplete = getattr(spider, "incomplete", 0)
     if incomplete:
         print(f"{incomplete} page(s) had no complete record (a required field was missing)", file=sys.stderr)
+    listings = getattr(spider, "listing_pages", 0)
+    if listings:
+        print(f"{listings} page(s) looked like lists of records, not one: not read as one (--all reads each record)",
+              file=sys.stderr)  # fmt: skip
     if result.paused:
         print("paused - run the same command again to resume", file=sys.stderr)
     if result.run_id and args.verbose >= 0:
@@ -1419,6 +1465,45 @@ def cmd_shell(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # doctor
 # --------------------------------------------------------------------------- #
+def cmd_benchmark(args: argparse.Namespace) -> int:
+    from .bench import SCENARIOS, describe, run_benchmark
+
+    scenarios = list(args.scenario or [s for s in SCENARIOS if s != "browser" or args.browser])
+    if args.browser and "browser" not in scenarios:
+        scenarios.append("browser")
+    if args.quick:
+        args.pages, args.items, args.rounds = min(args.pages, 20), min(args.items, 200), min(args.rounds, 30)
+    for name, value in (("--pages", args.pages), ("--items", args.items), ("--concurrency", args.concurrency),
+                        ("--rounds", args.rounds)):  # fmt: skip
+        if value < 1:
+            print(f"error: {name} must be at least 1", file=sys.stderr)
+            return 2
+    if args.latency < 0:
+        print("error: --latency must not be negative", file=sys.stderr)
+        return 2
+
+    def progress(name: str, result: dict[str, Any]) -> None:
+        if args.verbose >= 0:
+            print(f"  {name}: {'failed: ' + result['error'] if 'error' in result else 'done'}", file=sys.stderr)
+
+    if args.verbose >= 0:
+        print(f"measuring {', '.join(scenarios)} on this machine...", file=sys.stderr)
+    report = run_benchmark(
+        scenarios=scenarios,
+        pages=args.pages,
+        items=args.items,
+        latency=args.latency / 1000,
+        concurrency=args.concurrency,
+        rounds=args.rounds,
+        startup_runs=1 if args.quick else 5,
+        on_result=progress,
+    )
+    if args.output:
+        Path(args.output).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(report, indent=2) if args.json else describe(report))
+    return 1 if any("error" in result for result in report["results"].values()) else 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     """Report what is installed and what each optional feature needs."""
     import platform
@@ -2090,12 +2175,13 @@ def _add_cache_options(p: argparse.ArgumentParser) -> None:
     group.add_argument("--offline", action="store_true", help="replay from the cache only; never touch the network")
 
 
-def _add_typed_extract_options(p: Any) -> None:
-    p.add_argument(
-        "--extract",
-        metavar="SCHEMA",
-        help="extract typed records described by a data schema file (see docs/extraction.md)",
-    )
+def _add_typed_extract_options(p: Any, *, schema_flag: bool = True) -> None:
+    if schema_flag:
+        p.add_argument(
+            "--extract",
+            metavar="SCHEMA",
+            help="extract typed records described by a data schema file (see docs/extraction.md)",
+        )
     p.add_argument("--all", action="store_true", help="(--extract) every record of a listing page")
     p.add_argument("--container", metavar="SELECTOR", help="(--extract) the elements holding one record each")
     p.add_argument("--provenance", action="store_true", help="(--extract) add where each value came from")
@@ -2149,6 +2235,125 @@ def _add_extract_options(p: argparse.ArgumentParser) -> None:
         metavar="NAME=SELECTOR",
         help="a field of each record, e.g. price=.price::text (repeatable)",
     )
+
+
+def _add_crawl_options(c: argparse.ArgumentParser, *, extract_command: bool = False) -> None:
+    """The options of ``crawl`` (and of ``extract``, where ``--schema`` names the records to extract)."""
+    c.add_argument(
+        "-o", "--output", metavar="FILE", help="save items to .jsonl/.json/.csv (default: JSON lines on stdout)"
+    )
+    c.add_argument("--crawl-dir", metavar="DIR", help="directory for pause/resume state")
+    c.add_argument(
+        "--history", metavar="FILE", help="record page fingerprints here and report what changed since the last run"
+    )
+    c.add_argument("--history-html", action="store_true", help="keep every page's HTML in the history too")
+    c.add_argument(
+        "--auto-browser",
+        action="store_true",
+        help="fetch over HTTP, and in a browser the pages that need JavaScript, learning which URL patterns do",
+    )
+    c.add_argument(
+        "--fetch-stats",
+        metavar="FILE",
+        help="(implies --auto-browser) keep what was learned about each URL pattern here for the next crawls",
+    )
+    c.add_argument(
+        "--render-if-missing",
+        action="append",
+        metavar="SELECTOR",
+        help="(implies --auto-browser) a page where this finds nothing is fetched again in a browser",
+    )
+    c.add_argument(
+        "--profile",
+        metavar="FILE",
+        help="save the site's profile and topology (sections, dead ends, orphans...) here as JSON",
+    )
+    c.add_argument(
+        "--record",
+        action="store_true",
+        help="keep this run's pages, items and events, to replay it without the network (wintergrab replay)",
+    )
+    c.add_argument(
+        "--workspace",
+        metavar="DIR",
+        help="where runs are kept (default .wintergrab; once it exists, every crawl's run is kept)",
+    )
+    c.add_argument("--project", metavar="FILE", help="(set by wintergrab run/schedule) post events to its webhooks")
+    c.add_argument("--job", metavar="NAME", help="(set by wintergrab run/schedule) the job's name, kept with the run")
+    c.add_argument(
+        "--optimize",
+        nargs="?",
+        const=True,
+        metavar="FILE",
+        help="learn which URL patterns give items: fetch those first, skip the ones that give nothing, drop "
+        "parameters that change nothing (FILE: keep what was learned for the next crawls)",
+    )
+    c.add_argument(
+        "--skip-fresh", action="store_true", help="with --history: skip pages that have probably not changed"
+    )
+    c.add_argument("--fresh", action="store_true", help="ignore saved state and start over")
+    c.add_argument("--concurrency", type=int, metavar="N", help="max requests in flight")
+    c.add_argument("--per-domain", type=int, metavar="N", help="max requests in flight per domain")
+    c.add_argument("--delay", type=float, metavar="SEC", help="minimum delay between requests to a domain")
+    c.add_argument("--no-autothrottle", action="store_true", help="fixed speed instead of adaptive")
+    c.add_argument("--max-pages", type=int, metavar="N")
+    c.add_argument("--max-items", type=int, metavar="N")
+    c.add_argument("--max-depth", type=int, metavar="N")
+    c.add_argument("--max-requests", type=int, metavar="N", help="budget: requests sent, retries included")
+    c.add_argument("--max-bytes", type=int, metavar="N", help="budget: bytes downloaded")
+    c.add_argument("--max-runtime", type=float, metavar="SEC", help="budget: seconds of crawling (across resumes)")
+    c.add_argument("--order", choices=["bfs", "dfs"], help="breadth-first (default) or depth-first")
+    c.add_argument("--events", metavar="FILE", help="write structured events (JSON lines) to FILE")
+    c.add_argument(
+        "--retry-failed", action="store_true", help="queue the requests an earlier run gave up on (needs --crawl-dir)"
+    )
+    c.add_argument("--no-robots", action="store_true", help="ignore robots.txt")
+    c.add_argument("-s", "--set", action="append", metavar="NAME=VALUE", help="override a spider attribute")
+    _add_network_options(c)
+    c.add_argument("--follow", action="append", metavar="SELECTOR", help="(URL mode) links/containers to follow")
+    c.add_argument("--allow", action="append", metavar="REGEX", help="(URL mode) only follow matching URLs")
+    c.add_argument("--deny", action="append", metavar="REGEX", help="(URL mode) never follow matching URLs")
+    c.add_argument("--any-domain", action="store_true", help="(URL mode) follow links to other domains too")
+    c.add_argument("--paginate", action="store_true", help="(URL mode) follow next-page links (auto-detected)")
+    c.add_argument("--auto", action="store_true", help="(URL mode) extract repeating records automatically")
+    if extract_command:
+        c.add_argument(
+            "--schema",
+            dest="extract",
+            required=True,
+            metavar="SCHEMA",
+            help="the records to extract: a data schema file, or a template (product, article, job...)",
+        )
+        _add_typed_extract_options(c, schema_flag=False)
+        c.set_defaults(schema=None)
+    else:
+        c.add_argument("--schema", metavar="FILE", help="(URL mode) extract with a schema saved by get --save-schema")
+        _add_typed_extract_options(c)
+    c.add_argument("--sitemap", action="append", metavar="URL", help="take pages from a sitemap or robots.txt")
+    c.add_argument("--unique-key", metavar="FIELD", help="drop duplicate items (and upsert into .sqlite output)")
+    c.add_argument(
+        "--normalize-urls",
+        action="store_true",
+        help="drop tracking parameters, session ids and fragments from URLs before queueing them",
+    )
+    c.add_argument("--pipeline", metavar="FILE", help="clean, validate and filter items with a pipeline file")
+    c.add_argument(
+        "--quality",
+        metavar="FILE",
+        help="measure the items' quality and compare it with the last run's, kept in FILE (events quality_degraded, "
+        "schema_changed)",
+    )
+    c.add_argument(
+        "--allow-imports", action="store_true", help="let the --pipeline file call Python functions it names"
+    )
+    c.add_argument(
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="live status line (default: on a terminal)",
+    )
+    _add_cache_options(c)
+    _add_extract_options(c)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2258,111 +2463,19 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     c.add_argument("target", metavar="SPIDER.py[:Class] | URL")
-    c.add_argument(
-        "-o", "--output", metavar="FILE", help="save items to .jsonl/.json/.csv (default: JSON lines on stdout)"
-    )
-    c.add_argument("--crawl-dir", metavar="DIR", help="directory for pause/resume state")
-    c.add_argument(
-        "--history", metavar="FILE", help="record page fingerprints here and report what changed since the last run"
-    )
-    c.add_argument("--history-html", action="store_true", help="keep every page's HTML in the history too")
-    c.add_argument(
-        "--auto-browser",
-        action="store_true",
-        help="fetch over HTTP, and in a browser the pages that need JavaScript, learning which URL patterns do",
-    )
-    c.add_argument(
-        "--fetch-stats",
-        metavar="FILE",
-        help="(implies --auto-browser) keep what was learned about each URL pattern here for the next crawls",
-    )
-    c.add_argument(
-        "--render-if-missing",
-        action="append",
-        metavar="SELECTOR",
-        help="(implies --auto-browser) a page where this finds nothing is fetched again in a browser",
-    )
-    c.add_argument(
-        "--profile",
-        metavar="FILE",
-        help="save the site's profile and topology (sections, dead ends, orphans...) here as JSON",
-    )
-    c.add_argument(
-        "--record",
-        action="store_true",
-        help="keep this run's pages, items and events, to replay it without the network (wintergrab replay)",
-    )
-    c.add_argument(
-        "--workspace",
-        metavar="DIR",
-        help="where runs are kept (default .wintergrab; once it exists, every crawl's run is kept)",
-    )
-    c.add_argument("--project", metavar="FILE", help="(set by wintergrab run/schedule) post events to its webhooks")
-    c.add_argument("--job", metavar="NAME", help="(set by wintergrab run/schedule) the job's name, kept with the run")
-    c.add_argument(
-        "--optimize",
-        nargs="?",
-        const=True,
-        metavar="FILE",
-        help="learn which URL patterns give items: fetch those first, skip the ones that give nothing, drop "
-        "parameters that change nothing (FILE: keep what was learned for the next crawls)",
-    )
-    c.add_argument(
-        "--skip-fresh", action="store_true", help="with --history: skip pages that have probably not changed"
-    )
-    c.add_argument("--fresh", action="store_true", help="ignore saved state and start over")
-    c.add_argument("--concurrency", type=int, metavar="N", help="max requests in flight")
-    c.add_argument("--per-domain", type=int, metavar="N", help="max requests in flight per domain")
-    c.add_argument("--delay", type=float, metavar="SEC", help="minimum delay between requests to a domain")
-    c.add_argument("--no-autothrottle", action="store_true", help="fixed speed instead of adaptive")
-    c.add_argument("--max-pages", type=int, metavar="N")
-    c.add_argument("--max-items", type=int, metavar="N")
-    c.add_argument("--max-depth", type=int, metavar="N")
-    c.add_argument("--max-requests", type=int, metavar="N", help="budget: requests sent, retries included")
-    c.add_argument("--max-bytes", type=int, metavar="N", help="budget: bytes downloaded")
-    c.add_argument("--max-runtime", type=float, metavar="SEC", help="budget: seconds of crawling (across resumes)")
-    c.add_argument("--order", choices=["bfs", "dfs"], help="breadth-first (default) or depth-first")
-    c.add_argument("--events", metavar="FILE", help="write structured events (JSON lines) to FILE")
-    c.add_argument(
-        "--retry-failed", action="store_true", help="queue the requests an earlier run gave up on (needs --crawl-dir)"
-    )
-    c.add_argument("--no-robots", action="store_true", help="ignore robots.txt")
-    c.add_argument("-s", "--set", action="append", metavar="NAME=VALUE", help="override a spider attribute")
-    _add_network_options(c)
-    c.add_argument("--follow", action="append", metavar="SELECTOR", help="(URL mode) links/containers to follow")
-    c.add_argument("--allow", action="append", metavar="REGEX", help="(URL mode) only follow matching URLs")
-    c.add_argument("--deny", action="append", metavar="REGEX", help="(URL mode) never follow matching URLs")
-    c.add_argument("--any-domain", action="store_true", help="(URL mode) follow links to other domains too")
-    c.add_argument("--paginate", action="store_true", help="(URL mode) follow next-page links (auto-detected)")
-    c.add_argument("--auto", action="store_true", help="(URL mode) extract repeating records automatically")
-    c.add_argument("--schema", metavar="FILE", help="(URL mode) extract with a schema saved by get --save-schema")
-    _add_typed_extract_options(c)
-    c.add_argument("--sitemap", action="append", metavar="URL", help="take pages from a sitemap or robots.txt")
-    c.add_argument("--unique-key", metavar="FIELD", help="drop duplicate items (and upsert into .sqlite output)")
-    c.add_argument(
-        "--normalize-urls",
-        action="store_true",
-        help="drop tracking parameters, session ids and fragments from URLs before queueing them",
-    )
-    c.add_argument("--pipeline", metavar="FILE", help="clean, validate and filter items with a pipeline file")
-    c.add_argument(
-        "--quality",
-        metavar="FILE",
-        help="measure the items' quality and compare it with the last run's, kept in FILE (events quality_degraded, "
-        "schema_changed)",
-    )
-    c.add_argument(
-        "--allow-imports", action="store_true", help="let the --pipeline file call Python functions it names"
-    )
-    c.add_argument(
-        "--progress",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="live status line (default: on a terminal)",
-    )
-    _add_cache_options(c)
-    _add_extract_options(c)
+    _add_crawl_options(c)
     c.set_defaults(func=cmd_crawl)
+    x = sub.add_parser(
+        "extract",
+        help="crawl a site and extract typed records with a schema or a template (crawl --extract)",
+        description="Crawl a site from a URL and extract the records a schema (or a template) describes, from "
+        "every page that holds one. The same as crawl URL --extract SCHEMA, with every crawl option.",
+        epilog=EPILOG_EXTRACT,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    x.add_argument("target", metavar="URL")
+    _add_crawl_options(x, extract_command=True)
+    x.set_defaults(func=cmd_crawl)
 
     data = sub.add_parser(
         "data",
@@ -2843,6 +2956,31 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--browser", "-b", action="store_true", help="render the page with a headless browser")
     s.set_defaults(func=cmd_shell)
 
+    bm = sub.add_parser(
+        "benchmark",
+        help="measure how fast wintergrab runs on this machine: crawl, parse, extract, validate, deduplicate",
+        description="Measure wintergrab on this machine, against a synthetic shop served from 127.0.0.1: "
+        "crawl throughput and latency, CPU and memory, parsing, extraction, validation, URL deduplication, "
+        "start-up time, and with --browser, rendering.",
+        epilog=EPILOG_BENCHMARK,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    bm.add_argument(
+        "--scenario",
+        action="append",
+        choices=["startup", "crawl", "parse", "extract", "data", "dedupe", "browser"],
+        help="only this one (repeatable; default all but browser)",
+    )
+    bm.add_argument("--browser", action="store_true", help="also render pages in Chromium (needs the browser extra)")
+    bm.add_argument("--pages", type=int, default=100, metavar="N", help="the shop's listing pages (100)")
+    bm.add_argument("--items", type=int, default=1000, metavar="N", help="the shop's product pages (1000)")
+    bm.add_argument("--latency", type=float, default=0.0, metavar="MS", help="delay each response, as a network would")
+    bm.add_argument("--concurrency", type=int, default=32, metavar="N", help="the crawl's requests in flight (32)")
+    bm.add_argument("--rounds", type=int, default=200, metavar="N", help="pages read by parse and extract (200)")
+    bm.add_argument("--quick", action="store_true", help="a small shop and few rounds: a check in a few seconds")
+    bm.add_argument("--json", action="store_true", help="print the report as JSON")
+    bm.add_argument("-o", "--output", metavar="FILE", help="also save the report here as JSON")
+    bm.set_defaults(func=cmd_benchmark)
     d = sub.add_parser("doctor", help="check the installation and optional features")
     d.set_defaults(func=cmd_doctor)
 
