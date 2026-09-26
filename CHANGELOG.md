@@ -135,8 +135,27 @@
   for missing fields; their answers are grounded against the page text.
 - CLI: `get --extract SCHEMA [--explain] [--provenance] [--all]`,
   `crawl URL --extract SCHEMA`.
-- Measured: about 2.5 ms per 13-field product page with JSON-LD, 1.3 ms
-  without, on one core.
+- Measured with `benchmarks/bench_pages.py` (one core, parsing included):
+  6.9 ms for a 13-field record from an 11 KB product page with JSON-LD,
+  6.5 ms without structured data, 61 ms from a page with 480 KB of text.
+
+### Page and site intelligence (`wintergrab.intel`)
+
+- `classify_page(page)`: product, category, listing, article, news, job,
+  event, company, profile, review, directory, documentation, homepage, login,
+  search, archive, contact or error, from schema.org types, `og:type`, the
+  status, the URL, the layout and the wording, with the evidence and a
+  confidence from the winning score and its margin. Refined types (news,
+  search results...) build on their parent's evidence. Add rules with
+  `PageClassifier.add_rule`.
+- `classify_url(url)`: the same from the URL alone, for crawl priorities.
+- `detect_technologies(page)`: 124 fingerprints (CMS, e-commerce, JavaScript
+  frameworks, analytics, payments, consent, CDNs, hosts, servers, languages)
+  over headers, cookie names, meta tags, asset URLs, HTML markers and the
+  URL, with versions, implied technologies and evidence-based confidence.
+  Add fingerprints with `TechDetector(extra=[TechRule(...)])`.
+- Measured: 3.1 ms to classify and 0.9 ms to profile an 11 KB product page;
+  19 ms and 12 ms for a page with 480 KB of text; `classify_url` 11 µs.
 
 ## 0.2.0
 

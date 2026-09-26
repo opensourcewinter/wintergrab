@@ -175,5 +175,15 @@ records that have every required field and reports how many pages had none.
 
 ## Speed
 
-On one core (Python 3.11), extracting a 13-field product record takes about
-2.5 ms for a page with JSON-LD and 1.3 ms for one without, parsing included.
+`benchmarks/bench_pages.py` (one core of a 4-vCPU cloud VM, Python 3.11,
+median of 5 runs of 200 pages, parsing included) extracts a 13-field product
+record in:
+
+| Page | Parse only | `extract` |
+|---|---:|---:|
+| product page with JSON-LD (11 KB) | 0.26 ms | 6.9 ms |
+| product page without structured data (10 KB) | 0.26 ms | 6.5 ms |
+| product page, 480 KB of text | 1.5 ms | 61 ms |
+
+Most of the time goes to the heuristics that read the whole page (the text
+patterns and the DOM conventions), so it grows with the page's size.

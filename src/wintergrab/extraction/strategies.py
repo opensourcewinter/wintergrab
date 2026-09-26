@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from ..data.normalize import iter_numbers, normalize_availability, normalize_phone, parse_rating
 from ..parser import Selector
+from ..parser.text import tag_name, text_content
 from .page import PageContext, schema_types
 from .schemaorg import FIELD_PATHS, META_KEYS, camel, candidate_names, field_key, read_path, target_types
 
@@ -405,9 +406,11 @@ def _label_pairs(page: PageContext) -> list[tuple[str, str, str]]:
         if dd is not None and dd.tag == "dd" and dt.text and dd.text:
             pairs.append((field_key(dt.text.rstrip(":： ")), dd.text, "dl"))
     for row in root.css("tr"):
-        cells = row.css("th, td")
-        if len(cells) == 2 and cells[0].text and cells[1].text:
-            pairs.append((field_key(cells[0].text.rstrip(":： ")), cells[1].text, "table"))
+        cells = [cell for cell in row.root if tag_name(cell) in ("th", "td")] if row.root is not None else []
+        if len(cells) == 2:
+            label, value = text_content(cells[0]), text_content(cells[1])
+            if label and value:
+                pairs.append((field_key(label.rstrip(":： ")), value, "table"))
     for line in page.lines:
         match = _LABEL_SPLIT.match(line)
         if match and match.group(2):
@@ -445,10 +448,14 @@ def _class_has(*words: str) -> str:
     return " or ".join(tests)
 
 
-# Parts of a page about other things than its subject.
-_ASIDE = "ancestor::*[" + _class_has("related", "recommend", "similar", "also-", "upsell", "cross-sell", "carousel",
-                                      "sidebar", "footer", "header", "cart", "basket", "minicart") + " or self::footer or self::nav or self::aside]"  # fmt: skip
-_INNER_PRICE = ".//*[" + _class_has("price", "amount") + "]"
+# Parts of a page about other things than its subject: marked with these words, or these elements.
+_ASIDE_WORDS = ("related", "recommend", "similar", "also-", "upsell", "cross-sell", "carousel", "sidebar", "footer",
+                "header", "cart", "basket", "minicart")  # fmt: skip
+_ASIDE_TAGS = ("footer", "nav", "aside")
+_ASIDE_ROLES = (
+    "descendant-or-self::*[@role='banner' or @role='contentinfo' or @role='navigation' or @role='complementary']"
+)
+_STRUCK = frozenset({"del", "s", "strike"})
 _OLD_PRICE = re.compile(r"old|was|regular|compare|strike|original|list|before|rrp|msrp|crossed", re.I)
 _DOM_WORDS = {
     "price": ("price", "amount"),
@@ -465,13 +472,13 @@ _MARKED = "descendant-or-self::*[@class or @id or @itemprop or @data-testid or @
 _BREADCRUMB_LINKS = "descendant-or-self::*[" + _class_has("breadcrumb") + "]//a"
 
 
-def _marked(page: PageContext, kind: str) -> list[Selector]:
-    """Elements whose class, id, itemprop, data-testid or rel mentions one of ``kind``'s words, in page order.
+def _markers(page: PageContext) -> list[tuple[Selector, str]]:
+    """``(element, its lower-cased class, id, itemprop, data-testid and rel)`` for the marked elements, in page order.
 
-    The page's marked elements are listed once (one XPath query), so each
-    field kind costs a scan of that short list instead of a query over the page.
+    Listed once per page (one XPath query without predicates on the values):
+    word tests over this short list are far cheaper than ``contains()`` in XPath.
     """
-    cache = page.__dict__.setdefault("_marked", {})
+    cache = page.__dict__.setdefault("_markers", {})
     key = id(page.root)
     index = cache.get(key)
     if index is None:
@@ -482,8 +489,33 @@ def _marked(page: PageContext, kind: str) -> list[Selector]:
             )
             for el in page.root.xpath(_MARKED)
         ]
+    return index  # type: ignore[no-any-return]
+
+
+def _marked(page: PageContext, kind: str) -> list[Selector]:
+    """Elements whose class, id, itemprop, data-testid or rel mentions one of ``kind``'s words, in page order."""
     words = _DOM_WORDS[kind]
-    return [el for el, marker in index if any(word in marker for word in words)]
+    return [el for el, marker in _markers(page) if any(word in marker for word in words)]
+
+
+def _asides(page: PageContext) -> set[Any]:
+    """The page's elements about other things (related products, the cart, the footer...), found once."""
+    cache = page.__dict__.setdefault("_asides", {})
+    key = id(page.root)
+    if key not in cache:
+        found = {el.root for el, marker in _markers(page) if any(word in marker for word in _ASIDE_WORDS)}
+        root = page.root.root
+        if root is not None:
+            found.update(root.iter(*_ASIDE_TAGS))
+            found.update(el.root for el in page.root.xpath(_ASIDE_ROLES))
+            # the site's header, not an article's or a product's own <header>
+            found.update(
+                header
+                for header in root.iter("header")
+                if not any(tag_name(a) in ("main", "article") for a in header.iterancestors())
+            )
+        cache[key] = found
+    return cache[key]  # type: ignore[no-any-return]
 
 
 _CART_BUTTON = re.compile(
@@ -491,7 +523,8 @@ _CART_BUTTON = re.compile(
 )
 _SOLD_OUT_BUTTON = re.compile(r"sold out|out of stock|notify me|currently unavailable|ausverkauft|épuisé|agotado", re.I)
 _REVIEW_COUNT = re.compile(
-    r"(\d[\d,.\s]*)\s*(?:reviews?|ratings?|customer reviews|bewertungen|avis|opiniones|recensioni)", re.I
+    r"(\d(?:\d{0,2}(?:[,.\s]\d{3})+|\d*))\s*(?:reviews?|ratings?|customer reviews|bewertungen|avis|opiniones|recensioni)",
+    re.I,
 )
 
 
@@ -544,17 +577,24 @@ class DomHeuristics(Strategy):
 
     def _price(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
         wants_old = bool(_OLD_PRICE.search(f.name))
+        marked = _marked(page, "price")
+        nodes = {match.root for match in marked if match.root is not None}
+        # elements wrapping other price elements: look at those instead
+        wrappers = {parent for node in nodes for parent in node.iterancestors() if parent in nodes}
+        asides = _asides(page) if page.scope is None else set()
         out = []
-        for match in _marked(page, "price"):
-            if match.xpath(_INNER_PRICE):
-                continue  # a wrapper around price elements: look at those instead
-            if page.scope is None and match.xpath(_ASIDE):
+        for match in marked:
+            node = match.root
+            if node is None or node in wrappers:
+                continue
+            ancestors = list(node.iterancestors())
+            if asides and any(a in asides for a in ancestors):
                 continue  # related products, the cart, the footer...
             text = match.attr("content") or match.text
             if not text or len(text) > 40 or not any(ch.isdigit() for ch in text):
                 continue
             marker = " ".join(filter(None, [match.attr("class"), match.attr("id")]))
-            struck = match.tag in ("del", "s", "strike") or bool(match.xpath("ancestor::del | ancestor::s"))
+            struck = match.tag in _STRUCK or any(tag_name(a) in _STRUCK for a in ancestors)
             if (struck or bool(_OLD_PRICE.search(marker))) != wants_old:
                 continue
             classes = (match.attr("class") or "").split()
@@ -695,9 +735,16 @@ class DomHeuristics(Strategy):
 # --------------------------------------------------------------------------- #
 # text patterns
 # --------------------------------------------------------------------------- #
+_SIGN_BEFORE = ("US$", "CA$", "AU$", "NZ$", "HK$", "S$", "$", "€", "£", "¥", "₹", "₩", "₽", "₺", "₪", "R$", "Rs.", "Rs",
+                "CHF", "USD", "EUR", "GBP", "INR", "JPY")  # fmt: skip
+_SIGN_AFTER = r"(?:€|EUR|USD|GBP|kr|zł|Kč|Ft|lei|CHF|₹|₽)"
+# "$ 12.99", "12,99 €". Every alternative starts with a literal character, so the regular expression
+# engine skips to the characters a price can start with instead of trying every position of the text.
 _MONEY_TEXT = re.compile(
-    r"(?:(?:US|CA|AU|NZ|HK|S)?\$|€|£|¥|₹|₩|₽|₺|₪|R\$|Rs\.?|CHF|USD|EUR|GBP|INR|JPY)\s?\d[\d.,'\s]{0,14}\d?"
-    r"|\d[\d.,'\s]{0,14}\d?\s?(?:€|EUR|USD|GBP|kr|zł|Kč|Ft|lei|CHF|₹|₽)",
+    "|".join(
+        [re.escape(sign) + r"\s?\d[\d.,'\s]{0,14}\d?" for sign in _SIGN_BEFORE]
+        + [digit + r"[\d.,'\s]{0,14}\d?\s?" + _SIGN_AFTER for digit in "0123456789"]
+    )
 )
 _EMAIL_TEXT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _PHONE_TEXT = re.compile(r"(?<![\w/])\+?\(?\d[\d\s().-]{6,18}\d(?![\w/])")
@@ -735,7 +782,7 @@ class Patterns(Strategy):
         if kind == "price":
             found = [m.group(0).strip() for m in _MONEY_TEXT.finditer(text)]
         elif kind == "email":
-            found = _EMAIL_TEXT.findall(text)
+            found = _EMAIL_TEXT.findall(text) if "@" in text else []
         elif kind == "phone":
             country = f.country or None
             found = [m.group(0) for m in _PHONE_TEXT.finditer(text) if normalize_phone(m.group(0), country=country)]

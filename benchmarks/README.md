@@ -257,3 +257,33 @@ One core of a 4-vCPU cloud VM, Python 3.11.15, median of 5 runs:
 
 URL normalization is the largest single cost inside `Schema.normalize`
 (about a fifth of it for the benchmark's all-distinct URLs).
+
+## Page analysis
+
+`bench_pages.py` measures extraction, page classification and technology
+detection on synthetic pages (no network). Every measurement builds a fresh
+`Response`, so HTML parsing is included, as in a crawl; "parse only" is that
+baseline.
+
+```bash
+.venv/bin/python benchmarks/bench_pages.py --repeat 5 --rounds 200
+```
+
+One core of a 4-vCPU cloud VM, Python 3.11.15, median of 5 runs of 200
+pages (10 for the large page):
+
+| Page | parse only | Extractor.extract (13 fields) | classify_page | detect_technologies |
+|---|---:|---:|---:|---:|
+| product page, JSON-LD (11 KB) | 0.26 ms | 6.90 ms | 3.10 ms | 0.88 ms |
+| product page, no structured data (10 KB) | 0.26 ms | 6.49 ms | 3.03 ms | 0.87 ms |
+| category page, 60 cards (10 KB) | 0.29 ms | 5.97 ms | 2.57 ms | 0.64 ms |
+| large product page (482 KB) | 1.47 ms | 61.08 ms | 19.14 ms | 11.82 ms |
+
+`classify_url`: 11.1 µs per URL.
+
+The large page is mostly text. Scanning long texts is where regular
+expressions without a literal start cost the most: the money pattern was
+restructured so every alternative starts with a literal character (36 ms to
+2 ms over 480 KB of text without prices), and technology fingerprints only
+scan a page when it contains their literal parts (134 ms to 12 ms on this page, with the
+same detections).

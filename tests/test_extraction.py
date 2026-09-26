@@ -135,6 +135,26 @@ def test_pages_without_structured_data(extractor: Extractor) -> None:
     assert record.fields["description"].validation == "absent"
 
 
+def test_dom_price_heuristics_and_long_texts() -> None:
+    schema = {"name": "product", "fields": {"price": "money", "list_price": "money", "review_count": "integer"}}
+    html = f"""<header><span class="price">$1.00</span></header>
+    <div class="product"><div class="price-box"><span class="price">$249.00</span>
+    <s><span class="price">$299.00</span></s></div><p>Rated 4.8/5 from 2 301 reviews</p></div>
+    <main><article><header><h1>Chair</h1></header></article></main><div role="banner"><b class="price">$2</b></div>
+    <div class="related-products"><span class="price">$19.99</span></div><footer><span class="price">$5</span></footer>
+    <p>{"lorem ipsum " * 20000}</p>"""
+    record = Extractor(schema).extract(html)
+    # the wrapper (.price-box) and prices in the header, related products and footer are not the price;
+    # a price inside <s> is the old price
+    assert record.data["price"] == {"amount": 249, "currency": "USD"}
+    assert record.fields["price"].source == "dom:span.price"
+    assert record.data["list_price"] == {"amount": 299, "currency": "USD"}
+    assert record.data["review_count"] == 2301
+    # a product's own <header> is content
+    own = '<article class="product"><header><h1>Chair</h1><span class="price">$10</span></header></article>'
+    assert Extractor(schema).extract(own).data["price"] == {"amount": 10, "currency": "USD"}
+
+
 def test_selectors_and_embedded_json() -> None:
     schema = {"name": "item", "fields": {
         "title": {"type": "string", "selectors": [".t::text"]},
