@@ -96,6 +96,13 @@ async for item in QuotesSpider().stream():  # consume items live
 item (changed or not) to keep it, or `None` to drop it. This is the place for
 cleaning, validation or saving to a database.
 
+An output that fails does not stop the crawl: a full disk, or a database that
+stopped answering, whether on an item's write, a flush, a checkpoint or its
+close. The error is logged, `stats["export_errors"]` counts it, and
+`stats["items_not_written"]` counts the items it lost, when the error says
+how many (a database's batch). `wintergrab crawl` then says how many items
+were not written, and exits with status 1.
+
 ## Sessions
 
 A session is a fetcher with its own cookies and settings. By default a spider

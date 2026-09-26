@@ -809,6 +809,14 @@ def cmd_goal(args: argparse.Namespace) -> int:
         if plan.goal.monitor:
             again = f"wintergrab goal --plan {args.save_plan or args.plan or 'PLAN.json'} --yes -o {args.output or 'OUT.jsonl'}"
             print(f"to watch for changes ({plan.goal.monitor}), run this again on a schedule: {again}", file=sys.stderr)
+    if result.counts["export_errors"]:
+        if args.verbose < 0:  # (the summary, which says it, was not printed)
+            from .spider.exporters import output_failures
+
+            print(
+                output_failures(result.counts["export_errors"], result.counts["not_written"], output), file=sys.stderr
+            )
+        return 1
     return 0
 
 
@@ -1738,6 +1746,14 @@ def cmd_crawl(args: argparse.Namespace) -> int:
             f"{stats['dead_letters']} failed request(s) recorded; retry just those with --retry-failed",
             file=sys.stderr,
         )
+    if stats.get("export_errors"):
+        from .spider.exporters import output_failures
+
+        print(
+            output_failures(stats["export_errors"], stats.get("items_not_written", 0), spider.output or "-"),
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 

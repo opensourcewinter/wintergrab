@@ -359,6 +359,42 @@ def test_postgres(table) -> None:
 
 
 @needs_postgres
+def test_postgres_connects_again_when_the_server_hangs_up(table, monkeypatch, caplog) -> None:
+    import psycopg
+
+    from wintergrab.errors import ExportError
+    from wintergrab.storage import postgres
+
+    url, _ = table
+
+    def hang_up(exporter: Any) -> None:  # (a restart, a failover, an idle timeout)
+        with psycopg.connect(str(POSTGRES), autocommit=True) as admin:
+            admin.execute("SELECT pg_terminate_backend(%s)", (exporter._conn.info.backend_pid,))
+
+    exporter = open_exporter(url, unique_key="url")
+    exporter.write({"url": "/1", "n": 1})
+    exporter.flush()
+    hang_up(exporter)
+    exporter.write({"url": "/2", "n": 2, "price": 9.5})  # (a new column, asked for on the lost connection)
+    hang_up(exporter)
+    exporter.write({"url": "/3", "n": 3})
+    exporter.close()  # (the rows waiting, written on the lost connection: again, on a new one)
+    assert sorted((r["url"], r.get("price")) for r in read_records(url)) == [("/1", None), ("/2", 9.5), ("/3", None)]
+    assert caplog.text.count("the database hung up; connected again") == 2
+
+    exporter = open_exporter(url, unique_key="url", append=True)
+    exporter.write({"url": "/4", "n": 4})
+    hang_up(exporter)
+
+    def gone(target: str) -> Any:
+        raise ConfigurationError("cannot connect: Connection refused")
+
+    monkeypatch.setattr(postgres, "_connect", gone)  # (and it does not come back)
+    with pytest.raises(ExportError, match="1 item\\(s\\) not written: the database hung up, and does not answer again"):
+        exporter.close()
+
+
+@needs_postgres
 def test_postgres_refuses_what_it_did_not_create(table) -> None:
     import psycopg
 
@@ -596,6 +632,40 @@ def test_mysql_a_key_whose_column_widens(mysql_table) -> None:
     write(url, [{"sku": "A-3", "n": 3}, {"sku": 2, "n": 22}], unique_key="sku", append=True)  # text: widened
     assert _mysql_columns(name)["sku"] == "longtext" and _mysql_columns(name)["_wg_key_sku"] == "binary"
     assert [(r["sku"], r["n"]) for r in read_records(url)] == [("1", 1), ("2", 22), ("A-3", 3)]  # still upserted
+
+
+@needs_mysql
+def test_mysql_connects_again_when_the_server_hangs_up(mysql_table, monkeypatch, caplog) -> None:
+    from wintergrab.errors import ExportError
+    from wintergrab.storage import mysql
+
+    url, _ = mysql_table
+
+    def hang_up(exporter: Any) -> None:  # (a restart, a failover, wait_timeout)
+        with _mysql() as admin, admin.cursor() as cursor:
+            cursor.execute(f"KILL {exporter._conn.thread_id()}")
+
+    exporter = open_exporter(url, unique_key="url")
+    exporter.write({"url": "/1", "n": 1})
+    exporter.flush()
+    hang_up(exporter)
+    exporter.write({"url": "/2", "n": 2, "price": 9.5})  # (a new column, asked for on the lost connection)
+    hang_up(exporter)
+    exporter.write({"url": "/3", "n": 3})
+    exporter.close()  # (the rows waiting, written on the lost connection: again, on a new one)
+    assert sorted((r["url"], r.get("price")) for r in read_records(url)) == [("/1", None), ("/2", 9.5), ("/3", None)]
+    assert caplog.text.count("the database hung up; connected again") == 2
+
+    exporter = open_exporter(url, unique_key="url", append=True)
+    exporter.write({"url": "/4", "n": 4})
+    hang_up(exporter)
+
+    def gone(target: str) -> Any:
+        raise ConfigurationError("cannot connect: Connection refused")
+
+    monkeypatch.setattr(mysql, "_connect", gone)  # (and it does not come back)
+    with pytest.raises(ExportError, match="1 item\\(s\\) not written: the database hung up, and does not answer again"):
+        exporter.close()
 
 
 @needs_mysql

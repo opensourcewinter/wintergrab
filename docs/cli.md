@@ -106,7 +106,9 @@ Items are streamed as JSON Lines to stdout unless you pass `-o FILE`
 (`.jsonl`, `.json`, `.csv`, `.sqlite`, `.parquet`, `.xlsx`, `.duckdb`, or a
 `postgresql://`, `mysql://`, `mongodb://` or `s3://` URL: see [storage.md](storage.md)). A summary goes to stderr at the end, with a
 short diagnosis of the most common failures (the full
-[failure report](observability.md#failure-reports) with `-v`).
+[failure report](observability.md#failure-reports) with `-v`). When the
+output failed (a full disk, a database that stopped answering), the summary
+says how many items were not written, and the exit status is 1.
 
 ```bash
 wintergrab crawl examples/05_quotes_spider.py -o quotes.jsonl
@@ -275,6 +277,8 @@ change nothing; `--no-optimize` fetches every page the plan leads to. A
 request that names no site can ask a search API which sites rank for it
 (`--find-sites`, see [search.md](search.md#sites-for-a-goal)): they are
 shown, for you to pick one. See [goals.md](goals.md#records-from-the-sites-api).
+When records could not be written to the output, the summary says how many,
+and the exit status is 1.
 
 ## `wintergrab search`: search results, and what they say
 

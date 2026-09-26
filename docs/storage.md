@@ -138,7 +138,9 @@ wintergrab crawl https://shop.example/ --auto -o "postgresql://crawler@db.exampl
 
 The table is created on first use: `items`, unless the URL says
 `?table=NAME` or `?table=schema.name`. The URL's other parameters
-(`sslmode=require`...) are the connection's.
+(`sslmode=require`...) are the connection's. Connecting gives up after 10
+seconds, unless the URL says `connect_timeout=N` or `PGCONNECT_TIMEOUT` is
+set: without a limit, a host that vanished held the crawl for minutes.
 
 Each new field becomes a column, typed from its first value: `boolean`,
 `bigint`, `double precision`, `text`, or `jsonb` for nested values. When a
@@ -158,6 +160,13 @@ table gives the field names back.
   first, as a file output is replaced. A resumed crawl adds to it.
 - **Batches**: rows are written in batches of 64 or once a second, and on
   checkpoints.
+- **A server that hangs up** (a restart, a failover, an idle timeout) is
+  connected to again, and what was being written is written again, once. If
+  it does not answer, the items of that batch are an error that says how
+  many were not written, and the crawl goes on (counted in its stats:
+  `export_errors`, `items_not_written`). The next batch connects again, so
+  the output takes items again once the server is back. The same holds for
+  MySQL and MariaDB.
 
 wintergrab only writes to tables it created. It keeps their fields and
 columns in a `_wintergrab_columns` table beside them. A table of the same

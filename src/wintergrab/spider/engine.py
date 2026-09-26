@@ -802,7 +802,7 @@ class Engine:
                     path.with_name(path.name + suffix).unlink(missing_ok=True)
         await self._close_pipelines()
         if self.exporter is not None:
-            self.exporter.close()
+            self._to_output(self.exporter.close)
         restarts = sum(int(getattr(self.sessions.get(name), "restarts", 0) or 0) for name in self.sessions)
         if restarts:  # (a browser that crashed, or was killed, and was started again)
             self.stats["browser_restarts"] = restarts
@@ -937,10 +937,24 @@ class Engine:
         if isinstance(self.scheduler, (DiskScheduler, SharedScheduler)):
             self.scheduler.ack(request)
 
+    def _to_output(self, action: Callable[[], None], *, item: bool = False) -> None:
+        """``action`` on the output (a write, a flush, its close): an error is counted and logged, and the crawl goes
+        on. ``items_not_written`` counts the items the error says it left unwritten (an item's own write: that one)."""
+        try:
+            action()
+        except Exception as exc:
+            lost = getattr(exc, "items", None)
+            lost = 1 if lost is None and item else lost
+            self.stats.inc("export_errors")
+            if lost:
+                self.stats.inc("items_not_written", lost)
+            output = redact_url(str(self.spider.output))
+            log.error("could not write %s to %s: %s", "item" if item else "items", output, describe(exc))
+
     def _save_state(self, pending: list[Request]) -> None:
         assert self.checkpoint is not None
         if self.exporter is not None:
-            self.exporter.flush()  # items on disk must match the saved queue
+            self._to_output(self.exporter.flush)  # items on disk must match the saved queue
         state: dict[str, Any] = {
             "spider": self.spider.name,
             "stats": dict(self.stats),
@@ -997,7 +1011,7 @@ class Engine:
         if isinstance(self.scheduler, (DiskScheduler, SharedScheduler)) and now - self._last_commit >= 1.0:
             # Output first, then the queue: a crash may redo work, never lose it.
             if self.exporter is not None:
-                self.exporter.flush()
+                self._to_output(self.exporter.flush)
             self.scheduler.commit()  # bounds what a crash can lose to about a second of work
             self._last_commit = now
         if self.checkpoint is not None and now - self._last_checkpoint >= spider.checkpoint_interval:
@@ -1806,11 +1820,8 @@ class Engine:
         if self.recorder is not None:
             self.recorder.item(processed)
         if self.exporter is not None:
-            try:
-                self.exporter.write(processed)
-            except Exception as exc:
-                self.stats.inc("export_errors")
-                log.error("could not write item to %s: %s", redact_url(str(self.spider.output)), describe(exc))
+            exporter = self.exporter
+            self._to_output(lambda: exporter.write(processed), item=True)
             if self._output_budget:
                 exhausted = self.budget.check_output()
                 if exhausted is not None:

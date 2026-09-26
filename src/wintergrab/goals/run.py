@@ -41,6 +41,7 @@ from ..fetchers.strategy import FetchStrategy
 from ..intel.classify import classify_page
 from ..request import Request
 from ..spider import CrawlResult, Spider
+from ..spider.exporters import output_failures
 from ..utils import host_of
 from .api import MAX_API_PAGES, ApiSource, next_page, records_of, total_of
 from .goal import Goal
@@ -284,6 +285,8 @@ class GoalResult:
         """The records, the fields they have, and what was left out and why."""
         c = self.counts
         lines = [f"{c['records']:,} record(s)" + (f" -> {self.output}" if self.output else "")]
+        if c["export_errors"]:
+            lines.append(output_failures(c["export_errors"], c["not_written"], self.output or "-"))
         if c["records"] and self.found:
             share = ", ".join(f"{f} {n / c['records']:.0%}" for f, n in self.found.items())
             lines.append(f"fields found: {share}")
@@ -391,6 +394,8 @@ def run_plan(
     counts["pages"] = int(crawl.stats.get("pages", 0))
     counts["browser_pages"] = int(crawl.stats.get("browser_pages", 0))
     counts["errors"] = int(crawl.stats.get("errors", 0))
+    counts["export_errors"] = int(crawl.stats.get("export_errors", 0))
+    counts["not_written"] = int(crawl.stats.get("items_not_written", 0))
     counts["record_pages"] = spider.record_pages
     counts["incomplete"] = spider.incomplete
     counts["api_pages"] = spider.api_pages

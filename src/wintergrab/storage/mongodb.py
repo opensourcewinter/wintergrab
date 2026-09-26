@@ -254,11 +254,13 @@ class MongoExporter(Exporter):
             written = owners[errors[0].get("index", 0)]
             raise ExportError(
                 f"{self.collection_name}: {len(self._docs) - written} item(s) not written: "
-                f"{errors[0].get('errmsg', _message(exc))}"
+                f"{errors[0].get('errmsg', _message(exc))}",
+                items=len(self._docs) - written,
             ) from None
         except self._pymongo.errors.PyMongoError as exc:
             raise ExportError(
-                f"{self.collection_name}: {len(self._docs)} item(s) not written: {_message(exc)}"
+                f"{self.collection_name}: {len(self._docs)} item(s) not written: {_message(exc)}",
+                items=len(self._docs),
             ) from None
         finally:
             self._docs.clear()

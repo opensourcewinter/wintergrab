@@ -1090,6 +1090,32 @@ an error that says so, not a setting silently ignored
 
 ### Fixes
 
+- A PostgreSQL or MySQL output whose server hung up (a restart, a
+  failover, an idle timeout) lost every item after it: the rows waiting
+  were dropped, each write after failed, and the errors were the driver's
+  own (`OperationalError`, `InterfaceError (0, '')`), not an `ExportError`
+  saying how many items were not written. The output now connects again
+  and writes the batch, or adds the column, again, once; a server that does
+  not answer is an `ExportError` that says so and how many items. Tried with
+  the server ending the connection (`pg_terminate_backend`, `KILL`) between
+  writes, before a new column and before a flush: every item written.
+
+- An output that failed anywhere but on an item's write stopped the crawl or
+  its shutdown: at the flush a crawl with a disk or shared frontier makes
+  every second, at a checkpoint (the crawl ended with the error), or at its
+  close (the sessions, the cache and the rest of the shutdown were skipped).
+  Every write, flush and close of the output now goes one way: the error is
+  logged, `export_errors` and `items_not_written` (the items it lost, when
+  it says how many: `ExportError.items`) count it, and the crawl goes on.
+  `wintergrab crawl` and `wintergrab goal` say how many items were not
+  written, and exit with status 1. A flush that failed is no longer tried
+  again with each item after it.
+
+- PostgreSQL connections (outputs, and the shared frontier) give up after 10
+  seconds unless the URL says `connect_timeout` or `PGCONNECT_TIMEOUT` is
+  set. libpq's own default waited more than a minute for a host that had
+  vanished (measured), and the crawl waited with it.
+
 - A browser that crashed, or that the system killed, was never started
   again: every page after it failed ("Target page, context or browser has
   been closed"), to the end of the crawl. It is now started again for the

@@ -123,10 +123,11 @@ class SharedScheduler:
         self._counted = 0.0
         self._throttle: AutoThrottle | None = None
         self._closed = False
-        from ..storage.postgres import _psycopg
+        from ..storage.postgres import _psycopg, connect_options
 
         self._psycopg = _psycopg()
         self._dsn = urlunsplit(parts._replace(query=urlencode([(k, v) for k, v in query if k != "crawl"])))
+        self._options = connect_options(self._dsn)
         self._db = self._connect()
         self.seen = _Seen(self)
         #: Whether the crawl was running already (this process joins it).
@@ -135,7 +136,7 @@ class SharedScheduler:
     # -- the database --------------------------------------------------------------------------- #
     def _connect(self) -> Any:
         try:
-            db = self._psycopg.connect(self._dsn, autocommit=False)
+            db = self._psycopg.connect(self._dsn, autocommit=False, **self._options)
             # Commits need not wait for the disk: what a server crash could lose of the last moments is
             # redone (a request is deleted in the same transaction as the requests that came of it are queued).
             db.execute("SET synchronous_commit TO off")
