@@ -92,6 +92,24 @@ def test_sqlite_reads_back(tmp_path) -> None:
         list(read_records(tmp_path / "other.db"))
 
 
+def test_csv_widens_for_keys_later_items_bring(tmp_path) -> None:
+    path = tmp_path / "items.csv"
+    exporter = write(path, ITEMS)  # (its columns were the first item's: the others' keys were left out)
+    assert exporter.bytes_written == path.stat().st_size and not list(tmp_path.glob("*.widening"))
+    rows = list(read_records(path))
+    assert list(rows[0]) == ["url", "price", "tags", "ok", "code", "offer", "note", "big", "value"]
+    assert rows[0]["offer"] == "" and rows[1]["offer"] == '{"amount": 9.99, "currency": "EUR"}'
+    assert (rows[2]["note"], rows[2]["big"], rows[3]["value"]) == ('=HYPERLINK("http://evil.example")', str(2**70),
+                                                                   "a plain value")  # fmt: skip
+    # a resumed output, with a byte-order mark as a spreadsheet writes it: its columns continued, then widened
+    path.write_bytes(b"\xef\xbb\xbf" + path.read_bytes())
+    write(path, [{"url": "https://s.example/5", "price": 3}, {"url": "https://s.example/6", "rank": 1}], append=True)
+    rows = list(read_records(path))
+    first, *_, last = rows[0]  # (the first column's name without the mark)
+    assert len(rows) == 6 and (first, last, len(rows[0])) == ("url", "rank", 10)
+    assert (rows[4]["price"], rows[4]["rank"], rows[5]["rank"], rows[0]["rank"]) == ("3", "", "1", "")
+
+
 def test_crawls_write_them_and_data_commands_read_them(site, tmp_path, capsys) -> None:
     pytest.importorskip("pyarrow")
     pytest.importorskip("openpyxl")

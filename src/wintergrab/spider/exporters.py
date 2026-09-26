@@ -192,28 +192,30 @@ class JsonExporter(Exporter):
 
 
 class CsvExporter(Exporter):
-    """CSV with columns taken from the first item (nested values become JSON)."""
+    """CSV with a column for every key of the items (nested values become JSON). The columns are those of the
+    first item; an item with a key the file has no column for widens it: the rows so far are rewritten under
+    the wider header, their new cells empty."""
 
     def __init__(self, path: Path, *, append: bool) -> None:
         super().__init__(path, append=append)
-        self._fields: list[str] | None = None
+        self._fields: list[str] = []
         resuming = append and path.exists() and path.stat().st_size > 0
         if resuming:
-            with open(path, newline="", encoding="utf-8") as fh:
-                header = next(csv.reader(fh), None)
-            self._fields = header or None
+            with open(path, newline="", encoding="utf-8-sig") as fh:
+                self._fields = next(csv.reader(fh), [])
+        self._known = set(self._fields)
         self._fh = open(path, "a" if resuming else "w", newline="", encoding="utf-8")  # noqa: SIM115 - closed in close()
         self._out = _CountingWriter(self._fh, self)
         self._writer: csv.DictWriter[str] | None = None
         if self._fields:
-            self._writer = csv.DictWriter(self._out, fieldnames=self._fields, extrasaction="ignore")
+            self._writer = csv.DictWriter(self._out, fieldnames=self._fields)
 
     def write(self, item: Any) -> None:
         row = to_dict(item)
         if not isinstance(row, Mapping):
             row = {"value": row}
         flat = {
-            k: (
+            str(k): (
                 v
                 if isinstance(v, (str, int, float, bool)) or v is None
                 else json.dumps(v, default=_json_default, ensure_ascii=False)
@@ -222,11 +224,40 @@ class CsvExporter(Exporter):
         }
         if self._writer is None:
             self._fields = list(flat)
-            self._writer = csv.DictWriter(self._out, fieldnames=self._fields, extrasaction="ignore")
+            self._known = set(flat)
+            self._writer = csv.DictWriter(self._out, fieldnames=self._fields)
             self._writer.writeheader()
+        elif not self._known.issuperset(flat):
+            self._widen([k for k in flat if k not in self._known])
+        assert self._writer is not None
         self._writer.writerow(flat)
         self.count += 1
         self._maybe_flush()
+
+    def _widen(self, new: list[str]) -> None:
+        """Add columns for ``new`` keys: the file so far is rewritten under the wider header (then replaced in
+        one step, so a crash leaves the old one)."""
+        self._fh.close()
+        before = self.path.stat().st_size
+        fields = [*self._fields, *new]
+        temp = self.path.with_name(self.path.name + ".widening")
+        with (
+            open(self.path, newline="", encoding="utf-8-sig") as source,
+            open(temp, "w", newline="", encoding="utf-8") as target,
+        ):
+            rows = csv.reader(source)
+            next(rows, None)  # the old header
+            out = csv.writer(target)
+            out.writerow(fields)
+            for cells in rows:
+                out.writerow(cells + [""] * (len(fields) - len(cells)))
+        os.replace(temp, self.path)
+        if self.bytes_written is not None:
+            self.bytes_written += self.path.stat().st_size - before
+        self._fields, self._known = fields, set(fields)
+        self._fh = open(self.path, "a", newline="", encoding="utf-8")  # noqa: SIM115 - closed in close()
+        self._out = _CountingWriter(self._fh, self)
+        self._writer = csv.DictWriter(self._out, fieldnames=fields)
 
     def flush(self) -> None:
         self._fh.flush()

@@ -919,6 +919,10 @@ an error that says so, not a setting silently ignored
 - A PostgreSQL run without `unique_key` after one with it failed on the
   first repeated key, the earlier run's unique index still in place. The
   index now goes with the key.
+- A CSV output took its columns from the first item and left out, without a
+  word, the keys only later items had. An item with a new key now widens
+  the file: the rows so far are rewritten under the wider header, their new
+  cells empty. A resumed CSV's header is read past a byte-order mark.
 
 ### Documentation and contributing
 

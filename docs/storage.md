@@ -7,7 +7,7 @@ file extension or URL picks the format:
 |---|---|---|
 | `items.jsonl` (`.ndjson`, `.jl`) | One JSON object per line: the best format for big, resumable crawls | |
 | `items.json` | One JSON array | |
-| `items.csv` | CSV, the columns from the first item, nested values as JSON | |
+| `items.csv` | CSV, a column per key (an item with a new key widens the file), nested values as JSON | |
 | `items.sqlite` (`.sqlite3`, `.db`) | Rows of an `items` table, one column per field, upserted on `unique_key` | |
 | `items.parquet` (`.pq`) | A Parquet file, a typed column per field | `pip install "wintergrab[parquet]"` |
 | `items.xlsx` | An Excel workbook, a column per field | `pip install "wintergrab[xlsx]"` |
