@@ -52,6 +52,7 @@ class Shop(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         if request.get("operationName") == "Reviews":
+            time.sleep(0.3)  # answered after the call the page made next: the order is the page's, not the answers'"
             edges = [{"node": {"id": f"r{n}", "author": f"A{n}", "stars": 5 - n, "text": f"Warm {n}"}, "cursor": f"r{n}"}
                      for n in (1, 2)]  # fmt: skip
             answer = {"data": {"reviews": {"edges": edges, "pageInfo": {"hasNextPage": True, "endCursor": "r2"}}}}

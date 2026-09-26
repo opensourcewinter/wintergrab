@@ -916,6 +916,10 @@ an error that says so, not a setting silently ignored
 
 - The SQLite output stopped with an `OverflowError` on an integer beyond 64
   bits; such integers are now text, as in the other outputs.
+- A browser's recorded calls (`capture=True`) were in the order their
+  answers came back, so a page's API calls and GraphQL operations were
+  listed in a different order from run to run. They are now in the order
+  the page made them.
 
 - A site survey (`inspect`, `plan_goal`) read robots.txt and the sitemaps
   (sitemap indexes included) outside the network policy, proxies and cache

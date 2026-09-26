@@ -111,7 +111,8 @@ def _discover_chromium(headless: bool = True) -> list[str]:
 
 @dataclass
 class CapturedResponse:
-    """An XHR/fetch response recorded while a page rendered (see ``capture=``)."""
+    """An XHR/fetch response recorded while a page rendered (see ``capture=``). ``order`` is the order the page
+    made its request in (``response.captured`` is sorted by it): answers may come back in any order."""
 
     url: str
     method: str
@@ -702,6 +703,7 @@ class AsyncBrowserFetcher:
             last_nav: list[Any] = []
             captured: list[CapturedResponse] = []
             grabbing: set[asyncio.Future[None]] = set()
+            requested: dict[Any, int] = {}  # the page's calls, numbered as it makes them (answers come in any order)
 
             async def grab(resp: Any, order: int) -> None:
                 try:
@@ -736,10 +738,19 @@ class AsyncBrowserFetcher:
                         and resp.request.resource_type in ("xhr", "fetch")
                         and capture(resp.url, resp.headers.get("content-type", ""))
                     ):
-                        grabbing.add(asyncio.ensure_future(grab(resp, len(grabbing))))
+                        order = requested.get(resp.request, len(requested) + len(grabbing))
+                        grabbing.add(asyncio.ensure_future(grab(resp, order)))
                 except Exception:  # pragma: no cover - page may be closing
                     pass
 
+            def on_request(request: Any) -> None:
+                try:
+                    if capture is not None and request.resource_type in ("xhr", "fetch"):
+                        requested.setdefault(request, len(requested))
+                except Exception:  # pragma: no cover - page may be closing
+                    pass
+
+            page.on("request", on_request)
             page.on("response", on_response)
             console: list[dict[str, str]] = []
 
