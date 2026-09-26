@@ -1117,10 +1117,13 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_schedule(args: argparse.Namespace) -> int:
     from .project import Scheduler, find_project
 
+    if args.listen and (args.list or args.once):
+        print("error: --listen keeps the scheduler running: not with --list or --once", file=sys.stderr)
+        return 2
     project = find_project(args.project)
     scheduler = Scheduler(project, webhooks=[] if args.list else None)  # listing needs no secrets
     plan = scheduler.plan()
-    if args.list or not plan:
+    if args.list or (not plan and not args.listen):
         now = scheduler.now()
         for job, when in plan:
             next_time = "never" if when is None else "now (due)" if when <= now else f"{when:%Y-%m-%d %H:%M}"
@@ -1131,7 +1134,7 @@ def cmd_schedule(args: argparse.Namespace) -> int:
                 shown = job.trigger() if job.after else f"(when asked: wintergrab run {job.name})"
                 print(f"{job.name:<16} {shown}")
         if not plan:
-            print("no job has a schedule or a watched URL", file=sys.stderr)
+            print("no job has a schedule or a watched URL (--listen runs them when asked over HTTP)", file=sys.stderr)
         return 0
     configure_logging(logging.DEBUG if args.verbose > 0 else logging.INFO)
     if args.once:
@@ -1140,12 +1143,43 @@ def cmd_schedule(args: argparse.Namespace) -> int:
             hook.close()
         print(f"{len(results)} job(s) were due", file=sys.stderr)
         return 1 if any(not r.ok for r in results) else 0
+    listener = None
+    if args.listen:
+        import threading
+
+        from .triggers import TOKEN_VARIABLE, TriggerServer
+
+        host, _, port = args.listen.rpartition(":")
+        if not port.isdigit() or int(port) > 65535:
+            print(f"error: --listen {args.listen!r}: say [HOST:]PORT (8765, 127.0.0.1:8765)", file=sys.stderr)
+            return 2
+        try:
+            listener = TriggerServer(scheduler, host.strip("[]") or "127.0.0.1", int(port))
+        except ConfigurationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        except OSError as exc:
+            print(f"error: cannot listen on {args.listen}: {exc.strerror or exc}", file=sys.stderr)
+            return 1
+        threading.Thread(target=listener.serve_forever, name="wintergrab-triggers", daemon=True).start()
+        scheduler.listening = True
     print(f"{project.path}: {len(plan)} scheduled job(s), logs in {project.workspace / 'logs'}; Ctrl+C to stop",
           file=sys.stderr)  # fmt: skip
     for job, when in plan:
         print(f"  {job.name}: {job.trigger()}, next {when:%Y-%m-%d %H:%M}" if when else f"  {job.name}: never",
               file=sys.stderr)  # fmt: skip
-    scheduler.loop()
+    if listener is not None:
+        print(f"  and when asked: POST {listener.url}/jobs/NAME/run, with the token ({TOKEN_VARIABLE})",
+              file=sys.stderr)  # fmt: skip
+        if not listener.local:
+            print("  warning: other machines can reach it, over plain HTTP: put a TLS proxy in front of it",
+                  file=sys.stderr)  # fmt: skip
+    try:
+        scheduler.loop()
+    finally:
+        if listener is not None:
+            listener.shutdown()
+            listener.server_close()
     return 0
 
 
@@ -3184,6 +3218,9 @@ def build_parser() -> argparse.ArgumentParser:
     sc.add_argument("--project", metavar="FILE", help="the project file (default: wintergrab.yaml here)")
     sc.add_argument("--list", action="store_true", help="the scheduled jobs and when they run next")
     sc.add_argument("--once", action="store_true", help="run the jobs due now, then stop (for cron or CI)")
+    sc.add_argument("--listen", metavar="[HOST:]PORT",
+                    help="run jobs when asked over HTTP too (POST /jobs/NAME/run), requests carrying the token in "
+                    "WINTERGRAB_TRIGGER_TOKEN; on 127.0.0.1 unless a host is given")  # fmt: skip
     sc.set_defaults(func=cmd_schedule)
 
     it = sub.add_parser(

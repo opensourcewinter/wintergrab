@@ -6,6 +6,7 @@ import json
 import threading
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -312,3 +313,124 @@ def test_init_and_schedule_commands(tmp_path, capsys) -> None:
     capsys.readouterr()
     assert main(["schedule", "--project", str(tmp_path / "wintergrab.yaml"), "--list"]) == 0
     assert "example          daily at 06:00" in capsys.readouterr().out
+
+
+def _asked(tmp_path) -> Path:
+    path = tmp_path / "wintergrab.json"
+    path.write_text(json.dumps({"jobs": {
+        "listing": {"crawl": "https://s.example/"},
+        "details": {"crawl": "https://s.example/d", "after": "listing"},
+        "off": {"crawl": "https://s.example/o", "enabled": False},
+    }}), encoding="utf-8")  # fmt: skip
+    return path
+
+
+def test_jobs_asked_for_over_http(tmp_path, monkeypatch) -> None:
+    from http.client import HTTPConnection
+    from urllib.error import HTTPError
+    from urllib.request import Request, urlopen
+
+    from wintergrab.triggers import MAX_BODY, TriggerServer
+    from wintergrab.webhooks import sign
+
+    ran: list[str] = []
+    started: list[tuple[str, str, str | None]] = []
+
+    def runner(command: list[str], *, cwd: Any, log_file: Any) -> int:
+        ran.append(command[1])
+        return 0
+
+    scheduler = Scheduler(Project(_asked(tmp_path)), sleep=lambda s: None, runner=runner, webhooks=[])
+    scheduler.on_start = lambda job, trigger, reason: started.append((job.name, trigger, reason))
+    monkeypatch.delenv("WINTERGRAB_TRIGGER_TOKEN", raising=False)
+    with pytest.raises(ConfigurationError, match="set WINTERGRAB_TRIGGER_TOKEN"):
+        TriggerServer(scheduler, port=0)
+    with pytest.raises(ConfigurationError, match="16 characters at least"):
+        TriggerServer(scheduler, port=0, token="short")
+    token = "a-secret-of-some-length"
+    server = TriggerServer(scheduler, port=0, token=token)
+    assert server.local and server.url.startswith("http://127.0.0.1:")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def ask(path: str, *, method: str = "POST", body: bytes = b"", headers: dict[str, str] | None = None) -> Any:
+        request = Request(server.url + path, data=body if method == "POST" else None, method=method,
+                          headers=headers or {})  # fmt: skip
+        try:
+            with urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    bearer = {"Authorization": f"Bearer {token}"}
+    try:
+        assert ask("/jobs/listing/run")[0] == 401  # no token: not even whether the job is there
+        assert ask("/jobs/nothing/run", headers={"Authorization": "Bearer not-the-token"})[0] == 401
+        assert ask("/jobs/nothing/run", headers=bearer) == (404, {"error": "no job 'nothing' in the project"})
+        assert ask("/jobs/off/run", headers=bearer)[0] == 409  # (disabled)
+        asked = ask("/jobs/listing/run", headers=bearer, body=b'{"reason": "prices changed"}')
+        assert asked == (202, {"job": "listing", "queued": True})
+        assert ask("/jobs/listing/run", headers=bearer) == (202, {"job": "listing", "queued": False})  # waiting
+        # another project's webhook, the token its secret; GitHub's signs the same way
+        delivery = json.dumps({"events": [{"event": "job_finished", "origin": "other", "job": "x"}]}).encode()
+        assert ask("/jobs/details/run", body=delivery, headers={SIGNATURE_HEADER: sign(delivery, token)})[0] == 202
+        assert ask("/jobs/details/run", body=delivery, headers={"X-Hub-Signature-256": sign(delivery, "no")})[0] == 401
+        status, listing = ask("/jobs", method="GET", headers=bearer)
+        assert status == 200 and [(j["job"], j["trigger"]) for j in listing["jobs"]] == [
+            ("listing", "when asked"), ("details", "after listing"), ("off", "when asked")]  # fmt: skip
+        assert ask("/jobs", method="GET")[0] == 401
+        assert ask("/jobs/listing/run", method="DELETE", headers=bearer)[0] == 405
+        connection = HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)  # too large to read
+        connection.putrequest("POST", "/jobs/listing/run")
+        connection.putheader("Content-Length", str(MAX_BODY + 1))
+        connection.endheaders()
+        assert connection.getresponse().status == 413
+        connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert ran == []  # (asked for: they run in the scheduler's turn)
+    scheduler.run_requested()
+    assert started == [("listing", "request", "prices changed"), ("details", "after", "after listing"),
+                       ("details", "request", "job_finished of other (1 event)")]  # fmt: skip
+    assert ran == ["https://s.example/", "https://s.example/d", "https://s.example/d"]
+
+
+def test_a_listening_scheduler_runs_what_is_asked_for_at_once(tmp_path) -> None:
+    import time
+
+    ran: list[str] = []
+
+    def runner(command: list[str], *, cwd: Any, log_file: Any) -> int:
+        ran.append(command[1])
+        return 0
+
+    scheduler = Scheduler(Project(_asked(tmp_path)), runner=runner, webhooks=[])
+    scheduler.listening = True
+    loop = threading.Thread(target=scheduler.loop, daemon=True)
+    loop.start()
+    time.sleep(0.3)
+    assert loop.is_alive()  # nothing scheduled: it waits to be asked, where it would stop
+    asked = time.monotonic()
+    assert scheduler.request("listing", reason="now") is True
+    while len(ran) < 2 and time.monotonic() - asked < 10:
+        time.sleep(0.02)
+    assert ran == ["https://s.example/", "https://s.example/d"]  # at once, not at the next minute's check
+    assert time.monotonic() - asked < 5
+    with pytest.raises(KeyError):
+        scheduler.request("nothing")
+    scheduler.stop()
+    loop.join(5)
+    assert not loop.is_alive()
+
+
+def test_the_listen_option(tmp_path, capsys, monkeypatch) -> None:
+    from wintergrab.cli import main
+
+    project = str(_asked(tmp_path))
+    assert main(["schedule", "--project", project, "--listen", "0", "--once"]) == 2
+    monkeypatch.delenv("WINTERGRAB_TRIGGER_TOKEN", raising=False)
+    assert main(["schedule", "--project", project, "--listen", "127.0.0.1:0"]) == 1
+    assert "set WINTERGRAB_TRIGGER_TOKEN" in capsys.readouterr().err
+    monkeypatch.setenv("WINTERGRAB_TRIGGER_TOKEN", "a-secret-of-some-length")
+    assert main(["schedule", "--project", project, "--listen", "127.0.0.1:port"]) == 2
+    assert "say [HOST:]PORT" in capsys.readouterr().err

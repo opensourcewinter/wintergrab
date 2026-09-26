@@ -163,8 +163,8 @@ rest.
 A job can have several triggers: `schedule: daily at 06:00` and `watch:`
 together run it every morning and whenever its sitemap changes.
 `job_started` and `job_finished` say which one ran it: `trigger` is
-`schedule`, `watch`, `after` or `manual`, and `reason` says why
-(`"3 new URLs, 1 gone"`, `"after listing"`).
+`schedule`, `watch`, `after`, `request` (below) or `manual`, and `reason`
+says why (`"3 new URLs, 1 gone"`, `"after listing"`).
 
 ```
 $ wintergrab schedule --list
@@ -172,6 +172,47 @@ listing          when https://shop.example/sitemap.xml changes (checked every 10
 details          after listing
 report           after details
 ```
+
+## When asked over HTTP
+
+Other programs can ask for a job: a script, a service's webhook when
+something changed there, another project's webhook when one of its jobs
+finished.
+
+```bash
+export WINTERGRAB_TRIGGER_TOKEN=...            # a long random secret, 16 characters at least
+wintergrab schedule --listen 127.0.0.1:8765
+
+curl -X POST -H "Authorization: Bearer $WINTERGRAB_TRIGGER_TOKEN" \
+     -d '{"reason": "prices changed"}' http://127.0.0.1:8765/jobs/listing/run
+{"job": "listing", "queued": true}
+```
+
+| Request | Answer |
+|---|---|
+| `POST /jobs/NAME/run` | `202`, `{"job": ..., "queued": true}`: it runs as soon as the job running now is done, then the jobs after it. `queued` is `false` when it was already waiting |
+| `GET /jobs` | each job, what runs it, when next, and how its last run went |
+
+Every request must carry the token, as a bearer token, or as the
+HMAC-SHA256 signature of its body: in `X-Wintergrab-Signature`, as another
+project's webhooks sign their deliveries when the token is their `secret`,
+or in `X-Hub-Signature-256`, as GitHub's do. Anything else is answered
+`401` before the job is looked up (a job that is not there: `404`; one with
+`enabled: false`: `409`). The body's `reason`, or the events of a webhook's
+delivery, is the run's `reason`; its `trigger` is `request`.
+
+```yaml
+# in another project: when one of its jobs finishes, ask for this one's details job
+webhooks:
+  - url: http://127.0.0.1:8765/jobs/details/run
+    events: [job_finished]
+    secret: ${WINTERGRAB_TRIGGER_TOKEN}
+```
+
+The scheduler listens on the loopback address unless given a host
+(`--listen 0.0.0.0:8765`), and speaks plain HTTP: on any other network, put
+a TLS proxy in front of it. With `--listen`, a project whose jobs have no
+schedule is served all the same.
 
 ## Webhooks
 
@@ -239,7 +280,8 @@ scheduler.loop()                          # until stopped
 ## Limits
 
 - Jobs run one at a time. A job that runs longer than its interval delays
-  the next runs, instead of running beside itself.
+  the next runs, instead of running beside itself; a job asked for waits
+  for the one running.
 - The scheduler is a process: keep it running (a service, `tmux`), or use
   `wintergrab schedule --once` from cron.
 - A webhook's URL is yours: it is not held to the network policy of

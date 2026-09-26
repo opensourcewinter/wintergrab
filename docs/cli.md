@@ -388,6 +388,7 @@ kept. See [runs.md](runs.md).
 wintergrab init [DIR] [--force]            # a wintergrab.yaml to start from, and the workspace
 wintergrab run [JOB...] [--list]           # the project's jobs, now
 wintergrab schedule [--list | --once]      # the jobs on their schedules, until stopped
+wintergrab schedule --listen [HOST:]PORT   # ... and when asked over HTTP (POST /jobs/NAME/run)
 ```
 
 A project file (`wintergrab.yaml`, `.toml` or `.json` in the current
@@ -395,7 +396,9 @@ directory, or `--project FILE`) holds jobs: crawl, goal and spider command
 lines written as mappings, each with a schedule (a cron expression, `every 2
 hours`, `daily at 06:00`), and webhooks for their events. `run` exits with 1
 when a job failed. `schedule --list` shows when each job runs next, and
-`--once` runs what is due and stops, for cron or CI. Jobs run as `crawl` and
+`--once` runs what is due and stops, for cron or CI. `--listen` runs jobs
+when asked over HTTP too, by requests that carry the token in
+`WINTERGRAB_TRIGGER_TOKEN` (or a webhook's signature made with it). Jobs run as `crawl` and
 `goal` with `--project FILE --job NAME`, which post the crawl's events to the
 project's webhooks and label its run. See [projects.md](projects.md).
 

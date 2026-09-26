@@ -54,7 +54,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -444,6 +446,13 @@ class Scheduler:
                 self.state.setdefault(job.name, {}).setdefault("first_seen", stamp)
         self.results: list[JobResult] = []
         self._stop = False
+        #: Jobs asked for (:meth:`request`) and not run yet, with why.
+        self._requests: deque[tuple[str, str | None]] = deque()
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        #: Whether jobs may be asked for while the loop runs (a :class:`~wintergrab.triggers.TriggerServer`):
+        #: the loop then waits for them, even with nothing scheduled.
+        self.listening = False
 
     def _load(self) -> dict[str, dict[str, Any]]:
         try:
@@ -499,6 +508,18 @@ class Scheduler:
                 return when
         return now
 
+    def listing(self) -> list[dict[str, Any]]:
+        """Each job, what runs it, and when next (for ``GET /jobs``)."""
+        now = self.now()
+        rows = []
+        for job in self.project.jobs.values():
+            when = self.due(job, now)
+            last = self.state.get(job.name) or {}
+            rows.append({"job": job.name, "trigger": job.trigger() if (job.schedule or job.watch or job.after)
+                         else "when asked", "enabled": job.enabled, "next": when.isoformat() if when else None,
+                         "last_run": last.get("last_run"), "last_status": last.get("last_status")})  # fmt: skip
+        return rows
+
     def plan(self) -> list[tuple[Job, datetime | None]]:
         """Every job with a schedule or a watched URL, and when it runs (or is checked) next, soonest first."""
         now = self.now()
@@ -524,6 +545,38 @@ class Scheduler:
             elif found.first and found.error is None and self.last_run(job) is None:
                 self.run(job, trigger="watch", reason=found.summary)  # nothing collected yet
         self._save()
+        return self.results[first:]
+
+    # -- jobs asked for ----------------------------------------------------------------------- #
+    def request(self, name: str, *, reason: str | None = None) -> bool:
+        """Ask for job ``name`` to run as soon as the one running now (if any) is done: from any thread (a
+        :class:`~wintergrab.triggers.TriggerServer`'s). ``False`` when it was asked for already and has not
+        run yet (it runs once). A job that is not there raises ``KeyError``; one that is disabled,
+        :class:`~wintergrab.errors.ConfigurationError`."""
+        job = self.project.jobs.get(name)
+        if job is None:
+            raise KeyError(name)
+        if not job.enabled:
+            raise ConfigurationError(f"job {name!r} is disabled (enabled: false)")
+        with self._lock:
+            if any(waiting == name for waiting, _ in self._requests):
+                return False
+            self._requests.append((name, reason))
+        log.info("%s: asked for (%s)", name, reason or "no reason given")
+        self._wake.set()
+        return True
+
+    def run_requested(self) -> list[JobResult]:
+        """Run the jobs asked for (:meth:`request`), in the order they were, and those that come after them."""
+        first = len(self.results)
+        while True:
+            with self._lock:
+                if not self._requests:
+                    break
+                name, reason = self._requests.popleft()
+            job = self.project.jobs.get(name)
+            if job is not None and job.enabled:
+                self.run(job, trigger="request", reason=reason)
         return self.results[first:]
 
     # -- watched URLs ------------------------------------------------------------------------- #
@@ -570,7 +623,8 @@ class Scheduler:
     ) -> JobResult:
         """Run ``job`` now (its output in the workspace's ``logs/``, or through with ``logged=False``),
         tell the webhooks, remember when, and, when it succeeded, run the jobs that come after it.
-        ``trigger`` (``"schedule"``, ``"watch"``, ``"after"``, ``"manual"``) and ``reason`` say why."""
+        ``trigger`` (``"schedule"``, ``"watch"``, ``"after"``, ``"request"``, ``"manual"``) and ``reason`` say
+        why."""
         stamp = self.now()
         log_file = self.project.workspace / "logs" / f"{job.name}-{stamp:%Y%m%d-%H%M%S}.log" if logged else None
         if self.on_start is not None:
@@ -606,22 +660,31 @@ class Scheduler:
                 hook(event)
 
     def loop(self, *, until: Callable[[], bool] | None = None) -> None:
-        """Run jobs as they fall due, until stopped (Ctrl+C, :meth:`stop`, or ``until()``)."""
+        """Run jobs as they fall due, and as they are asked for when :attr:`listening`, until stopped (Ctrl+C,
+        :meth:`stop`, or ``until()``)."""
         try:
             while not self._stop and not (until is not None and until()):
+                self.run_requested()
                 self.run_due()
+                self.run_requested()
                 upcoming = [when for _, when in self.plan() if when is not None]
-                if not upcoming:
+                if not upcoming and not self.listening:
                     log.warning("no job is scheduled any more")
                     return
-                wait = (min(upcoming) - self.now()).total_seconds()
-                self.sleep(max(1.0, min(wait, 60.0)))  # wake at least every minute: the clock may jump
+                wait = (min(upcoming) - self.now()).total_seconds() if upcoming else 60.0
+                wait = max(1.0, min(wait, 60.0))  # wake at least every minute: the clock may jump
+                if self.listening:
+                    self._wake.wait(wait)  # (a job asked for wakes it)
+                    self._wake.clear()
+                else:
+                    self.sleep(wait)
         finally:
             for hook in self.webhooks:
                 hook.close()
 
     def stop(self) -> None:
         self._stop = True
+        self._wake.set()
 
 
 def starter_project() -> str:

@@ -44,6 +44,7 @@ MODULES = [
     ("wintergrab.project", "Projects and the scheduler"),
     ("wintergrab.schedules", "Schedules"),
     ("wintergrab.watch", "Watching URLs for changes"),
+    ("wintergrab.triggers", "Jobs asked for over HTTP"),
     ("wintergrab.webhooks", "Webhooks"),
     ("wintergrab.events", "Events"),
     ("wintergrab.models", "Language models"),

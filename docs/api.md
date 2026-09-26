@@ -994,10 +994,13 @@ checks that it is up to date.
   - `check_due(self, job: Job, now: datetime) -> datetime | None`: When ``job``'s watched URL is checked next (right away the first time).
   - `due(self, job: Job, now: datetime) -> datetime | None`: When ``job`` runs, or its watched URL is checked, next (``None``: never; see :meth:`scheduled` and :meth:`check_due`).
   - `last_run(self, job: Job) -> datetime | None`
-  - `loop(self, *, until: Callable[[], bool] | None = None)`: Run jobs as they fall due, until stopped (Ctrl+C, :meth:`stop`, or ``until()``).
+  - `listing(self) -> list[dict[str, Any]]`: Each job, what runs it, and when next (for ``GET /jobs``).
+  - `loop(self, *, until: Callable[[], bool] | None = None)`: Run jobs as they fall due, and as they are asked for when :attr:`listening`, until stopped (Ctrl+C, :meth:`stop`, or ``until()``).
   - `plan(self) -> list[tuple[Job, datetime | None]]`: Every job with a schedule or a watched URL, and when it runs (or is checked) next, soonest first.
+  - `request(self, name: str, *, reason: str | None = None) -> bool`: Ask for job ``name`` to run as soon as the one running now (if any) is done: from any thread (a :class:`~wintergrab.triggers.TriggerServer`'s).
   - `run(self, job: Job, *, logged: bool = True, trigger: str = 'manual', reason: str | None = None, _chain: frozenset[str] = set()) -> JobResult`: Run ``job`` now (its output in the workspace's ``logs/``, or through with ``logged=False``), tell the webhooks, remember when, and, when it succeeded, run the jobs that come after it.
   - `run_due(self) -> list[JobResult]`: Run the jobs that are due now, one after the other (a watched URL is checked first: its job runs when it changed), and the jobs that run after them.
+  - `run_requested(self) -> list[JobResult]`: Run the jobs asked for (:meth:`request`), in the order they were, and those that come after them.
   - `scheduled(self, job: Job, now: datetime) -> datetime | None`: When ``job``'s schedule runs it next (``None``: never).
   - `stop(self)`
   - `watch_state(self, job: Job) -> dict[str, Any]`: What the last check of ``job``'s watched URL found (``{}`` before the first).
@@ -1022,6 +1025,11 @@ checks that it is up to date.
 
 - **`WatchCheck(url: str, changed: bool = False, first: bool = False, kind: str = 'page', summary: str = '', status: int | None = None, error: str | None = None, state: dict[str, Any] = ...)`** (class). What a check found.
 - **`check(url: str, previous: dict[str, Any] | None = None, *, obey_robots: bool = True, user_agent: str = '*', timeout: float = 30.0) -> WatchCheck`**. Check ``url`` against ``previous`` (the last check's :attr:`WatchCheck.state`; see the module docs).
+
+## `wintergrab.triggers`: Jobs asked for over HTTP
+
+- **`TOKEN_VARIABLE`** = `'WINTERGRAB_TRIGGER_TOKEN'`
+- **`TriggerServer(scheduler: Scheduler, host: str = '127.0.0.1', port: int = 8765, *, token: str | None = None)`** (class). Runs a :class:`~wintergrab.project.Scheduler`'s jobs when asked over HTTP (see the module docs).
 
 ## `wintergrab.webhooks`: Webhooks
 

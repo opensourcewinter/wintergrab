@@ -876,9 +876,17 @@ an error that says so, not a setting silently ignored
   after it follow, a failed run stops the chain, and circles are refused.
   `wintergrab run` starts the jobs that come after none.
 - `job_started`/`job_finished` carry `trigger` (`schedule`, `watch`,
-  `after`, `manual`) and `reason` (`"3 new URLs, 1 gone"`).
+  `after`, `request`, `manual`) and `reason` (`"3 new URLs, 1 gone"`).
 - `wintergrab.watch.check(url, previous)` does a check on its own: what
   changed, in words and as counts.
+- `wintergrab schedule --listen [HOST:]PORT` (`wintergrab.triggers`) runs
+  jobs when asked over HTTP too: `POST /jobs/NAME/run` puts the job in the
+  scheduler's turn and answers `202` at once; `GET /jobs` lists the jobs and
+  their last runs. Requests carry the token in `WINTERGRAB_TRIGGER_TOKEN`,
+  as a bearer token or as the HMAC-SHA256 signature of their body (another
+  project's webhook with it as its `secret`, GitHub's webhooks); anything
+  else is a `401` before the job is looked up. It listens on the loopback
+  address unless given a host. `Scheduler.request()` asks from code.
 
 ### The dashboard (`wintergrab.dashboard`)
 
