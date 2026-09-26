@@ -814,6 +814,11 @@ an error that says so, not a setting silently ignored
 
 ### Fixes
 
+- A browser fetch of a URL the browser downloads rather than shows (an
+  attachment, or a PDF where the browser has no viewer, as in Playwright's
+  headless shell) failed with "Download is starting". The file is now the
+  answer, as over HTTP: asked for with the browser's cookies, each redirect
+  checked against the network policy.
 - A run's record (`run.json`) kept credentials as they were given: the
   password in a proxy URL, `Authorization` and `Cookie` headers, settings
   such as `api_token`, and the same in a crawl's command line. They are now

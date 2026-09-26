@@ -18,6 +18,7 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, S
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
+from urllib.parse import urljoin
 
 from ..errors import (
     BrowserFetchError,
@@ -743,7 +744,14 @@ class AsyncBrowserFetcher:
 
             page.on("console", on_console)
             page.on("pageerror", lambda error: on_console(_PageError(str(error))))
-            nav = await page.goto(req.url, wait_until=wait_until or self.wait_until, timeout=timeout_ms)
+            try:
+                nav = await page.goto(req.url, wait_until=wait_until or self.wait_until, timeout=timeout_ms)
+            except Exception as exc:
+                if "Download is starting" not in str(exc):
+                    raise
+                # a file the browser downloads rather than shows (an attachment, a PDF with no viewer):
+                # the file is the answer, as over HTTP
+                return await self._download(context, req, timeout_ms, proxied, started)
             if self.wait_for_challenge:
                 await self._wait_out_challenge(page)
             if wait_for:
@@ -833,6 +841,37 @@ class AsyncBrowserFetcher:
             except Exception:
                 pass
             self._release_context(context_key)
+
+    async def _download(self, context: Any, req: Request, timeout_ms: float, proxied: bool, started: float) -> Response:
+        """The file at ``req.url``, asked for directly with the browser's cookies, following redirects itself so
+        that each one is checked like the page's own (the network policy, 10 at most)."""
+        url, history = req.url, []
+        for _ in range(10):
+            if self.network_policy is not None:
+                await self.network_policy.check(url, proxied=proxied)
+            answer = await context.request.get(url, max_redirects=0, timeout=timeout_ms)
+            location = answer.headers.get("location")
+            if 300 <= answer.status < 400 and location:
+                history.append(url)
+                url = urljoin(url, location)
+                continue
+            jar = await context.cookies(url)
+            response = Response(
+                url,
+                status=answer.status,
+                headers=Headers(dict(answer.headers)),
+                body=await answer.body(),
+                request=req,
+                reason=answer.status_text or "",
+                cookies={c["name"]: c["value"] for c in jar},
+                elapsed=time.monotonic() - started,
+                history=history,
+                source="browser",
+                adaptive_storage=self.adaptive_storage,
+            )
+            response.cookie_jar = [dict(c) for c in jar]
+            return response
+        raise NetworkError(req.url, "too many redirects", kind="redirects", retryable=False)
 
     async def _wait_out_challenge(self, page: Any) -> None:
         async def challenged(seen: bool) -> bool:

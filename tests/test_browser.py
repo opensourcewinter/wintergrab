@@ -47,6 +47,17 @@ def test_captures_the_whole_page_after_a_challenge_reloads(site, browser) -> Non
         assert len(page.css(".item")) == 400, route
 
 
+def test_a_file_the_browser_downloads_is_the_answer(site, browser) -> None:
+    page = browser.get(site.url + "/attachment.csv")
+    assert (page.status, page.text, page.source) == (200, "sku,name\n1,Parka\n", "browser")
+    moved = browser.get(site.url + "/redirect?to=/attachment.csv")  # its redirects followed, and checked
+    assert moved.url == site.url + "/attachment.csv" and moved.history == [site.url + "/redirect?to=/attachment.csv"]
+    policy = wg.NetworkPolicy(allow_loopback=True, denied_hosts=["localhost"])
+    port = site.url.rsplit(":", 1)[1]
+    with BrowserFetcher(network_policy=policy, retries=0) as guarded, pytest.raises(wg.errors.NetworkPolicyError):
+        guarded.get(site.url + f"/redirect?to=http://localhost:{port}/attachment.csv")
+
+
 def test_non_html_bodies_and_encoding(site, browser) -> None:
     assert browser.get(site.url + "/json").json() == {"items": [1, 2, 3], "ok": True}
     assert browser.get(site.url + "/latin1").css("#t::text").get() == "Café crème"

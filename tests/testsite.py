@@ -205,6 +205,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, layout("slow", "<p>finally</p>"))
         if path == "/redirect":
             return self.send(int(q("code", "302")), "", headers={"Location": q("to", "/")})
+        if path == "/attachment.csv":  # a file a browser downloads rather than shows
+            return self.send(200, "sku,name\n1,Parka\n", "text/csv", {"Content-Disposition": "attachment"})
         if path == "/echo":
             return self.send(200, json.dumps({"method": self.command, "path": self.path}), "application/json")
         if path == "/headers":
