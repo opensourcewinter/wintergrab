@@ -230,6 +230,18 @@ class Dashboard:
         data["state"] = self.state(run)
         return data  # type: ignore[no-any-return]
 
+    def prometheus(self) -> str:
+        """The running crawls' metrics in the Prometheus text format (``/metrics``), each metric labelled with
+        its ``run``; the last run's when none is running."""
+        from .spider.metrics import to_prometheus
+
+        runs = self.runs()
+        live = [run for run in runs if self.state(run) == "running"]
+        chosen = live or runs[:1]
+        return "".join(
+            to_prometheus(run.metrics(), run.stats, labels={"run": run.id}) + "\n" for run in chosen if run.metrics()
+        )
+
     def run_data(self, run: Run) -> dict[str, Any]:
         """Everything about a run, as JSON values (the run page, and ``/api/runs/RUN``)."""
         data = self.summary(run)
@@ -490,8 +502,12 @@ def _tiles(data: Mapping[str, Any]) -> str:
         tiles.append(
             tile("Data quality", _pct(min(quality)), ", ".join(str(q.get("dataset")) for q in data["quality"]))
         )
+    if m.get("confidence") is not None:
+        tiles.append(tile("Confidence", _pct(m["confidence"]), "of the last records"))
     if running:
         tiles.append(tile("Queued", _num(m.get("queued")), f"{_num(m.get('in_flight'))} in flight"))
+        if m.get("coverage") is not None:
+            tiles.append(tile("Coverage", _pct(m["coverage"]), "of the URLs known so far"))
     return '<div class="tiles">' + "".join(tiles) + "</div>"
 
 
@@ -702,6 +718,9 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(dashboard.items(dashboard.run(segments[2]), offset=offset, limit=limit), head)
             elif segments == ["api", "jobs"]:
                 self._json(dashboard.jobs(), head)
+            elif segments == ["metrics"]:
+                body = dashboard.prometheus().encode("utf-8")
+                self._send(HTTPStatus.OK, "text/plain; version=0.0.4; charset=utf-8", body, head)
             else:
                 self._send(HTTPStatus.NOT_FOUND, "text/plain", b"not found\n", head)
         except ConfigurationError as exc:  # no such run

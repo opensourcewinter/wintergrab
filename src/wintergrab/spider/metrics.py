@@ -87,14 +87,23 @@ def process_usage() -> dict[str, Any]:
 class CrawlMetrics:
     """Rolling measurements kept by the engine (cheap to update, computed on demand)."""
 
-    def __init__(self, window: float = 30.0, latency_samples: int = 2048) -> None:
+    def __init__(self, window: float = 30.0, latency_samples: int = 2048, confidence_samples: int = 1024) -> None:
         self.window = window
         self.latencies: deque[float] = deque(maxlen=latency_samples)
+        #: The extraction confidence (``_confidence``) of the most recent records that had one.
+        self.confidences: deque[float] = deque(maxlen=confidence_samples)
         self._samples: deque[tuple[float, float, float, float, float]] = deque()  # t, pages, items, bytes, requests
         self._domains: dict[str, deque[tuple[float, int]]] = {}
 
     def observe_latency(self, seconds: float) -> None:
         self.latencies.append(seconds)
+
+    def observe_confidence(self, confidence: float) -> None:
+        self.confidences.append(confidence)
+
+    def confidence(self) -> float | None:
+        """The mean extraction confidence of the most recent records (``None`` before any record had one)."""
+        return round(sum(self.confidences) / len(self.confidences), 4) if self.confidences else None
 
     def sample(self, stats: Mapping[str, Any], throttle: AutoThrottle | None, now: float | None = None) -> None:
         """Record counters for rate computations (the engine calls this about once a second)."""
@@ -179,6 +188,7 @@ class CrawlMetrics:
         requests = float(stats.get("requests", 0)) or 0.0
         failed = float(stats.get("failed", 0))
         pages = float(stats.get("pages", 0))
+        known = pages + queued + in_flight  # the URLs the crawl knows of so far: fetched, waiting, or in flight
         return {
             "elapsed_seconds": round(elapsed, 3),
             "pages": int(pages),
@@ -194,6 +204,8 @@ class CrawlMetrics:
             "success_rate": round(1 - failed / pages, 4) if pages else None,
             "queued": queued,
             "in_flight": in_flight,
+            "coverage": round(pages / known, 4) if known else None,
+            "confidence": self.confidence(),
             "active_domains": sum(1 for s in (throttle.slots.values() if throttle else ()) if s.active),
             "rates": self.rates(),
             "latency": self.latency(),
@@ -214,26 +226,33 @@ def _label(value: Any) -> str:
 
 
 def to_prometheus(
-    snapshot: Mapping[str, Any], stats: Mapping[str, Any] | None = None, *, prefix: str = "wintergrab_"
+    snapshot: Mapping[str, Any],
+    stats: Mapping[str, Any] | None = None,
+    *,
+    prefix: str = "wintergrab_",
+    labels: Mapping[str, Any] | None = None,
 ) -> str:
-    """Render a metrics snapshot (and optionally the raw stats counters) in the Prometheus text format."""
+    """Render a metrics snapshot (and optionally the raw stats counters) in the Prometheus text format.
+    ``labels`` go on every metric (``{"run": "run-7"}`` when several crawls' metrics are served together)."""
     lines: list[str] = []
+    shared = dict(labels or {})
 
-    def gauge(name: str, value: Any, labels: Mapping[str, Any] | None = None, kind: str = "gauge") -> None:
+    def gauge(name: str, value: Any, own: Mapping[str, Any] | None = None, kind: str = "gauge") -> None:
         if value is None or isinstance(value, bool) or not isinstance(value, (int, float)):
             return
         metric = prefix + _METRIC_NAME.sub("_", name)
         if not any(line.startswith(f"# TYPE {metric} ") for line in lines):
             lines.append(f"# TYPE {metric} {kind}")
         label_text = ""
-        if labels:
-            label_text = "{" + ",".join(f'{k}="{_label(v)}"' for k, v in labels.items()) + "}"
+        all_labels = {**shared, **(own or {})}
+        if all_labels:
+            label_text = "{" + ",".join(f'{k}="{_label(v)}"' for k, v in all_labels.items()) + "}"
         lines.append(f"{metric}{label_text} {value}")
 
     for key in ("pages", "requests", "responses", "items", "bytes", "browser_pages", "errors", "failed", "retries",
                 "blocked"):  # fmt: skip
         gauge(f"{key}_total", snapshot.get(key), kind="counter")
-    for key in ("queued", "in_flight", "active_domains", "elapsed_seconds", "success_rate"):
+    for key in ("queued", "in_flight", "active_domains", "elapsed_seconds", "success_rate", "coverage", "confidence"):
         gauge(key, snapshot.get(key))
     for key, value in (snapshot.get("rates") or {}).items():
         gauge(key, value)

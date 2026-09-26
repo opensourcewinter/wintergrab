@@ -146,6 +146,8 @@ def test_metrics_live_and_final(site) -> None:
     assert live["pages"] >= 1 and "rates" in live and "latency" in live
     final = result.metrics
     assert final["pages"] == 8 and final["items"] == 8 and final["success_rate"] == 1.0
+    assert final["coverage"] == 1.0 and final["confidence"] is None  # (every URL fetched; no _confidence)
+    assert 0 < live["coverage"] <= 1.0
     assert final["latency"]["p50"] is not None and final["latency"]["p99"] >= final["latency"]["p50"]
     domain = final["domains"][0]
     assert domain["domain"] == "127.0.0.1" and domain["mode"] == "normal" and domain["requests"] == 8
@@ -167,6 +169,11 @@ def test_metrics_rates() -> None:
     for latency in (0.1, 0.2, 0.3, 0.4):
         metrics.observe_latency(latency)
     assert metrics.latency()["p50"] == 0.3 and metrics.latency()["mean"] == 0.25
+    assert metrics.confidence() is None
+    for confidence in (0.9, 0.7):
+        metrics.observe_confidence(confidence)
+    snapshot = metrics.snapshot({"pages": 20, "requests": 22}, queued=30, in_flight=2)
+    assert snapshot["coverage"] == round(20 / 52, 4) and snapshot["confidence"] == 0.8
 
 
 def test_throttle_state_and_modes() -> None:
@@ -201,8 +208,12 @@ def test_prometheus_format(site) -> None:
     assert 'wintergrab_latency_seconds{quantile="0.50"}' in text
     assert 'wintergrab_domain_requests{domain="127.0.0.1"} 2' in text
     assert 'wintergrab_status_by_label_total{label="404"} 1' in text
+    assert "wintergrab_coverage 1.0" in text and "wintergrab_confidence" not in text  # (none: no _confidence)
     for line in text.splitlines():
         assert line.startswith("#") or line.startswith("wintergrab_"), line
+    labelled = to_prometheus(result.metrics, result.stats, labels={"run": "run-7"})
+    assert 'wintergrab_pages_total{run="run-7"} 2' in labelled
+    assert 'wintergrab_domain_requests{run="run-7",domain="127.0.0.1"} 2' in labelled
 
 
 def test_current_rss_is_plausible() -> None:

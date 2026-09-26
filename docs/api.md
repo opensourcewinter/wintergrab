@@ -1186,6 +1186,7 @@ checks that it is up to date.
 - **`Dashboard(workspace: str | Path = '.wintergrab', project: Any = None)`** (class). What the dashboard shows: a workspace's runs, and a project's jobs.
   - `items(self, run: Run, *, offset: int = 0, limit: int = 100) -> dict[str, Any]`: A page of the records ``run`` collected, read from its output file (``/api/runs/RUN/items``): ``{"run", "offset", "limit", "items", "next"}``, ``next`` the next page's offset (``None``: the last page), and a ``note`` when the rest could not be read (a crawl still writing it).
   - `jobs(self) -> list[dict[str, Any]]`: The project's jobs: what each does, its schedule, when it runs next, and its last run.
+  - `prometheus(self) -> str`: The running crawls' metrics in the Prometheus text format (``/metrics``), each metric labelled with its ``run``; the last run's when none is running.
   - `run(self, ref: str) -> Run`
   - `run_data(self, run: Run) -> dict[str, Any]`: Everything about a run, as JSON values (the run page, and ``/api/runs/RUN``).
   - `runs(self, limit: int = 200) -> list[Run]`

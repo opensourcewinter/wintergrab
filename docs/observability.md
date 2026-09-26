@@ -72,6 +72,7 @@ give the spider [`webhooks`](projects.md#webhooks).
   "pages": 1204, "requests": 1251, "responses": 1240, "items": 980, "bytes": 25_104_331,
   "errors": 11, "failed": 4, "retries": 47, "blocked": 2, "success_rate": 0.9967,
   "queued": 311, "in_flight": 16, "active_domains": 3,
+  "coverage": 0.7861, "confidence": 0.91,
   "rates": {"pages_per_second": 38.5, "items_per_second": 31.2, "bytes_per_second": 802113.0, ...},
   "latency": {"p50": 0.212, "p90": 0.48, "p99": 1.3, "mean": 0.26},
   "domains": [
@@ -93,7 +94,13 @@ requests and `target_delay` where healthy responses pull it
 current settings allow and `current_rate` the measured one.
 
 Rates are measured over the last 30 seconds; latency percentiles over the
-last 2,048 responses (cache hits excluded).
+last 2,048 responses (cache hits excluded). `coverage` is the share of the
+URLs the crawl knows of so far (fetched, queued or in flight) that it has
+fetched: it falls as a crawl discovers more than it fetches, and reaches 1
+when the queue is empty. `confidence` is the mean extraction confidence
+(`_confidence`) of the last 1,024 records that had one, `null` before any:
+a drop while the crawl runs says the pages changed, or a section reads
+badly.
 
 ### Prometheus
 
@@ -105,7 +112,10 @@ text = to_prometheus(spider.metrics(), spider.stats)   # serve it on /metrics
 
 Counters become `wintergrab_pages_total` and friends, per-domain gauges carry
 a `domain` label, and stats like `status/404` become
-`wintergrab_status_by_label_total{label="404"}`.
+`wintergrab_status_by_label_total{label="404"}`. `labels={"run": "run-7"}`
+puts a label on every metric. The [dashboard](dashboard.md#json) serves the
+running crawls' metrics this way on `/metrics`, each with its `run` label,
+for Prometheus to scrape.
 
 ## Failure reports
 

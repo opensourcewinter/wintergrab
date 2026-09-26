@@ -1870,8 +1870,12 @@ class Engine:
             processed = await self._run_pipelines(processed)
             if processed is None:
                 return None
-        if isinstance(processed, dict) and isinstance(processed.get("_provenance"), dict):
-            self._stamp(processed["_provenance"])
+        if isinstance(processed, dict):
+            if isinstance(processed.get("_provenance"), dict):
+                self._stamp(processed["_provenance"])
+            confidence = processed.get("_confidence")
+            if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+                self.metrics.observe_confidence(float(confidence))
         if spider.unique_key and self._is_duplicate_item(processed):
             self.stats.inc("items_duplicate")
             return None

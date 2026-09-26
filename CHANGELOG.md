@@ -55,6 +55,12 @@ an error that says so, not a setting silently ignored
   `Response.blocked_resources` reports what was blocked.
 - Spider settings can now hold callable values (a URL normalizer, a
   priority function); only methods are rejected as overrides.
+- **Live coverage and confidence.** `spider.metrics()` (and the run's
+  `metrics.json`, the dashboard's tiles) has `coverage`, the share of the
+  URLs known so far that were fetched, and `confidence`, the mean
+  `_confidence` of the last 1,024 records. `wintergrab dashboard` serves
+  `/metrics`: the running crawls' metrics in the Prometheus text format,
+  each labelled with its run (`to_prometheus(..., labels=)`).
 - **The same page under other URLs, once.** `skip_duplicate_pages = True`
   skips a fetched page whose bytes were processed already, `"near"` one
   whose visible text nearly was (a SimHash within 3 bits);

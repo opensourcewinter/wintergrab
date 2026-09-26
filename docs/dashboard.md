@@ -73,6 +73,7 @@ The same data is available as JSON, for scripts and other tools:
 | `/api/runs/RUN` | One run: its record, `state`, `metrics`, a summary of its `events`, and the size of its output |
 | `/api/runs/RUN/items` | The records the run collected, a page at a time (`?offset=0&limit=100`, 1,000 at most): `{"items": [...], "next": 100}`, `next` being `null` on the last page |
 | `/api/jobs` | The project's jobs: schedule, next time, last status and run |
+| `/metrics` | The running crawls' metrics in the [Prometheus text format](observability.md#prometheus), each metric labelled with its `run`; the last run's when none is running. Point a Prometheus scrape job at it. |
 
 A run's records are read from its output file, in any format a crawl
 writes (JSON Lines, CSV, SQLite, Parquet...), found as it was given or from
