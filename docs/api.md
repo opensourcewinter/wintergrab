@@ -380,6 +380,10 @@ checks that it is up to date.
   - `schema(self, number: int | None = None) -> Schema`
 - **`FieldValue(name: str, value: Any = None, raw: Any = None, method: str | None = None, source: str | None = None, confidence: float = 0.0, agreed: list[str] = ..., alternatives: list[dict[str, Any]] = ..., notes: list[str] = ..., validation: str = 'absent')`** (class). One field of an extracted record, with where it came from and how sure we are.
   - `to_dict(self) -> dict[str, Any]`
+- **`GeneratedSchema(schema: Schema, base: Schema, fields: dict[str, LearnedField], urls: list[str | None], values: list[dict[str, Any]], methods: list[dict[str, str]], model: str | None = None, usage: dict[str, int] = ...)`** (class). A schema generated from sample pages (see the module docs).
+  - `describe(self) -> str`: Each field: its selector and on how many pages it read the value, or why it has none.
+  - `expected(self, index: int) -> dict[str, Any]`: The values the generated schema must read on sample page ``index``, without a model: those learned from, but a model's answers for fields no selector was learned for.
+  - `to_dict(self) -> dict[str, Any]`
 - **`HealingExtractor(directory: str | os.PathLike[str], schema: Schema | Mapping[str, Any] | str | Path | None = None, *, review: ReviewQueue | str | os.PathLike[str] | None = None, auto_apply: float = 0.9, min_pages: int = 10, drop: float = 0.5, keep: int = 12, review_below: float = 0.5, max_value_reviews: int = 20, **extractor_options: Any)`** (class). An :class:`~wintergrab.extraction.Extractor` that repairs its selectors (see the module docs).
   - `apply_reviews(self) -> int`: Act on the review queue's decisions about this extractor: accepted repairs become the active version, rejected ones are marked so; chosen or corrected values become fixtures.
   - `close(self)`
@@ -391,6 +395,8 @@ checks that it is up to date.
   - `why(self, name: str, page: Any | None = None) -> str`: Why ``name`` is what it is (or empty): its selectors on ``page``, the other strategies' candidates, how the page differs from where the selectors worked, and repairs made or waiting.
 - **`LabelledValues()`** (class). Values next to a label named like the field: ``<dt>Weight</dt><dd>1.2 kg</dd>``, ``SKU: AB-12``, spec tables.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
+- **`LearnedField(name: str, status: str = 'not found', selector: str | None = None, found_by: str | None = None, pages: int = 0, reproduced: int = 0, extra: int = 0, tried: int = 0, note: str = '')`** (class). What :func:`generate_schema` did for one field.
+  - `to_dict(self) -> dict[str, Any]`
 - **`MetaTags()`** (class). OpenGraph, Twitter card and ``<meta>`` values (``og:title``, ``product:price:amount``...).
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`ModelField(name: str, type: str, description: str = '', required: bool = False, many: bool = False, enum: tuple[Any, ...] = ())`** (class). A field the model is asked for.
@@ -422,6 +428,7 @@ checks that it is up to date.
 - **`StructuredData(node: tuple[str, dict[str, Any]] | None = None, kind: str | None = None)`** (class). JSON-LD and microdata (schema.org): what the site publishes for machines.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`field_kind(f: SchemaField) -> str`**. What a field holds, for the heuristic strategies (see :func:`_kind`).
+- **`generate_schema(pages: Iterable[Any], schema: Schema | Mapping[str, Any] | str | Path = 'product', *, model: Any = None, min_confidence: float = 0.7, max_tries: int = 12) -> GeneratedSchema`**. Learn selectors for ``schema``'s fields from sample pages of one site (see the module docs).
 - **`grounding(raw: Any, page_text: str, page_numbers: set[str] | None = None) -> str`**. How firmly a model's value is supported by the page.
 - **`register_strategy(strategy: type[Strategy], *, before: str | None = None)`**. Add a strategy extractors use by default: last, or before the one whose ``method`` is ``before``.
 - **`schema_types(node: Any) -> list[str]`**. The schema.org type names of a JSON-LD/microdata node (``"https://schema.org/Product"`` -> ``"Product"``).
@@ -655,34 +662,42 @@ checks that it is up to date.
   - `schema(self, fields: list[str]) -> Schema`: An extraction schema for these fields (types from :attr:`fields`, strings otherwise).
 - **`Estimate(pages: int = 0, exact: bool = False, listing_pages: int = 0, requests: int = 0, browser_pages: int = 0, bytes: int = 0, seconds: float = 0.0, records: int = 0, cpu_seconds: float = 0.0, storage_bytes: int = 0, basis: list[str] = ...)`** (class). What a plan will cost, and what the numbers rest on (``basis``).
   - `describe(self) -> str`
+- **`GenerationResult(directory: Path, goal: Goal, stages: list[Stage] = ..., accepted: bool = False, reasons: list[str] = ..., plan: GoalPlan | None = None, generated: GeneratedSchema | None = None)`** (class). What :func:`generate_scraper` made, each step, and the verdict.
+  - `describe(self) -> str`: Each step in a line (its problems and warnings under it), then the verdict.
+  - `stage(self, name: str) -> Stage | None`: The step called ``name``, if it was taken.
+  - `to_dict(self) -> dict[str, Any]`
 - **`Goal(text: str, entity: str, fields: list[str], sites: list[str] = ..., filters: list[GoalFilter] = ..., scope: list[str] = ..., limit: int | None = None, monitor: str | None = None, dedupe: bool = True, notes: list[str] = ...)`** (class). What to collect (see the module docs).
   - `describe(self) -> str`: The goal as understood, in a few lines.
   - `classmethod from_dict(cls, data: Mapping[str, Any], *, text: str = '') -> Goal`: A goal from its dict form (a saved plan, or a model's reading of a request), checked.
   - `schema(self) -> Schema`: The extraction schema: the goal's fields, typed.
   - `to_dict(self) -> dict[str, Any]`
 - **`GoalFilter(expression: str, text: str = '', field: str | None = None)`** (class). A condition records must meet: an expression (:mod:`wintergrab.data.expressions`) and what it came from.
-- **`GoalPlan(goal: Goal, sites: list[SitePlan], created: str = ...)`** (class). A goal and a plan per site: see :func:`plan_goal`.
+- **`GoalPlan(goal: Goal, sites: list[SitePlan], created: str = ..., schema: Schema | str | None = None, directory: Path | None = None)`** (class). A goal and a plan per site: see :func:`plan_goal`.
   - `describe(self, *, goal: bool = True) -> str`: The goal as understood (unless ``goal=False``), then each site's steps and estimates, and the warnings.
   - `explain(self) -> str`: What each estimate rests on.
+  - `extraction_schema(self) -> Schema`: The schema records are read with: :attr:`schema`, or the goal's.
   - `classmethod from_dict(cls, data: dict[str, Any]) -> GoalPlan`: A plan from its :meth:`to_dict` form.
   - `classmethod load(cls, path: str | Path) -> GoalPlan`
   - `run(self, output: str | None = None, **options: Any) -> GoalResult`: Collect the records (see :func:`~wintergrab.goals.run.run_plan`).
   - `save(self, path: str | Path)`: Write the plan as JSON (edit it, and run it with :meth:`load` and :meth:`run`).
-  - `to_dict(self) -> dict[str, Any]`
-- **`GoalResult(plan: GoalPlan, crawl: CrawlResult | None = None, records: list[dict[str, Any]] = ..., output: str | None = None, counts: Counter[str] = ..., found: Counter[str] = ...)`** (class). What running a plan gave: the records (when kept), the crawl's result, and counts.
+  - `to_dict(self, *, embed_schema: bool = False) -> dict[str, Any]`: The plan as JSON holds it; ``embed_schema``: a schema file's content rather than its name.
+- **`GoalResult(plan: GoalPlan, crawl: CrawlResult | None = None, records: list[dict[str, Any]] = ..., output: str | None = None, counts: Counter[str] = ..., found: Counter[str] = ..., pages: list[Response] = ...)`** (class). What running a plan gave: the records (when kept), the crawl's result, and counts.
   - `summary(self) -> str`: The records, the fields they have, and what was left out and why.
-- **`GoalSpider(goal: Goal, plans: list[SitePlan], **settings: Any)`** (class). Collects a goal's records, following a plan per site (see the module docs).
+- **`GoalSpider(goal: Goal, plans: list[SitePlan], *, schema: Schema | None = None, keep_pages: bool = False, **settings: Any)`** (class). Collects a goal's records, following a plan per site (see the module docs).
   - `parse(self, response: Response) -> Any`: A page of a ``follow`` plan: its record if it has one, and the links that lead to more.
   - `parse_record(self, response: Response) -> Any`: A page that holds a record: extract it.
 - **`SitePlan(site: str, strategy: str, start_urls: list[str] = ..., sitemap_urls: list[str] = ..., target: list[str] = ..., follow: list[str] = ..., sections: list[str] = ..., page_types: list[str] = ..., fetch: str = 'http', allowed: bool = True, crawl_delay: float | None = None, sample: dict[str, Any] = ..., estimate: Estimate = ..., steps: list[str] = ..., warnings: list[str] = ..., js_patterns: list[str] = ...)`** (class). How to get a goal's records from one site (see the module docs).
   - `classmethod from_dict(cls, data: dict[str, Any]) -> SitePlan`
   - `is_followed(self, url: str) -> bool`
   - `is_target(self, url: str) -> bool`
+- **`Stage(name: str, ok: bool, summary: str, problems: list[str] = ..., warnings: list[str] = ..., details: dict[str, Any] = ...)`** (class). One step of the generation (see the module docs).
+  - `to_dict(self) -> dict[str, Any]`
+- **`generate_scraper(goal: str | Goal, directory: str | Path, *, sites: Sequence[str] = (), model: Any = None, sample: int = 30, train: int = 5, test: int = 10, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, min_completeness: float = 0.9, min_agreement: float = 0.9, log_level: str | None = 'WARNING', on_stage: Callable[[Stage], None] | None = None) -> GenerationResult`**. Generate a scraper for ``goal``, test it, and accept or reject it (see the module docs).
 - **`model_reader(model: Any, *, now: datetime | None = None) -> Callable[[str], Mapping[str, Any]]`**. A ``parser`` for :func:`~wintergrab.goals.parse_goal` that asks ``model`` (a :class:`~wintergrab.models.ModelProvider`), and falls back on the built-in rules (see the module docs).
 - **`parse_goal(text: str, *, sites: list[str] | None = None, parser: Callable[[str], Mapping[str, Any]] | None = None, now: datetime | None = None) -> Goal`**. A :class:`Goal` from a request in plain words (see the module docs).
 - **`path_pattern(urls: list[str]) -> str`**. A path pattern covering ``urls``: segments they share stay, the others become ``*``.
 - **`plan_goal(goal: Goal, *, sample: int = 30, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, surveys: dict[str, SiteSurvey] | None = None, log_level: str | None = 'WARNING') -> GoalPlan`**. Plan ``goal`` for each of its sites (see the module docs).
-- **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, log_level: str | None = 'INFO', progress: bool | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
+- **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, keep_pages: bool = False, log_level: str | None = 'INFO', progress: bool | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
 
 ## `wintergrab.intel`: Page types, technologies, site profiles
 

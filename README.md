@@ -52,6 +52,12 @@ thousands of pages), the same API scales up.
   site (robots.txt, sitemaps, a sample of pages), shows a plan with what it
   will cost, and collects clean, typed records. Pages that need JavaScript go
   to a browser, the others stay on fast HTTP.
+- **Generates scrapers, and tests them.** `wintergrab generate "..." -o DIR`
+  learns selectors for the site from its record pages. It then lints them,
+  turns the sample pages into tests and crawls more pages. It measures what
+  they read against wintergrab's own extraction, and keeps the scraper only
+  when every step passes. A model, when you name one, finds what the pages
+  don't publish, once; the scraper reads it without the model after that.
 - **Learns as it crawls.** With `--optimize`, a crawl learns which URL
   patterns give items. It fetches those first, skips the patterns whose
   pages lead nowhere, and stops downloading pages under parameters that
@@ -260,6 +266,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |
 | [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies, site profiles and topology (`wintergrab inspect`), with the evidence |
 | [Goals](https://github.com/opensourcewinter/wintergrab/blob/main/docs/goals.md) | Say what data you want; wintergrab plans the crawl, shows its cost, and collects the records (`wintergrab goal`) |
+| [Generated scrapers](https://github.com/opensourcewinter/wintergrab/blob/main/docs/generate.md) | A scraper for a goal: selectors learned for the site, linted, tested, sample-crawled, validated and benchmarked before it is kept (`wintergrab generate`) |
 | [Extraction tests](https://github.com/opensourcewinter/wintergrab/blob/main/docs/testing.md) | Pages with the values a schema must read from them; check every change in CI (`wintergrab fixture`, `wintergrab test`) |
 | [Runs and replay](https://github.com/opensourcewinter/wintergrab/blob/main/docs/runs.md) | Keep each crawl's record and pages; replay it offline after a change and see what it does to the data (`wintergrab runs`, `wintergrab replay`) |
 | [Projects](https://github.com/opensourcewinter/wintergrab/blob/main/docs/projects.md) | Jobs in one file, run on schedules (cron, `every 2 hours`), with signed webhooks for their events and for changed records (`wintergrab init`, `run`, `schedule`) |
@@ -267,7 +274,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Healing](https://github.com/opensourcewinter/wintergrab/blob/main/docs/healing.md) | Extractors that repair their selectors when a site changes, with versions, rollback and a review queue (`wintergrab heal`, `wintergrab review`) |
 | [Models](https://github.com/opensourcewinter/wintergrab/blob/main/docs/models.md) | Optional language models (OpenAI-compatible, Anthropic, Ollama) for the fields a page's own data does not give, checked against the page |
 | [Plugins](https://github.com/opensourcewinter/wintergrab/blob/main/docs/plugins.md) | Packages that add outputs, inputs, field types, stages, strategies, model providers and commands |
-| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `run`, `schedule`, `init`, `runs`, `replay`, `dashboard`, `fixture`, `test`, `heal`, `review`, `history`, `data`, `shell`, `doctor` and `plugins` reference |
+| [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `generate`, `inspect`, `run`, `schedule`, `init`, `runs`, `replay`, `dashboard`, `fixture`, `test`, `heal`, `review`, `history`, `data`, `shell`, `doctor` and `plugins` reference |
 | [Configuration](https://github.com/opensourcewinter/wintergrab/blob/main/docs/configuration.md) | Where each setting lives: spider settings, files, environment variables, secrets |
 | [Architecture](https://github.com/opensourcewinter/wintergrab/blob/main/docs/architecture.md) | How it is built: the layers, a request's way through a crawl, where things are, extension points |
 | [Upgrading from 0.2](https://github.com/opensourcewinter/wintergrab/blob/main/docs/migration.md) | What behaves differently, and what code may need a change |

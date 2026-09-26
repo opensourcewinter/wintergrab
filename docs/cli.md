@@ -7,8 +7,8 @@ stdout, so you can pipe the output anywhere.
 ```
 wintergrab [-v | -q] [--version] COMMAND ...
 
-COMMAND: get, crawl, data, inspect, goal, review, fixture, test, run, schedule, init,
-         runs, replay, dashboard, heal, history, templates, shell, doctor, plugins
+COMMAND: get, crawl, data, inspect, goal, generate, review, fixture, test, run, schedule,
+         init, runs, replay, dashboard, heal, history, templates, shell, doctor, plugins
          (and the commands of installed plugins)
 ```
 
@@ -225,6 +225,23 @@ keeps it as JSON to edit and run later with `--plan`; `--explain` says what
 each estimate rests on. The crawl skips URL patterns that give nothing and
 drops query parameters that change nothing; `--no-optimize` fetches every
 page the plan leads to. See [goals.md](goals.md).
+
+## `wintergrab generate`: a scraper for a goal, tested
+
+```bash
+wintergrab generate "REQUEST" -o DIR [--site URL] [--model PROVIDER:NAME [--model-url URL]]
+                    [--sample N] [--train N] [--test N] [--min-completeness SHARE]
+                    [--min-agreement SHARE] [--browser] [--timeout SEC] [--json]
+```
+
+Surveys the site for the request, learns selectors for its fields from
+`--train` record pages (5), then lints the schema, tests it on those pages,
+crawls `--test` more (10), validates what it read there and benchmarks it
+against the goal's own extraction. It prints each step and writes
+`plan.json`, `schema.json`, `fixtures/`, `sample.jsonl`, `quality.json` and
+`report.json` to `DIR`. The exit status is 0 when the scraper is accepted,
+1 when it is rejected (the reasons are printed). Run an accepted one with
+`wintergrab goal --plan DIR/plan.json`. See [generate.md](generate.md).
 
 ## `wintergrab heal`: a self-healing extractor's versions
 

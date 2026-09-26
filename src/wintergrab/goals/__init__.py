@@ -10,11 +10,15 @@
     result = plan.run("laptops.jsonl")
     print(result.summary())
 
+A goal can also give a scraper of its own, tested before it is kept
+(:func:`generate_scraper`; ``wintergrab generate "..."``).
+
 On the command line: ``wintergrab goal "..."``. See ``docs/goals.md``.
 """
 
 from __future__ import annotations
 
+from .generate import GenerationResult, Stage, generate_scraper
 from .goal import ENTITIES, EntityKind, Goal, GoalFilter, parse_goal
 from .plan import Estimate, GoalPlan, SitePlan, path_pattern, plan_goal
 from .reading import model_reader
@@ -24,12 +28,15 @@ __all__ = [
     "ENTITIES",
     "EntityKind",
     "Estimate",
+    "GenerationResult",
     "Goal",
     "GoalFilter",
     "GoalPlan",
     "GoalResult",
     "GoalSpider",
     "SitePlan",
+    "Stage",
+    "generate_scraper",
     "model_reader",
     "parse_goal",
     "path_pattern",

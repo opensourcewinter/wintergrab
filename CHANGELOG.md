@@ -478,6 +478,37 @@
   read it, the rules do.
 - None is needed or called unless named.
 
+### Generated scrapers (`wintergrab.goals.generate_scraper`, `wintergrab.extraction.generate_schema`)
+
+- `wintergrab generate "REQUEST" -o DIR` makes a scraper for one site from
+  a goal, and keeps it only when every step passes:
+  - **plan**: the goal's survey and plan;
+  - **generate**: selectors for the fields, learned from record pages;
+  - **lint**: the schema reads back, the selectors compile, the URL
+    patterns are valid;
+  - **test**: the sample pages as extraction tests, read without a model;
+  - **sample crawl**: a real crawl of more record pages;
+  - **validate**: required fields found, values valid, the same values as
+    the goal's own extraction;
+  - **benchmark**: time, fields and confidence against the goal's own
+    extraction;
+  - **accept or reject**, with the reasons (exit status 0 or 1).
+  `DIR` holds `plan.json` (run with `goal --plan`), `schema.json`,
+  `fixtures/` (run with `wintergrab test`), `sample.jsonl`, `quality.json`
+  and `report.json`.
+- `generate_schema(pages, schema, model=None)` learns a selector for each
+  field from the values found on sample pages. It proposes selectors from
+  the elements holding the values: stable attributes, classes, a table's
+  header cell, the tag, positions. A selector is kept only when it reads
+  the same value on every page. With a model, the values it finds (and the
+  page holds) are read by selectors after that, without it. On the test
+  site's books, it gives `h1`, `p.price_color`, `p.availability`,
+  `p.star-rating::attr(class)` and a UPC read by its table header. Records
+  read with them are surer (0.94 against 0.83).
+- A goal plan can name a schema of its own (`GoalPlan.schema`, a file next
+  to the plan or a schema), which its crawl reads records with.
+  `run_plan(keep_pages=True)` keeps the record pages.
+
 ### Jobs that run when something changes (`wintergrab.watch`)
 
 - A project job's `watch: URL` runs it when a sitemap (its URLs and their

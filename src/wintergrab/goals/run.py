@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..data.pipeline import Deduplicate, Filter, Pipeline
+from ..data.schema import Schema
 from ..extraction import Extractor
 from ..fetchers.resources import registrable_domain
 from ..fetchers.response import Response
@@ -53,12 +54,28 @@ def _url_regex(pattern: str) -> str:
 
 
 class GoalSpider(Spider):
-    """Collects a goal's records, following a plan per site (see the module docs)."""
+    """Collects a goal's records, following a plan per site (see the module docs).
+
+    Args:
+        goal: What to collect.
+        plans: How, per site.
+        schema: What records are read with (default: the goal's fields).
+        keep_pages: Keep the record pages fetched (:attr:`pages`).
+        settings: More :class:`~wintergrab.Spider` settings.
+    """
 
     name = "goal"
     url_rules = True  # skip media, archives and crawler traps
 
-    def __init__(self, goal: Goal, plans: list[SitePlan], **settings: Any) -> None:
+    def __init__(
+        self,
+        goal: Goal,
+        plans: list[SitePlan],
+        *,
+        schema: Schema | None = None,
+        keep_pages: bool = False,
+        **settings: Any,
+    ) -> None:
         self.goal = goal
         # by site (www.shop.example and shop.example are one site: sitemaps mix them)
         self.plans = {registrable_domain(host_of(plan.site)): plan for plan in plans}
@@ -70,12 +87,14 @@ class GoalSpider(Spider):
         settings.setdefault("start_urls", [u for plan in plans if plan.strategy == "follow" for u in plan.start_urls])
         settings.setdefault("allowed_domains", sorted(self.plans))
         super().__init__(**settings)
-        self.extractor = Extractor(goal.schema())
+        self.extractor = Extractor(schema if schema is not None else goal.schema())
         self.identity = next((f for f in goal.fields if f in ("name", "title")), goal.fields[0])
         #: Record pages where the record's name (or title) was not found.
         self.incomplete = 0
         #: Record pages seen.
         self.record_pages = 0
+        #: The record pages fetched, with ``keep_pages``.
+        self.pages: list[Response] | None = [] if keep_pages else None
 
     def _plan(self, url: str) -> SitePlan | None:
         return self.plans.get(registrable_domain(host_of(url)))
@@ -91,6 +110,8 @@ class GoalSpider(Spider):
         if not response.is_html:
             return
         self.record_pages += 1
+        if self.pages is not None:
+            self.pages.append(response)
         record = self.extractor.extract(response)
         data = record.to_dict()
         if data.get(self.identity) in (None, "", []):
@@ -133,6 +154,8 @@ class GoalResult:
     output: str | None = None
     counts: Counter[str] = field(default_factory=Counter)
     found: Counter[str] = field(default_factory=Counter)
+    #: The record pages fetched (``run_plan(keep_pages=True)``).
+    pages: list[Response] = field(default_factory=list)
 
     def summary(self) -> str:
         """The records, the fields they have, and what was left out and why."""
@@ -164,15 +187,19 @@ def run_plan(
     *,
     max_pages: int | None = None,
     keep_items: bool | None = None,
+    keep_pages: bool = False,
     log_level: str | None = "INFO",
     progress: bool | None = None,
     **settings: Any,
 ) -> GoalResult:
     """Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
 
+    Records are read with the plan's schema (:meth:`~wintergrab.goals.GoalPlan.extraction_schema`).
+
     Args:
         max_pages: Stop after this many pages.
         keep_items: Keep the records in memory (``result.records``); by default when there is no ``output``.
+        keep_pages: Keep the record pages fetched (``result.pages``).
         settings: More :class:`~wintergrab.Spider` settings (``concurrency``, ``cache``, ``obey_robots_txt``...);
             ``optimize=False`` fetches every page the plan leads to (see :mod:`wintergrab.spider.optimizer`).
     """
@@ -189,7 +216,8 @@ def run_plan(
     options: dict[str, Any] = dict(settings)
     options.setdefault("optimize", True)  # skip what gives nothing, drop parameters that change nothing
     if options.get("record") or options.get("run_registry"):
-        options.setdefault("run_recipe", {"goal_plan": plan.to_dict()})  # a replay needs no survey
+        # a replay needs no survey, nor the plan's schema file
+        options.setdefault("run_recipe", {"goal_plan": plan.to_dict(embed_schema=True)})
     if any(site.fetch == "adaptive" for site in sites):
         strategy = FetchStrategy()
         for site in sites:
@@ -208,6 +236,8 @@ def run_plan(
     spider = GoalSpider(
         goal,
         sites,
+        schema=plan.extraction_schema() if plan.schema is not None else None,
+        keep_pages=keep_pages,
         output=output,
         keep_items=keep,
         max_pages=max_pages,
@@ -218,6 +248,7 @@ def run_plan(
     )
     crawl = spider.run(resume=False)
     result.crawl = crawl
+    result.pages = spider.pages or []
     result.records = list(crawl.items) if keep else []
     counts = result.counts
     counts["records"] = int(crawl.stats.get("items", 0))

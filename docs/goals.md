@@ -175,6 +175,17 @@ sites:
 With a goal that watches for changes and an output file, the pages'
 [history](history.md) is kept next to it.
 
+A plan can name a schema of its own (`"schema": "schema.json"`, a file next
+to the plan, or the schema itself): its records are then read with it rather
+than with the goal's fields.
+
+## A scraper of its own
+
+`wintergrab generate "REQUEST" -o DIR` goes further than a plan. It learns
+selectors for the goal's fields on the site, tests them on the sample pages
+and on a sample crawl, compares them with the goal's own extraction, and
+keeps the scraper only when it passes. See [generated scrapers](generate.md).
+
 ## Limits
 
 - Requests are read by rules: an unusual phrasing may be misread. The plan

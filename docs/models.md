@@ -66,6 +66,14 @@ conditions, a limit, and whether to keep watching, and all of it is
 checked: see [goals](goals.md#what-a-request-can-say). The crawl that
 follows extracts without the model.
 
+## Generating scrapers
+
+`wintergrab generate "..." --model PROVIDER:NAME` asks the model, on a few
+sample pages, for the fields the pages do not publish for machines. From
+its answers (only those the pages hold) it learns selectors, so the
+scraper reads those fields on every other page without the model. The
+report says how many tokens that took. See [generated scrapers](generate.md).
+
 ## Keys and what leaves your machine
 
 - **Keys** come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`)

@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from ..data.expressions import Expression
+from ..data.schema import Schema, load_schema
 from ..errors import ConfigurationError
 from ..extraction import Extractor, PageContext
 from ..fetchers.strategy import needs_javascript
@@ -252,11 +253,34 @@ class SitePlan:
 
 @dataclass
 class GoalPlan:
-    """A goal and a plan per site: see :func:`plan_goal`."""
+    """A goal and a plan per site: see :func:`plan_goal`.
+
+    Attributes:
+        goal: What to collect.
+        sites: How, per site.
+        created: When the plan was made.
+        schema: What records are read with, when not the goal's own fields: a
+            :class:`~wintergrab.data.Schema`, or a schema file (relative to the plan's file). A
+            generated scraper's plan (:func:`~wintergrab.goals.generate_scraper`) names its schema.
+        directory: Where the plan's file is (set by :meth:`load`).
+    """
 
     goal: Goal
     sites: list[SitePlan]
     created: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    schema: Schema | str | None = None
+    directory: Path | None = field(default=None, repr=False, compare=False)
+
+    def extraction_schema(self) -> Schema:
+        """The schema records are read with: :attr:`schema`, or the goal's."""
+        if self.schema is None:
+            return self.goal.schema()
+        if isinstance(self.schema, Schema):
+            return self.schema
+        path = Path(self.schema)
+        if not path.is_absolute() and self.directory is not None:
+            path = self.directory / path
+        return load_schema(path)
 
     @property
     def estimate(self) -> Estimate:
@@ -287,13 +311,19 @@ class GoalPlan:
         """What each estimate rests on."""
         return "\n".join(f"{plan.site}: {basis}" for plan in self.sites for basis in plan.estimate.basis)
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, embed_schema: bool = False) -> dict[str, Any]:
+        """The plan as JSON holds it; ``embed_schema``: a schema file's content rather than its name."""
+        data: dict[str, Any] = {
             "version": 1,
             "created": self.created,
             "goal": self.goal.to_dict(),
             "sites": [asdict(s) for s in self.sites],
         }
+        if self.schema is not None:
+            data["schema"] = (
+                self.schema if isinstance(self.schema, str) and not embed_schema else self.extraction_schema().to_dict()
+            )
+        return data
 
     def save(self, path: str | Path) -> None:
         """Write the plan as JSON (edit it, and run it with :meth:`load` and :meth:`run`)."""
@@ -305,14 +335,24 @@ class GoalPlan:
             data = json.loads(Path(path).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise ConfigurationError(f"cannot read the plan {path}: {exc}") from exc
-        return cls.from_dict(data)
+        plan = cls.from_dict(data)
+        plan.directory = Path(path).resolve().parent
+        return plan
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> GoalPlan:
         """A plan from its :meth:`to_dict` form."""
         goal = Goal.from_dict(data.get("goal") or {})
+        schema = data.get("schema")
+        if isinstance(schema, dict):
+            schema = Schema.from_dict(schema)
+        elif not isinstance(schema, str):
+            schema = None
         return cls(
-            goal=goal, sites=[SitePlan.from_dict(s) for s in data.get("sites") or ()], created=data.get("created", "")
+            goal=goal,
+            sites=[SitePlan.from_dict(s) for s in data.get("sites") or ()],
+            created=data.get("created", ""),
+            schema=schema,
         )
 
     def run(self, output: str | None = None, **options: Any) -> GoalResult:
@@ -345,37 +385,54 @@ def plan_goal(
     """
     if not goal.sites:
         raise ConfigurationError("the goal names no site: add one (a URL or a domain such as shop.example)")
-    from ..intel.survey import survey_site
-
     plans = []
-    kind = goal.kind
     for site in goal.sites:
         survey = (surveys or {}).get(site)
         if survey is None:
-            section = urlsplit(site).path.rstrip("/")
-            words = _scope_words(goal)
-
-            def prefer(url: str, section: str = section, words: list[str] = words) -> int:
-                """How much a page is worth sampling: in the part of the site given, and like the goal's
-                records (or, less, their listings) or its words."""
-                path = urlsplit(url).path
-                score = 2 if section and (path == section or path.startswith(section + "/")) else 0
-                seen_as = classify_url(url).type
-                score += 2 if seen_as in kind.page_types else 1 if seen_as in kind.listing_types else 0
-                return score + (1 if any(w in url.lower() for w in words) else 0)
-
-            survey = survey_site(
-                site,
-                pages=sample,
-                obey_robots=obey_robots,
-                browser=browser,
-                timeout=timeout,
-                keep_pages=True,
-                prefer=prefer,
+            survey = survey_for(
+                goal, site, sample=sample, obey_robots=obey_robots, browser=browser, timeout=timeout,
                 log_level=log_level,
-            )
+            )  # fmt: skip
         plans.append(_plan_site(goal, survey))
     return GoalPlan(goal=goal, sites=plans)
+
+
+def survey_for(
+    goal: Goal,
+    site: str,
+    *,
+    sample: int = 30,
+    obey_robots: bool = True,
+    browser: bool = False,
+    timeout: float = 20.0,
+    log_level: str | None = "WARNING",
+) -> SiteSurvey:
+    """Survey ``site`` for ``goal``, keeping the pages sampled: those in the part of the site given
+    first, then those like the goal's records (or, less, their listings) or its words."""
+    from ..intel.survey import survey_site
+
+    kind = goal.kind
+    section = urlsplit(site).path.rstrip("/")
+    words = _scope_words(goal)
+
+    def prefer(url: str) -> int:
+        """How much a page is worth sampling."""
+        path = urlsplit(url).path
+        score = 2 if section and (path == section or path.startswith(section + "/")) else 0
+        seen_as = classify_url(url).type
+        score += 2 if seen_as in kind.page_types else 1 if seen_as in kind.listing_types else 0
+        return score + (1 if any(w in url.lower() for w in words) else 0)
+
+    return survey_site(
+        site,
+        pages=sample,
+        obey_robots=obey_robots,
+        browser=browser,
+        timeout=timeout,
+        keep_pages=True,
+        prefer=prefer,
+        log_level=log_level,
+    )
 
 
 def _scope_words(goal: Goal) -> list[str]:

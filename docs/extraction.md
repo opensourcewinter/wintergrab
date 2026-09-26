@@ -221,6 +221,15 @@ Keep pages with the values a schema must read from them (`wintergrab
 fixture`), and check after every change that it still does (`wintergrab
 test`, exit status 1 when a value differs). See [testing](testing.md).
 
+## Selectors for a site, learned
+
+`generate_schema(pages, "product")` reads a few pages of one site with a
+schema and learns a selector for each field from the values found. It keeps
+a selector only when it reads the same value on every page. The schema it
+gives reads that site with more confidence, and without a model when one
+found the values. `wintergrab generate` does this for a goal and tests the
+result before keeping it. See [generated scrapers](generate.md).
+
 ## When the site changes
 
 `HealingExtractor` (`--heal DIR`) keeps versions of a schema and repairs the

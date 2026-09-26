@@ -63,6 +63,11 @@ def test_record_and_replay(tmp_path) -> None:
     assert not result.same and result.diff.counts["changed"] == 20  # the first page's 20 prices
 
 
+def test_generate_scraper(tmp_path) -> None:
+    result = load("14_generate_scraper").main(directory=str(tmp_path / "books"))
+    assert result.accepted, result.describe()
+
+
 def test_async_many_pages() -> None:
     titles = asyncio.run(load("04_async_many_pages").main())
     assert len(titles) >= 20 and all(titles)

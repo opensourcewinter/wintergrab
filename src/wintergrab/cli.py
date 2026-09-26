@@ -80,6 +80,19 @@ The request is read by rules (entities, fields, conditions such as "under $1000"
 understood, what will be fetched, and what it will cost, before anything big runs.
 """
 
+EPILOG_GENERATE = """examples:
+  wintergrab generate "books with title, price and rating" --site books.example -o scrapers/books
+  wintergrab generate "products with name, price and sku on shop.example" -o scrapers/shop \\
+      --model openai:MODEL           # a model finds what the pages do not publish, once
+  wintergrab goal --plan scrapers/books/plan.json --yes -o books.jsonl   # run what was accepted
+  wintergrab test scrapers/books/fixtures                                # its tests, any time
+
+Steps: plan (survey the site), generate (selectors learned from record pages and
+checked on each), lint, test (the pages as extraction tests), sample crawl (pages
+beyond those), validate (quality, agreement with the goal's own extraction),
+benchmark, then accept or reject. The exit status is 0 when it is accepted.
+"""
+
 EPILOG_HISTORY = """examples:
   wintergrab crawl https://shop.example --history shop.history -o items.jsonl   # record a run
   wintergrab history shop.history                     # the runs, and what changed in the last one
@@ -656,6 +669,50 @@ def cmd_goal(args: argparse.Namespace) -> int:
             again = f"wintergrab goal --plan {args.save_plan or args.plan or 'PLAN.json'} --yes -o {args.output or 'OUT.jsonl'}"
             print(f"to watch for changes ({plan.goal.monitor}), run this again on a schedule: {again}", file=sys.stderr)
     return 0
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    from .goals import generate_scraper
+
+    def show(stage: Any) -> None:
+        if args.verbose >= 0 and not args.json:
+            print(f"{stage.name:<10} {'ok  ' if stage.ok else 'FAIL'}  {stage.summary}", file=sys.stderr)
+            for problem in stage.problems:
+                print(f"{'':16}{problem}", file=sys.stderr)
+            for warning in stage.warnings:
+                print(f"{'':16}note: {warning}", file=sys.stderr)
+
+    try:
+        result = generate_scraper(
+            " ".join(args.text),
+            args.out,
+            sites=args.site or [],
+            model=_model(args),
+            sample=args.sample,
+            train=args.train,
+            test=args.test,
+            browser=args.browser,
+            timeout=args.timeout,
+            min_completeness=args.min_completeness,
+            min_agreement=args.min_agreement,
+            log_level="DEBUG" if args.verbose > 0 else "WARNING",
+            on_stage=show,
+        )
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False, default=str))
+    elif args.verbose >= 0:
+        if result.accepted:
+            plan = result.directory / "plan.json"
+            print(f"accepted: {plan}", file=sys.stderr)
+            print(f"  run it:  wintergrab goal --plan {plan} --yes -o RECORDS.jsonl", file=sys.stderr)
+            print(f"  test it: wintergrab test {result.directory / 'fixtures'}", file=sys.stderr)
+        else:
+            print("rejected: " + "; ".join(result.reasons), file=sys.stderr)
+            print(f"  what it made, and why: {result.directory / 'report.json'}", file=sys.stderr)
+    return 0 if result.accepted else 1
 
 
 def cmd_review(args: argparse.Namespace) -> int:
@@ -2148,6 +2205,46 @@ def build_parser() -> argparse.ArgumentParser:
     gp.add_argument("-o", "--output", metavar="FILE", help="save the records (.jsonl, .csv, .json); default stdout")
     gp.add_argument("--json", action="store_true", help="print the plan as JSON (and collect nothing)")
     gp.set_defaults(func=cmd_goal)
+
+    gen = sub.add_parser(
+        "generate",
+        help="generate a scraper for a goal, test it, and keep it if it passes",
+        description="Survey a site for a goal, learn selectors for its fields from record pages, then lint, "
+        "test, sample-crawl, validate and benchmark the scraper, and accept or reject it.",
+        epilog=EPILOG_GENERATE,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    gen.add_argument("text", nargs="+", metavar="REQUEST", help='what to collect, e.g. "books with title and price"')
+    gen.add_argument("-o", "--out", required=True, metavar="DIR", help="where to write the scraper")
+    gen.add_argument("--site", action="append", metavar="URL", help="the site, when the request does not name it")
+    gen.add_argument(
+        "--model",
+        metavar="PROVIDER:NAME",
+        help="a language model to read the request and find the values the pages do not publish while "
+        "generating; the scraper runs without it (see docs/models.md)",
+    )
+    gen.add_argument("--model-url", metavar="URL", help="(--model) where the model's API is (a server of your own)")
+    gen.add_argument("--sample", type=int, default=30, metavar="N", help="pages to survey the site with (30)")
+    gen.add_argument("--train", type=int, default=5, metavar="N", help="record pages to generate it from (5)")
+    gen.add_argument("--test", type=int, default=10, metavar="N", help="record pages beyond those to test it on (10)")
+    gen.add_argument(
+        "--min-completeness",
+        type=float,
+        default=0.9,
+        metavar="SHARE",
+        help="share of the pages tested on on which each required field must be found (0.9)",
+    )
+    gen.add_argument(
+        "--min-agreement",
+        type=float,
+        default=0.9,
+        metavar="SHARE",
+        help="share of the goal's own extraction's values it must find too (0.9)",
+    )
+    gen.add_argument("--browser", "-b", action="store_true", help="survey with a browser (slower)")
+    gen.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (default 20)")
+    gen.add_argument("--json", action="store_true", help="print the report as JSON")
+    gen.set_defaults(func=cmd_generate)
 
     rv = sub.add_parser(
         "review",

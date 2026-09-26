@@ -13,12 +13,14 @@
     print(record.explain())                   # where every value came from
 
 See ``docs/extraction.md``; ``HealingExtractor`` (``docs/healing.md``) repairs a schema's selectors
-when a site changes, with a ``ReviewQueue`` for what needs a person.
+when a site changes, with a ``ReviewQueue`` for what needs a person; ``generate_schema`` learns
+selectors for a site from its pages.
 """
 
 from __future__ import annotations
 
 from .engine import DEFAULT_PRIORS, ExtractedRecord, Extractor, FieldValue, value_key
+from .generate import GeneratedSchema, LearnedField, generate_schema
 from .healing import ExtractorVersion, ExtractorVersions, HealingExtractor, RepairResult
 from .model import ExtractionModel, ModelField, ModelRequest, grounding
 from .page import PageContext, schema_types
@@ -51,8 +53,10 @@ __all__ = [
     "ExtractorVersion",
     "ExtractorVersions",
     "FieldValue",
+    "GeneratedSchema",
     "HealingExtractor",
     "LabelledValues",
+    "LearnedField",
     "MetaTags",
     "ModelField",
     "ModelRequest",
@@ -66,6 +70,7 @@ __all__ = [
     "Strategy",
     "StructuredData",
     "field_kind",
+    "generate_schema",
     "grounding",
     "register_strategy",
     "schema_types",

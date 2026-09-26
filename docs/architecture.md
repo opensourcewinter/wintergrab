@@ -92,10 +92,10 @@ where something happens. Users start with [getting started](getting-started.md).
 | `parser/` | Selectors (CSS, XPath, text), structured data, embedded JSON, pagination, records, learned schemas | `Selector`, `structured_data()`, `auto_extract()` |
 | `adaptive/` | Selectors that find their element again after a page changes | `SQLiteStorage` |
 | `spider/` | The crawl: `Spider`, the engine, queues, throttle, robots, budgets, middleware, sessions, checkpoints, metrics, optimizer, exporters | `Spider`, `Engine`, `CrawlResult` |
-| `extraction/` | Typed records from pages: strategy hierarchy, confidence and provenance, templates, extraction models, self-healing versions, the review queue, extraction tests | `Extractor`, `HealingExtractor`, `FixtureSuite`, `template()` |
+| `extraction/` | Typed records from pages: strategy hierarchy, confidence and provenance, templates, extraction models, selectors learned for a site, self-healing versions, the review queue, extraction tests | `Extractor`, `generate_schema()`, `HealingExtractor`, `FixtureSuite`, `template()` |
 | `data/` | Schemas, normalizers (dates, money, units, phones...), validation, the expression language, pipelines, quality, duplicates, entity resolution, dataset versions, record readers | `Schema`, `Pipeline`, `QualityMonitor`, `read_records()` |
 | `intel/` | Page types, technologies, site surveys, profiles and topology | `classify_page()`, `survey_site()`, `SiteProfiler`, `TopologyBuilder` |
-| `goals/` | Requests in plain words: reading them, planning a crawl with estimates, running it | `parse_goal()`, `plan_goal()`, `GoalPlan.run()` |
+| `goals/` | Requests in plain words: reading them, planning a crawl with estimates, running it, generating and testing a scraper for it | `parse_goal()`, `plan_goal()`, `GoalPlan.run()`, `generate_scraper()` |
 | `history/` | Page snapshots across runs: what changed, and how often each page changes | `PageHistory` |
 | `storage/` | Parquet, Excel and PostgreSQL outputs and inputs | `ParquetExporter`, `PostgresExporter` |
 | `runs.py` | The run registry, recording and replay | `RunRegistry`, `replay()` |

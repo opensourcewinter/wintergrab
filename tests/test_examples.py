@@ -156,6 +156,13 @@ def test_13_record_and_replay(fresh_site, tmp_path) -> None:
     assert sum(fresh_site.site.hits.values()) - before == 2  # robots.txt and the page, once: the replay is offline
 
 
+def test_14_generate_scraper(site, tmp_path, capsys) -> None:
+    result = load("14_generate_scraper").main(site.url + "/books/", directory=str(tmp_path / "books"))
+    assert result.accepted and result.generated.fields["price"].selector == "p.price_color"
+    printed = capsys.readouterr().out
+    assert "accepted:" in printed and "record(s); the first:" in printed
+
+
 def test_the_example_project() -> None:
     from wintergrab.project import Project
 
