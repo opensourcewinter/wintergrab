@@ -278,7 +278,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Spiders](https://github.com/opensourcewinter/wintergrab/blob/main/docs/spiders.md) | Crawling, sessions, pause/resume, output, every setting |
 | [Power features](https://github.com/opensourcewinter/wintergrab/blob/main/docs/power-features.md) | Zero-selector extraction, cache & offline replay, API capture, cookie handoff, sitemaps, disk frontier, SQLite |
 | [Responsible access](https://github.com/opensourcewinter/wintergrab/blob/main/docs/responsible-access.md) | robots.txt, slowing down, blocked pages, honest browsers, logins, proxies, etiquette |
-| [Storage](https://github.com/opensourcewinter/wintergrab/blob/main/docs/storage.md) | Where items go: JSON Lines, JSON, CSV, SQLite, Parquet, Excel, PostgreSQL (typed columns, upserts), and your own formats |
+| [Storage](https://github.com/opensourcewinter/wintergrab/blob/main/docs/storage.md) | Where items go: JSON Lines, JSON, CSV, SQLite, Parquet, Excel, PostgreSQL and MySQL (typed columns, upserts), MongoDB, S3 objects, and your own formats |
 | [Observability](https://github.com/opensourcewinter/wintergrab/blob/main/docs/observability.md) | Events, live metrics, Prometheus, failure reports, dead letters |
 | [Data](https://github.com/opensourcewinter/wintergrab/blob/main/docs/data.md) | Normalizers, typed schemas, validation, pipelines, duplicates, quality monitoring |
 | [Extraction](https://github.com/opensourcewinter/wintergrab/blob/main/docs/extraction.md) | Typed records from any page with a strategy hierarchy, provenance and confidence |
@@ -291,6 +291,7 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [History](https://github.com/opensourcewinter/wintergrab/blob/main/docs/history.md) | What changed since the last crawl, and how often each page changes |
 | [Intelligence](https://github.com/opensourcewinter/wintergrab/blob/main/docs/intelligence.md) | Page types, technologies, site profiles and topology (`wintergrab inspect`), with the evidence |
 | [Goals](https://github.com/opensourcewinter/wintergrab/blob/main/docs/goals.md) | Say what data you want; wintergrab plans the crawl, shows its cost, and collects the records (`wintergrab goal`) |
+| [Search results](https://github.com/opensourcewinter/wintergrab/blob/main/docs/search.md) | Results from search APIs you have access to (Brave, Google, your SearXNG), and what they say: competitors, gaps, queries one page can answer, ranking changes (`wintergrab search`) |
 | [Visual builder](https://github.com/opensourcewinter/wintergrab/blob/main/docs/builder.md) | Click a page's fields, cards, tables and next-page link to build a schema; test it on the page, edit it, save it (`wintergrab build`) |
 | [Generated scrapers](https://github.com/opensourcewinter/wintergrab/blob/main/docs/generate.md) | A scraper for a goal: selectors learned for the site, linted, tested, sample-crawled, validated and benchmarked before it is kept (`wintergrab generate`) |
 | [Extraction tests](https://github.com/opensourcewinter/wintergrab/blob/main/docs/testing.md) | Pages with the values a schema must read from them; check every change in CI (`wintergrab fixture`, `wintergrab test`) |
