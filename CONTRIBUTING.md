@@ -1,7 +1,8 @@
 # Contributing
 
 Bug reports, fixes and new features are welcome. For anything larger than
-a small fix, open an issue first so we can agree on the approach.
+a small fix, open an issue first so we can agree on the approach. Everyone
+taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Setup
 
@@ -31,6 +32,15 @@ There are three kinds of test:
 | Unit and integration | `pytest` | Nothing. A local test site replicates the pages the tests need, so no internet is used. |
 | Browser | `pytest` (same run) | Playwright and Chromium. Skipped when they are missing. |
 | Live | `WINTERGRAB_LIVE=1 pytest -m live` | Internet. Runs the examples against quotes.toscrape.com and books.toscrape.com (sites built for scraping practice) and fetches a few pages from pypi.org. Skipped by default and in CI. Run it before every release. |
+
+The PostgreSQL output is tested against a real server when
+`WINTERGRAB_TEST_POSTGRES` names one
+(`WINTERGRAB_TEST_POSTGRES=postgresql://user@localhost/db pytest tests/test_storage.py`),
+as a CI job does. Without it those tests are skipped.
+
+New to the code? [docs/architecture.md](docs/architecture.md) shows where
+things are. Much can be added as a [plugin](docs/plugins.md), without
+changing wintergrab.
 
 A bug fix should come with a test that fails without it. The hot-path
 shortcuts in `utils.py`, `request.py` and the parser must return exactly

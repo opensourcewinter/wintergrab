@@ -268,6 +268,9 @@ wintergrab shell https://quotes.toscrape.com                        # explore in
 | [Models](https://github.com/opensourcewinter/wintergrab/blob/main/docs/models.md) | Optional language models (OpenAI-compatible, Anthropic, Ollama) for the fields a page's own data does not give, checked against the page |
 | [Plugins](https://github.com/opensourcewinter/wintergrab/blob/main/docs/plugins.md) | Packages that add outputs, inputs, field types, stages, strategies, model providers and commands |
 | [CLI](https://github.com/opensourcewinter/wintergrab/blob/main/docs/cli.md) | `get`, `crawl`, `goal`, `inspect`, `run`, `schedule`, `init`, `runs`, `replay`, `dashboard`, `fixture`, `test`, `heal`, `review`, `history`, `data`, `shell`, `doctor` and `plugins` reference |
+| [Configuration](https://github.com/opensourcewinter/wintergrab/blob/main/docs/configuration.md) | Where each setting lives: spider settings, files, environment variables, secrets |
+| [Architecture](https://github.com/opensourcewinter/wintergrab/blob/main/docs/architecture.md) | How it is built: the layers, a request's way through a crawl, where things are, extension points |
+| [Upgrading from 0.2](https://github.com/opensourcewinter/wintergrab/blob/main/docs/migration.md) | What behaves differently, and what code may need a change |
 | [Examples](https://github.com/opensourcewinter/wintergrab/tree/main/examples/) | Runnable scripts for every feature |
 
 ## Scrape responsibly
@@ -289,7 +292,8 @@ ruff check . && ruff format --check .
 ```
 
 See [CONTRIBUTING.md](https://github.com/opensourcewinter/wintergrab/blob/main/CONTRIBUTING.md) for the live tests and the release
-process, and [SECURITY.md](https://github.com/opensourcewinter/wintergrab/blob/main/SECURITY.md) to report a vulnerability.
+process, [SECURITY.md](https://github.com/opensourcewinter/wintergrab/blob/main/SECURITY.md) to report a vulnerability, and the
+[code of conduct](https://github.com/opensourcewinter/wintergrab/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 

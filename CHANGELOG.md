@@ -533,6 +533,15 @@
   imported only when used.
 - A CI job tests the PostgreSQL output against a PostgreSQL 16 server.
 
+### Documentation and contributing
+
+- New guides: the architecture (layers, a request's way through a crawl,
+  where things are, extension points, state on disk), configuration (where
+  each setting lives, environment variables, secrets), and upgrading from
+  0.2. SECURITY.md covers the new trust boundaries and credentials.
+- A code of conduct, issue forms for bugs and features, and a pull request
+  template.
+
 ### Fixes
 
 - A run's record (`run.json`) kept credentials as they were given: the

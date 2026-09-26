@@ -21,6 +21,19 @@ can't do the following:
 - **Feed internal data to your callbacks through a redirect.** When a page
   on an allowed domain redirects off `allowed_domains`, the response is
   dropped and counted as `offsite_redirects`.
+- **Run code in the dashboard.** What crawls collected is shown as escaped
+  text, under a Content Security Policy that allows no script. The
+  dashboard only reads, listens on 127.0.0.1, and refuses requests
+  addressed to other host names (DNS rebinding).
+- **Plant a formula in a spreadsheet.** Excel output (`.xlsx`) writes text
+  as text, so a crawled `=HYPERLINK(...)` never becomes a formula. CSV
+  files carry no types: open crawled CSV in a spreadsheet with that in mind,
+  or write `.xlsx`.
+- **Reach into a database.** The PostgreSQL output quotes every identifier
+  and passes every value as a parameter. It only writes tables it created.
+- **Make a model's answer count.** A language model's answers are checked
+  against the page, and a value the page does not contain is never taken.
+  A site a model names that the request did not is dropped.
 
 These inputs are trusted, so only use ones you control:
 - **Spider files** run by `wintergrab crawl` are Python code.
@@ -32,6 +45,28 @@ These inputs are trusted, so only use ones you control:
   Without that, a pipeline file can only use the built-in stages and the
   expression language, which has no attribute access, imports or loops and
   can read records but not files, the network or Python objects.
+- **Project files** (`wintergrab.yaml`) run their jobs as commands.
+- **Plugins** are installed packages, and run as wintergrab does.
+  `WINTERGRAB_PLUGINS=0` loads none.
+
+## Credentials
+
+- **Keep them in the environment.** Use `${NAME}` in a project's webhooks,
+  `OPENAI_API_KEY` and the like for models, and `PGPASSWORD` for
+  PostgreSQL. A job's options take no variables: they become a command
+  line, which others on the machine can read.
+- **Records leave them out.** The settings and command lines kept in run
+  records (and shown by `wintergrab runs` and the dashboard), a project's
+  job events and job logs, and an output URL wherever it is shown, leave
+  out passwords in URLs (`http://***@proxy`) and values named like
+  credentials (`Authorization`, `Cookie`, `api_token`...). The pages a
+  crawl visits are not rewritten: a start URL that holds a password shows
+  it in that crawl's events and logs, so keep passwords out of URLs.
+- **Webhooks are signed.** With a `secret`, each delivery carries
+  `X-Wintergrab-Signature` (HMAC-SHA256). Check it before trusting a
+  delivery.
+- **Models see the page.** A language model is sent the pages it is asked
+  about. Choose one you may send them to, or run one locally.
 
 ## Crawling from sensitive networks
 
