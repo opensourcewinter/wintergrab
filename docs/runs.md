@@ -58,13 +58,14 @@ wintergrab dashboard                   # the same in a browser, live while a cra
 
 See [the dashboard](dashboard.md).
 
-A run's record leaves credentials out. That covers the password in a URL
-(`http://user:***@proxy:8080`), and headers and settings named like
+A run's record leaves credentials out. That covers the user information
+of a URL (`http://***@proxy:8080`), and headers and settings named like
 credentials (`Authorization`, `Cookie`, `api_token`, `client_secret`...),
-in its settings and in its command line alike. A replay does without them.
-The pages come from the archive, and the spider's own values stand in for
-the settings left out. Query strings are kept, because they are part of
-which page a URL is.
+in its settings and in its command line alike. A replay does without them,
+and without the command's headers, cookies and proxies (`-H`, `--cookie`,
+`--proxy`): it sends no request. The pages come from the archive, and the
+spider's own values stand in for the settings left out. Query strings are
+kept, because they are part of which page a URL is.
 
 ## Replay
 

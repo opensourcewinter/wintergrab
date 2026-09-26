@@ -79,10 +79,8 @@ A job is a command line written as a mapping:
 `defaults` are options every job has unless it says otherwise, where its
 command has them (a goal has no `--concurrency`).
 
-`${NAME}` in a webhook's value is the environment variable `NAME`: keep
-secrets there, never in the file. A job's options take no variables. They
-become its command line, which others on the machine can read. Keep secrets
-a job needs in files it reads, such as `proxy_file`.
+Secrets stay in environment variables, never in the file (see
+[credentials](#credentials)).
 
 Each job runs in a process of its own, in the project's directory. Its run
 is kept in the project's workspace (see [runs](runs.md)), labelled with the
@@ -97,6 +95,52 @@ job's name.
 - The exit status is 1 when a job failed.
 - `wintergrab dashboard` shows the jobs, when each runs next, and each run:
   see [the dashboard](dashboard.md).
+
+## Credentials
+
+Secrets stay in environment variables: never in the project file, and
+never on a job's command line, which anyone on the machine can read.
+`${NAME}` is the variable `NAME` in webhooks, in `watch:`, and in a job's
+`header:`, `cookie:` and `proxy:`. The job's own process reads those: its
+command line holds the name, never the secret. `${NAME}` anywhere else in a
+job is an error.
+
+A job gets only the secrets it is given. `credentials:` names sets of
+variables, and a job names the sets it gets:
+
+```yaml
+credentials:
+  club: [CLUB_TOKEN, CLUB_SESSION]      # these variables, as the scheduler has them
+  shop_db:
+    PGPASSWORD: ${SHOP_DB_PASSWORD}     # or the variable a job gets, and where its value comes from
+jobs:
+  members:
+    crawl: https://club.example/members/
+    header: "Authorization: Bearer ${CLUB_TOKEN}"   # sent to club.example only
+    cookie: "session=${CLUB_SESSION}"
+    credentials: [club]
+  prices:
+    crawl: https://shop.example/
+    output: postgresql://crawler@db.internal/shop?table=prices   # PGPASSWORD: the database's password
+    credentials: [shop_db]
+```
+
+- A job's process gets the scheduler's environment, less every variable a
+  credential set names (its own names, and those its values come from),
+  plus those of the sets the job is given, read when it starts. Above,
+  `members` gets `CLUB_TOKEN` and `CLUB_SESSION` and never `PGPASSWORD` or
+  `SHOP_DB_PASSWORD`; `prices` gets `PGPASSWORD` and not the club's.
+- A job that uses a variable it was not given fails, saying so ("the
+  environment variable CLUB_TOKEN is not set"). One whose own credentials
+  cannot be read (a variable not set) does not start: its log says which.
+- No job gets `WINTERGRAB_TRIGGER_TOKEN`, the token that
+  [asks for jobs](#when-asked-over-http).
+- A credential's value comes from the environment (`${NAME}`): a value
+  written in the file is an error.
+- Headers and cookies go to the site of the job's URL only: see
+  [responsible access](responsible-access.md#credentials).
+- Webhooks' variables are read by every job (each posts its own crawl's
+  events): leave them out of `credentials:`.
 
 ## Schedules
 
@@ -308,5 +352,8 @@ scheduler.loop()                          # until stopped
   for the one running.
 - The scheduler is a process: keep it running (a service, `tmux`), or use
   `wintergrab schedule --once` from cron.
+- Jobs run as the scheduler's user, so what that user can read, a job can
+  read: `credentials:` keeps secrets from the jobs not given them, and is
+  no sandbox against a job's own code (a `spider:` of yours).
 - A webhook's URL is yours: it is not held to the network policy of
   crawls. Deliveries that are never answered are dropped after three tries.

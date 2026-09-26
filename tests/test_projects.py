@@ -259,8 +259,16 @@ def test_project_errors(tmp_path) -> None:
         project({"jobs": {"a": {"crawl": "https://s.example/"}}, "hooks": []})
     with pytest.raises(ConfigurationError, match="set by the project"):
         project({"jobs": {"a": {"crawl": "https://s.example/", "workspace": "x"}}})
-    with pytest.raises(ConfigurationError, match="read in webhooks only"):  # never on a command line
-        project({"jobs": {"a": {"crawl": "https://s.example/", "proxy": "http://u:${PROXY_PASSWORD}@p.example"}}})
+    with pytest.raises(ConfigurationError, match="anywhere else it would be on the job's command line"):
+        project({"jobs": {"a": {"crawl": "https://s.example/", "output": "postgresql://u:${DB_PASSWORD}@db/x"}}})
+    proxied = project({"jobs": {"a": {"crawl": "https://s.example/", "proxy": "http://u:${PROXY_PASSWORD}@p.example"}}})
+    assert "http://u:${PROXY_PASSWORD}@p.example" in proxied.jobs["a"].command()  # (the job's process reads it)
+    with pytest.raises(ConfigurationError, match="no credentials club in the project \\(known: none\\)"):
+        project({"jobs": {"a": {"crawl": "https://s.example/", "credentials": ["club"]}}})
+    with pytest.raises(ConfigurationError, match="TOKEN's value comes from the environment"):
+        project({"credentials": {"club": {"TOKEN": "plain-text"}}, "jobs": {"a": {"crawl": "https://s.example/"}}})
+    with pytest.raises(ConfigurationError, match="'2X' is not the name of a variable"):
+        project({"credentials": {"club": ["2X"]}, "jobs": {"a": {"crawl": "https://s.example/"}}})
     with pytest.raises(ConfigurationError, match="start_within is for schedules at set times"):
         project({"jobs": {"a": {"crawl": "https://s.example/", "schedule": "every 2 hours", "start_within": "1h"}}})
     assert project({"jobs": {"a": {"spider": "spiders/shop.py:Shop", "set": {"max_pages": 5}}}}).jobs["a"].command() == [

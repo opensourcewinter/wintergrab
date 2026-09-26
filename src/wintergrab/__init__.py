@@ -18,6 +18,7 @@ __version__ = "0.2.0"
 # The parser must be imported before the adaptive package (they reference each other).
 from .parser import Field, Selector, SelectorList, parse  # isort: skip
 from .adaptive import MemoryStorage, SQLiteStorage
+from .credentials import Credentials
 from .errors import (
     BrowserError,
     BrowserFetchError,
@@ -86,6 +87,7 @@ __all__ = [
     "CheckpointError",
     "ConfigurationError",
     "CrawlResult",
+    "Credentials",
     "DropItem",
     "ExportError",
     "ExpressionError",

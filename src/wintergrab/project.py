@@ -36,9 +36,25 @@ A job is a command line written as a mapping: ``crawl: URL`` (or ``goal: TEXT``,
 ``paginate: true`` for ``--paginate``; ``set:`` holds spider settings (``--set``). Each job runs in
 a process of its own, in the project's directory, and its run is kept in the project's workspace
 (``.wintergrab``, see :mod:`wintergrab.runs`). ``defaults`` are options every job has unless it
-says otherwise. ``${NAME}`` in a webhook is the environment variable ``NAME``: keep secrets there,
-not in the file (a job's options are its command line, which others on the machine can read, so
-they take no variables). The file can be YAML (``wintergrab.yaml``), TOML or JSON.
+says otherwise. The file can be YAML (``wintergrab.yaml``), TOML or JSON.
+
+Secrets stay in environment variables, never in the file, and never on a command line (anyone on the
+machine can read a process's): ``${NAME}`` is the variable ``NAME`` in webhooks, in ``watch:``, and in a
+job's ``header:``, ``cookie:`` and ``proxy:``, which the job's own process reads (its command line holds the
+name). Any other option with ``${NAME}`` is an error. ``credentials:`` names the variables jobs may be
+given; a job gets those of the credentials it names, and no other job gets them::
+
+    credentials:
+      club: [CLUB_TOKEN]                    # the variable, as the scheduler has it
+      shop_db:
+        PGPASSWORD: ${SHOP_DB_PASSWORD}     # or the variable a job gets, and where its value comes from
+    jobs:
+      members:
+        crawl: https://club.example/
+        header: "Authorization: Bearer ${CLUB_TOKEN}"   # to club.example only
+        credentials: [club]
+
+(see :meth:`Project.environment`; the token that triggers jobs, ``WINTERGRAB_TRIGGER_TOKEN``, is no job's).
 
 Webhooks (:mod:`wintergrab.webhooks`) get the jobs' events (``job_started``, ``job_finished``,
 ``job_failed``, from whatever runs the jobs) and their crawls' (``crawl_finished``,
@@ -64,6 +80,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from .credentials import VARIABLE, expand
 from .errors import ConfigurationError
 from .files import read_structured
 from .redact import redact_argv, redact_query
@@ -80,9 +97,13 @@ log = logging.getLogger("wintergrab.project")
 PROJECT_FILES = ("wintergrab.yaml", "wintergrab.yml", "wintergrab.toml", "wintergrab.json")
 _KINDS = ("crawl", "goal", "spider")
 _JOB_KEYS = frozenset(
-    {*_KINDS, "schedule", "timezone", "description", "enabled", "set", "start_within", "watch", "check", "after"}
-)
-_VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+    {*_KINDS, "schedule", "timezone", "description", "enabled", "set", "start_within", "watch", "check", "after",
+     "credentials"}
+)  # fmt: skip
+_VARIABLE = VARIABLE
+#: The options whose ``${NAME}`` the job's own process reads (so that its command line holds the name only).
+_READ_BY_JOB = ("header", "cookie", "proxy")
+_ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _dataset(target: str) -> bool:
@@ -132,6 +153,8 @@ class Job:
             checked, and is never shown.
         check: How often ``watch`` is checked.
         after: Jobs after each successful run of which this one runs.
+        credentials: The names of the project's credentials the job's process is given (see
+            :meth:`Project.environment`).
     """
 
     name: str
@@ -146,6 +169,7 @@ class Job:
     watch: str | None = None
     check: timedelta = timedelta(minutes=15)
     after: tuple[str, ...] = ()
+    credentials: tuple[str, ...] = ()
 
     def trigger(self) -> str:
         """What runs the job, in words: ``"every 2 hours"``, ``"when https://.../sitemap.xml changes"``..."""
@@ -214,7 +238,7 @@ class Project:
         data = read_structured(self.path)
         if not isinstance(data, Mapping):
             raise ConfigurationError(f"{self.path}: a project is a mapping (jobs:, webhooks:...)")
-        known = {"workspace", "defaults", "jobs", "webhooks", "timezone", "name"}
+        known = {"workspace", "defaults", "jobs", "webhooks", "timezone", "name", "credentials"}
         unknown = sorted(set(data) - known)
         if unknown:
             raise ConfigurationError(
@@ -233,6 +257,8 @@ class Project:
                 hint = f" (did you mean {close[0]!r}?)" if close else ""
                 raise ConfigurationError(f"{self.path.name}, defaults: no command has the option {key!r}{hint}")
         self.webhook_settings = list(data.get("webhooks") or [])
+        #: The credentials jobs can be given: name -> {variable: where its value comes from (``${NAME}``)}.
+        self.credentials = self._credentials(data.get("credentials"))
         jobs = data.get("jobs") or {}
         if not isinstance(jobs, Mapping) or not jobs:
             raise ConfigurationError(f"{self.path}: no jobs (jobs: {{name: {{crawl: URL, ...}}}})")
@@ -258,11 +284,19 @@ class Project:
         options.update({k: v for k, v in spec.items() if k not in _JOB_KEYS})
         _check_options(where, command, options)
         settings = dict(spec.get("set") or {})
-        if _VARIABLE.search(json.dumps([spec[kind], options, settings], default=str)):
+        plain = {k: v for k, v in options.items() if k not in _READ_BY_JOB}
+        if _VARIABLE.search(json.dumps([spec[kind], plain, settings], default=str)):
             raise ConfigurationError(
-                f"{where}: ${{NAME}} is read in webhooks only: a job's options are its command line, which "
-                "others on the machine can read (keep secrets in files the job reads, like --proxy-file)"
+                f"{where}: ${{NAME}} is read in header:, cookie: and proxy: (by the job's own process), in "
+                "credentials:, webhooks and watch:; anywhere else it would be on the job's command line, which "
+                "others on the machine can read"
             )
+        given = spec.get("credentials") or ()
+        given = (given,) if isinstance(given, str) else tuple(str(g) for g in given)
+        unknown = [g for g in given if g not in self.credentials]
+        if unknown:
+            names = ", ".join(self.credentials) or "none"
+            raise ConfigurationError(f"{where}: no credentials {', '.join(unknown)} in the project (known: {names})")
         schedule = start_within = None
         watch = spec.get("watch")
         check = timedelta(minutes=15)
@@ -291,7 +325,59 @@ class Project:
             raise ConfigurationError(f"{where}: {exc}") from exc
         return Job(name=name, kind=kind, target=str(spec[kind]), options=options, settings=settings, schedule=schedule,
                    enabled=bool(spec.get("enabled", True)), start_within=start_within,
-                   description=str(spec.get("description") or ""), watch=watch, check=check, after=after)  # fmt: skip
+                   description=str(spec.get("description") or ""), watch=watch, check=check, after=after,
+                   credentials=given)  # fmt: skip
+
+    def _credentials(self, raw: Any) -> dict[str, dict[str, str]]:
+        """``credentials:``: name -> the environment variables a job given it gets, and where their values come from."""
+        where = f"{self.path.name}, credentials"
+        if raw is None:
+            return {}
+        if not isinstance(raw, Mapping):
+            raise ConfigurationError(f"{where}: a mapping of names to the environment variables a job given them gets")
+        found: dict[str, dict[str, str]] = {}
+        for name, variables in raw.items():
+            if isinstance(variables, str):
+                variables = [variables]
+            if isinstance(variables, (list, tuple)):  # [CLUB_TOKEN]: the variable of that name, as it is here
+                variables = {str(v): "${" + str(v) + "}" for v in variables}
+            if not isinstance(variables, Mapping) or not variables:
+                raise ConfigurationError(
+                    f"{where} {name!r}: a list of variables ([CLUB_TOKEN]), or a mapping of them to where their "
+                    "values come from (PGPASSWORD: ${SHOP_DB_PASSWORD})"
+                )
+            entry: dict[str, str] = {}
+            for variable, value in variables.items():
+                if not _ENVIRONMENT_NAME.fullmatch(str(variable)):
+                    raise ConfigurationError(f"{where} {name!r}: {variable!r} is not the name of a variable")
+                if not isinstance(value, str) or not _VARIABLE.search(value):
+                    raise ConfigurationError(
+                        f"{where} {name!r}: {variable}'s value comes from the environment (${{NAME}}): keep secrets "
+                        "out of the project file"
+                    )
+                entry[str(variable)] = value
+            found[str(name)] = entry
+        return found
+
+    def environment(self, job: Job) -> dict[str, str]:
+        """The environment the job's process gets: this process's, less the variables the project's credentials
+        name (their own, and those their values come from) and the token that triggers jobs, plus the variables of
+        the credentials the job is given, their values read now. A variable one of them needs that is not set is an
+        error, naming it."""
+        from .triggers import TOKEN_VARIABLE
+
+        fold = str.upper if os.name == "nt" else str  # (Windows' variable names ignore case)
+        withheld = {fold(TOKEN_VARIABLE)}
+        for variables in self.credentials.values():
+            for name, value in variables.items():
+                withheld.add(fold(name))
+                withheld.update(fold(source) for source in _VARIABLE.findall(value))
+        env = {k: v for k, v in os.environ.items() if fold(k) not in withheld}
+        for given in job.credentials:
+            for name, value in self.credentials[given].items():
+                env[name] = expand(value, f"job {job.name!r}, credentials {given!r}, {name}")
+        env["PYTHONIOENCODING"] = "utf-8"
+        return env
 
     def _check_after(self) -> None:
         """``after:`` names jobs of the project, and never comes back round to a job."""
@@ -335,10 +421,19 @@ class Project:
         """Run ``job`` in a process of its own (its output to ``log_file``, or through)."""
         command = job.command(workspace=str(self.workspace), project=str(self.path))
         started = time.time()
+        try:
+            env = self.environment(job)
+        except ConfigurationError as exc:  # (a variable its credentials need is not set: it cannot start)
+            log.error("%s: %s", job.name, exc)
+            if log_file is not None:
+                log_file.parent.mkdir(parents=True, exist_ok=True)
+                with log_file.open("a", encoding="utf-8") as out:
+                    out.write(f"error: {exc}\n")
+            return JobResult(job, "failed", 2, started, time.time(), None, log_file)
         if runner is not None:
             code = runner(command, cwd=self.directory, log_file=log_file)
         else:
-            code = _run_command(command, cwd=self.directory, log_file=log_file)
+            code = _run_command(command, cwd=self.directory, log_file=log_file, env=env)
         finished = time.time()
         run = self._run_of(job, started)
         status = "failed" if code != 0 else (run.status if run is not None else "finished")
@@ -364,9 +459,8 @@ def _duration(value: timedelta) -> str:
     return f"{seconds} seconds"
 
 
-def _run_command(command: Sequence[str], *, cwd: Path, log_file: Path | None) -> int:
+def _run_command(command: Sequence[str], *, cwd: Path, log_file: Path | None, env: Mapping[str, str]) -> int:
     argv = [sys.executable, "-m", "wintergrab", *command]
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     if log_file is None:
         return subprocess.run(argv, cwd=cwd, env=env, check=False).returncode
     log_file.parent.mkdir(parents=True, exist_ok=True)

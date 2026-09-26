@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .credentials import Credentials, expand, site_of
 from .errors import ConfigurationError, FetchError, WintergrabError, describe
 from .fetchers import AsyncBrowserFetcher, AsyncFetcher, Response
 from .parser import Selector
@@ -166,8 +167,26 @@ def _parse_pairs(values: Sequence[str] | None, sep: str, what: str) -> dict[str,
     return out
 
 
+def _credentials(args: argparse.Namespace, urls: Iterable[str]) -> list[Credentials]:
+    """``-H`` and ``--cookie``: credentials of the sites of ``urls`` (``${NAME}`` in them read from the environment),
+    which only the requests to those sites carry."""
+    headers = {k: expand(v, f"-H {k}") for k, v in _parse_pairs(getattr(args, "header", None), ":", "--header").items()}
+    cookies = {
+        k: expand(v, f"--cookie {k}") for k, v in _parse_pairs(getattr(args, "cookie", None), "=", "--cookie").items()
+    }
+    if not headers and not cookies:
+        return []
+    sites = [site for site in dict.fromkeys(site_of(url) for url in urls) if site]
+    if not sites:
+        raise ConfigurationError(
+            "-H and --cookie go to the site of the URLs crawled, and none is known: give the start URL, or set the "
+            "spider's start_urls or allowed_domains"
+        )
+    return [Credentials(site, headers=headers, cookies=cookies) for site in sites]
+
+
 def _proxies(args: argparse.Namespace) -> ProxyRotator | None:
-    proxies = list(args.proxy or [])
+    proxies = [expand(p, "--proxy") for p in args.proxy or []]
     if getattr(args, "proxy_file", None):
         proxies.extend(Path(args.proxy_file).read_text(encoding="utf-8").splitlines())
     proxies = [p for p in proxies if p.strip() and not p.strip().startswith("#")]
@@ -260,8 +279,7 @@ def _load_schema(path: str) -> Any:
 # get
 # --------------------------------------------------------------------------- #
 async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response | Exception]:
-    headers = _parse_pairs(args.header, ":", "--header")
-    cookies = _parse_pairs(args.cookie, "=", "--cookie")
+    credentials = _credentials(args, urls)
     rotator = _proxies(args)
     fetcher: Any
     cache = _cache_options(args)
@@ -271,8 +289,7 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             proxies=rotator,
             timeout=args.timeout,
             retries=args.retries,
-            cookies=cookies or None,
-            extra_headers=headers or None,
+            credentials=credentials,
             resource_filter=True if args.block_trackers else None,
             network_policy="public" if args.public_only else None,
             **cache,
@@ -299,8 +316,7 @@ async def _fetch_all(args: argparse.Namespace, urls: list[str]) -> list[Response
             timeout=args.timeout,
             retries=args.retries,
             verify=not args.insecure,
-            headers=headers,
-            cookies=cookies,
+            credentials=credentials,
             network_policy="public" if args.public_only else None,
             **cache,
         )
@@ -1606,6 +1622,10 @@ def _crawl_settings(args: argparse.Namespace) -> tuple[type[Spider], dict[str, A
     rotator = _proxies(args)
     if rotator:
         overrides["proxies"] = rotator
+    if args.header or args.cookie:  # the sites of the crawl's start (a spider's own, for a spider file)
+        starts = overrides.get("start_urls") or [*getattr(cls, "start_urls", ()), *getattr(cls, "allowed_domains", ())]
+        given = _credentials(args, [str(u) for u in starts])
+        overrides["credentials"] = [*(overrides.get("credentials") or getattr(cls, "credentials", ()) or ()), *given]
     overrides["log_level"] = "DEBUG" if args.verbose > 0 else ("WARNING" if args.verbose < 0 else "INFO")
     to_stdout = not overrides.get("output") and not getattr(cls, "output", None)
     if to_stdout:
@@ -2478,8 +2498,30 @@ def cmd_data_quality(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # argument parsing
 # --------------------------------------------------------------------------- #
+def _add_credential_options(p: argparse.ArgumentParser, whose: str) -> None:
+    p.add_argument(
+        "-H",
+        "--header",
+        action="append",
+        metavar="'NAME: VALUE'",
+        help=f"a header for {whose} site only (its requests carry it, no other does); '${{NAME}}' in it is the "
+        "environment variable NAME, so that the command line holds no secret",
+    )
+    p.add_argument(
+        "--cookie",
+        action="append",
+        metavar="NAME=VALUE",
+        help=f"a cookie for {whose} site only; '${{NAME}}' in it is the environment variable NAME",
+    )
+
+
 def _add_network_options(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--proxy", action="append", metavar="URL", help="proxy to use (repeat to rotate several)")
+    p.add_argument(
+        "--proxy",
+        action="append",
+        metavar="URL",
+        help="proxy to use (repeat to rotate several); '${NAME}' in it is the environment variable NAME",
+    )
     p.add_argument("--proxy-file", metavar="FILE", help="file with one proxy per line")
     p.add_argument("--browser", "-b", action="store_true", help="use a headless browser (renders JavaScript)")
     p.add_argument(
@@ -2639,6 +2681,7 @@ def _add_crawl_options(c: argparse.ArgumentParser, *, extract_command: bool = Fa
     )
     c.add_argument("--no-robots", action="store_true", help="ignore robots.txt")
     c.add_argument("-s", "--set", action="append", metavar="NAME=VALUE", help="override a spider attribute")
+    _add_credential_options(c, "the start URLs'")
     _add_network_options(c)
     c.add_argument("--follow", action="append", metavar="SELECTOR", help="(URL mode) links/containers to follow")
     c.add_argument("--allow", action="append", metavar="REGEX", help="(URL mode) only follow matching URLs")
@@ -2719,8 +2762,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="BROWSER",
         help="browser fingerprint: chrome, firefox, safari, edge, or none (default: chrome)",
     )
-    g.add_argument("-H", "--header", action="append", metavar="'NAME: VALUE'", help="extra request header")
-    g.add_argument("--cookie", action="append", metavar="NAME=VALUE", help="cookie to send")
+    _add_credential_options(g, "the URLs'")
     g.add_argument("--timeout", type=float, default=30.0, metavar="SEC")
     g.add_argument("--retries", type=int, default=2)
     g.add_argument("--insecure", action="store_true", help="skip TLS certificate verification")

@@ -48,7 +48,7 @@ class SitemapRead:
 # Spider settings that are fetcher options too (a spider's default_headers are a fetcher's headers).
 _FETCH_SETTINGS = {
     "network_policy": "network_policy", "proxies": "proxies", "cache": "cache", "impersonate": "impersonate",
-    "verify": "verify", "default_headers": "headers",
+    "verify": "verify", "default_headers": "headers", "credentials": "credentials",
 }  # fmt: skip
 
 

@@ -57,7 +57,7 @@ need nothing more.
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, `AWS_ENDPOINT_URL`... | S3 credentials and endpoint, for `s3://` outputs, as the AWS tools read them |
 | `WINTERGRAB_UPLOADS` | Where items for an `s3://` output wait for their upload (default `.wintergrab/uploads`) |
 | `BRAVE_SEARCH_API_KEY`; `GOOGLE_API_KEY` and `GOOGLE_CSE_ID`; `SEARXNG_URL` | The search APIs `wintergrab search` and `goal --find-sites` ask ([search](search.md)) |
-| `${NAME}` in a project's webhooks | Any variable: secrets for webhooks |
+| `${NAME}` in `-H`, `--cookie`, `--proxy`, and a project's webhooks, `watch:`, jobs' `header:`, `cookie:`, `proxy:` and `credentials:` | Any variable: the process reads it, and the command line holds the name ([credentials](responsible-access.md#credentials)) |
 | `WINTERGRAB_PLUGINS=0` | Load no [plugin](plugins.md) |
 | `WINTERGRAB_BROWSER_PATH` | A Chrome or Chromium binary to use instead of Playwright's |
 | `WINTERGRAB_ADAPTIVE_DB` | Where adaptive selectors keep their fingerprints |
@@ -74,12 +74,19 @@ them (`proxies`, `--proxy`).
 Keep credentials out of files that are shared or committed:
 
 - **Webhooks**: read secrets from the environment with `${NAME}`.
+- **Logins and keys for a site**: `-H 'Authorization: Bearer ${TOKEN}'`,
+  `--cookie 'session=${SESSION}'`, or `credentials=[Credentials(...)]`:
+  they go to that site only, and the command line holds the variable's
+  name ([credentials](responsible-access.md#credentials)).
+- **Projects**: `credentials:` gives each job the variables it needs and
+  keeps the others from it ([projects](projects.md#credentials)).
 - **Models** and **search APIs**: read keys from the environment.
 - **Databases**: use `PGPASSWORD` or `~/.pgpass` (PostgreSQL), `MYSQL_PWD`
   or `~/.my.cnf` (MySQL, MariaDB), `WINTERGRAB_MONGODB_PASSWORD` (MongoDB).
 - **S3**: the AWS credential chain (`AWS_ACCESS_KEY_ID`..., profiles, roles);
   an `s3://` URL holding credentials is refused.
-- **Proxies**: a proxy file can hold its passwords.
+- **Proxies**: a proxy file can hold its passwords, or `--proxy
+  'http://user:${PROXY_PASSWORD}@proxy.example:8080'`.
 
 Wherever wintergrab writes settings or command lines down, it leaves
 credentials out: run records, logs, events, the dashboard. See

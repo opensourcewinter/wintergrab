@@ -646,15 +646,26 @@ def _has_redacted(value: Any) -> bool:
     return False
 
 
+#: Options that only change the requests a crawl sends: a replay sends none (it reads the recorded pages), so it
+#: has no use for them, nor for the logins and secrets they hold.
+_NETWORK_ONLY = frozenset({"-H", "--header", "--cookie", "--proxy", "--proxy-file"})
+
+
 def _replayable_argv(argv: Sequence[str]) -> list[str]:
-    """A recorded command line without the options whose credentials were left out."""
+    """A recorded command line without the options whose credentials were left out, nor those that only change
+    the requests sent (headers, cookies, proxies)."""
     out: list[str] = []
     skip = False
     for i, arg in enumerate(argv):
         if skip:
             skip = False
             continue
-        takes_value = arg in ("-s", "--set", "-H", "--header", "--cookie", "-b", "--proxy")
+        if arg in _NETWORK_ONLY:
+            skip = True
+            continue
+        if arg.startswith("--") and arg.partition("=")[0] in _NETWORK_ONLY:
+            continue
+        takes_value = arg in ("-s", "--set", "-b")
         if takes_value and i + 1 < len(argv) and _has_redacted_text(argv[i + 1]):
             skip = True
             continue

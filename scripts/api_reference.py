@@ -50,6 +50,7 @@ MODULES = [
     ("wintergrab.events", "Events"),
     ("wintergrab.models", "Language models"),
     ("wintergrab.plugins", "Plugins"),
+    ("wintergrab.credentials", "Credentials"),
     ("wintergrab.storage.parquet", "Parquet"),
     ("wintergrab.storage.xlsx", "Excel"),
     ("wintergrab.storage.duckdb", "DuckDB"),

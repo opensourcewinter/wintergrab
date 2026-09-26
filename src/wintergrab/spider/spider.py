@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..credentials import Credentials
 from ..errors import ConfigurationError
 from ..events import EventBus
 from ..fetchers.blocking import looks_blocked
@@ -224,6 +225,10 @@ class Spider:
     impersonate: str | None = "chrome"
     #: Headers added to every HTTP request.
     default_headers: Mapping[str, str] = {}
+    #: Headers and cookies for sites that are yours to use, each for one site
+    #: (:class:`~wintergrab.credentials.Credentials`): its requests carry them, and no other request does
+    #: (not a link to another site, not a redirect to one, not what a browser page loads from elsewhere).
+    credentials: Sequence[Credentials] = ()
     timeout: float = 30.0
     #: The largest response body read, decompressed (128 MiB; ``None``: no limit). A larger one, whether it says
     #: its size or not, is abandoned as it arrives: the page fails (``too_large``) and is not retried.
@@ -438,6 +443,7 @@ class Spider:
                 cache=self.http_cache(),
                 network_policy=self.get_network_policy(),
                 max_response_bytes=self.max_response_bytes,
+                credentials=self.credentials,
             ),
             default=not self.use_browser,
         )
@@ -451,6 +457,7 @@ class Spider:
                     cache=self.http_cache(),
                     resource_filter=self.resource_filter,
                     network_policy=self.get_network_policy(),
+                    credentials=self.credentials,
                 ),
                 default=self.use_browser,
             )

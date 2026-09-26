@@ -48,7 +48,8 @@ thousands of pages), the same API scales up.
 - **Browser superpowers.** Capture the JSON API calls a page makes while it
   renders, and see where each page's data is (`get --sources`: HTML, JSON-LD,
   embedded JSON, APIs with their pagination). Sign in once in the browser,
-  then continue over fast HTTP with the same cookies.
+  then continue over fast HTTP with the same cookies. Logins and keys go to
+  the site they are for, and nowhere else.
 - **Say what you want.** `wintergrab goal 'Find all laptops under $1000 on
   shop.example with name, price and rating'` reads the request, surveys the
   site (robots.txt, sitemaps, a sample of pages), shows a plan with what it

@@ -90,11 +90,15 @@ blocked like any other. WINTERGRAB does not solve CAPTCHAs.
 
 ## Access you were given
 
-Logins and keys that are yours to use work as they should:
+Logins and keys that are yours to use work as they should, and go to the
+site they are for and nowhere else:
 
-- cookies and headers: `cookies={...}`, `headers={"Authorization": ...}`;
-  `--cookie` and `-H` on the command line. In a project file, secrets come
-  from environment variables (`${NAME}`), and run records leave them out;
+- headers and cookies for a site: `credentials=[Credentials("club.example",
+  headers={"Authorization": ...}, cookies={...})]` on a spider or a fetcher,
+  or `-H` and `--cookie` on the command line (`crawl`, `get`: for the site
+  of the URLs given). The site's requests carry them, and no other request
+  does: not a link the crawl follows to another site, not a redirect to one,
+  not what a page loads from elsewhere ([credentials](#credentials), below);
 - a browser profile that keeps a login: `user_data_dir="profile/"`;
 - signing in with the site's own form, with
   [browser actions](fetching.md#browser-actions) or your own
@@ -118,6 +122,40 @@ class Members(Spider):
     def parse(self, response):
         ...  # the pages it follows go over HTTP, signed in
 ```
+
+### Credentials
+
+```bash
+export CLUB_TOKEN=...
+wintergrab crawl https://club.example/members/ -H 'Authorization: Bearer ${CLUB_TOKEN}' --cookie 'session=${CLUB_SESSION}'
+```
+
+- **Their site only.** `-H` and `--cookie` are for the site of the URLs
+  given: its registrable domain (`https://www.club.example/` is
+  `club.example`) and the hosts below it (`api.club.example`). For a spider
+  file, the sites of its `start_urls` and `allowed_domains`. A header or
+  cookie a request sets itself wins.
+- **Every hop.** Over HTTP, each redirect hop gets its own site's headers
+  and no others (a redirect from the site to another loses them, one into
+  it gains them); cookies are the session's for the site's domain.
+- **In a browser**, cookies are the browser's for the site's domain, and
+  headers go on the site's requests, sent from Playwright: a redirect is
+  followed without them, since Chromium would carry headers added to a
+  request on to another site. Chromium does not know the address of a page
+  fetched that way, so it refuses the page's requests to other sites'
+  private addresses (Private Network Access): an intranet page that loads
+  another intranet host's files needs cookies rather than headers.
+- **Off the command line.** `${NAME}` in `-H`, `--cookie` and `--proxy` is
+  the environment variable `NAME`, read by the process itself: the command
+  line, which anyone on the machine can read, holds the name. Quote it
+  (`'...${NAME}'`) so that the shell leaves it alone. A variable that is
+  not set is an error that names it. A run's record leaves the value out,
+  as it does every credential, and a replay, which reads the recorded pages
+  and sends no request, has no use for them.
+- **In a project**, a job's `header:`, `cookie:` and `proxy:` take `${NAME}`
+  the same way, and `credentials:` says which jobs get which variables
+  ([projects](projects.md#credentials)).
+- `repr(credentials)` names the headers and cookies, never their values.
 
 ## Proxies
 

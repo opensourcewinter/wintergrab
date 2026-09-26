@@ -36,7 +36,7 @@ with wg.Fetcher(impersonate="chrome", retries=3) as fetcher:
 | Option | Default | What it does |
 |---|---|---|
 | `impersonate` | `"chrome"` | Browser whose TLS/HTTP2 fingerprint and default headers to copy: `"chrome"`, `"firefox"`, `"safari"`, `"edge"`, a version such as `"chrome131"`, or `None` for plain curl. |
-| `headers`, `cookies` | – | Sent with every request. |
+| `headers`, `cookies` | – | Sent with every request, to any site. For a login or a key, use `credentials` (below), which go to their site only. |
 | `proxy` | – | One proxy for every request. |
 | `proxies` | – | A list of proxies or a `ProxyRotator` to rotate through. |
 | `timeout` | `30` | Seconds before giving up on a request. |
@@ -46,6 +46,7 @@ with wg.Fetcher(impersonate="chrome", retries=3) as fetcher:
 | `retry_statuses` | 408, 425, 429, 500, 502, 503, 504, 520-524 | Statuses worth retrying. |
 | `follow_redirects`, `max_redirects` | `True`, `10` | Redirect handling. |
 | `verify` | `True` | TLS verification, or a CA bundle path. `REQUESTS_CA_BUNDLE` / `CURL_CA_BUNDLE` / `SSL_CERT_FILE` are honoured. |
+| `credentials` | `None` | Headers and cookies for one site each (`Credentials("api.example", headers={"X-Api-Key": key})`): sent to that site only, each redirect hop getting its own site's ([credentials](responsible-access.md#credentials)). The browser fetchers take them too. |
 | `http_version` | auto | Force `"1.1"`, `"2"` or `"3"`. |
 | `referer` | – | The URL of the page that links to the ones fetched (sent as `Referer`). |
 | `raise_for_status` | `False` | Raise `HTTPStatusError` for 4xx/5xx instead of returning them. |

@@ -80,9 +80,9 @@ Options:
 | `--main-content` | Markdown/text of the main content only. |
 | `--adaptive` | Use [adaptive selectors](adaptive-selectors.md). |
 | `--impersonate BROWSER` | `chrome` (default), `firefox`, `safari`, `edge`, `none`. |
-| `-H/--header 'Name: value'`, `--cookie name=value` | Extra headers/cookies (repeatable). |
+| `-H/--header 'Name: value'`, `--cookie name=value` | Headers and cookies for the site of the URLs given, and no other (not where they redirect): see [credentials](responsible-access.md#credentials). `${NAME}` in them is the environment variable `NAME`, so that the command line holds no secret (repeatable). |
 | `--timeout SEC`, `--retries N`, `--insecure` | Network behaviour. |
-| `--proxy URL` (repeatable), `--proxy-file FILE` | Proxies (several = rotation). |
+| `--proxy URL` (repeatable), `--proxy-file FILE` | Proxies (several = rotation); `${NAME}` in `--proxy` is the environment variable `NAME`. |
 | `-b/--browser` | Use a headless browser. |
 | `--wait-for SEL`, `--wait SEC`, `--scroll`, `--headful`, `--screenshot FILE` | Browser options. |
 | `--block-trackers` | (browser) Also block ads, analytics and tracker requests. |
@@ -132,7 +132,8 @@ Options for any crawl:
 | `--profile FILE` | `profile`: save the [site profile](intelligence.md#site-profiles) and [topology](intelligence.md#site-topology) as JSON |
 | `--retry-failed` | `retry_dead_letters = True`: fetch only what an earlier run gave up on |
 | `--no-robots` | `obey_robots_txt = False` |
-| `--proxy URL`, `--proxy-file FILE` | `proxies` |
+| `--proxy URL`, `--proxy-file FILE` | `proxies` (`${NAME}` in `--proxy`: the environment variable) |
+| `-H/--header 'Name: value'`, `--cookie name=value` | `credentials`: for the start URL's site (a spider file's `start_urls` and `allowed_domains`) and no other; `${NAME}` in them is the environment variable ([credentials](responsible-access.md#credentials)) |
 | `-b/--browser` | `use_browser = True` |
 | `--auto-browser`, `--fetch-stats FILE`, `--render-if-missing SEL` | `adaptive_fetch`: HTTP first, a browser for the pages that [need one](spiders.md#http-first-a-browser-when-needed) |
 | `--record`, `--workspace DIR` | `record`, `run_registry`: keep the run, its pages and items, to [replay](runs.md) it without the network |

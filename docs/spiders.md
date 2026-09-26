@@ -542,7 +542,8 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `dead_letters` / `retry_dead_letters` | `True` / `False` | Record failed requests in `crawl_dir/dead_letters.jsonl`; queue them again. |
 | `event_log` | `None` | Write events as JSON lines (`True` = `crawl_dir/events.jsonl`). |
 | `impersonate` | `"chrome"` | Browser fingerprint for the default HTTP session. |
-| `default_headers` | `{}` | Headers for the default HTTP session. |
+| `default_headers` | `{}` | Headers for the default HTTP session (every request, to any site). |
+| `credentials` | `()` | Headers and cookies for sites that are yours to use: `[Credentials("club.example", headers={...}, cookies={...})]`. Each site's requests carry its own, and no other request does ([credentials](responsible-access.md#credentials)). |
 | `timeout` | `30` | Seconds per request. |
 | `max_response_bytes` | 128 MiB | The largest body read, decompressed: a larger page fails (`too_large`) without a retry. `None`: no limit. |
 | `verify` | `True` | TLS verification (or CA bundle path). |

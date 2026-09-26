@@ -15,6 +15,7 @@ from curl_cffi import requests as curl_requests
 from curl_cffi.const import CurlOpt
 from curl_cffi.requests import exceptions as curl_exc
 
+from ..credentials import Credentials, coerce, for_url, merge_headers
 from ..errors import ConfigurationError, FetchError, FetchTimeout, NetworkError, PolicyError, ProxyError, describe
 from ..netpolicy import NetworkPolicy
 from ..proxy import ProxyRotator, proxy_label
@@ -87,6 +88,7 @@ class _HTTPBase:
         cache_ttl: float | None = None,
         network_policy: NetworkPolicy | str | bool | None = None,
         max_response_bytes: int | None = DEFAULT_MAX_RESPONSE_BYTES,
+        credentials: Credentials | Iterable[Credentials] | None = None,
     ) -> None:
         """
         Args:
@@ -126,6 +128,8 @@ class _HTTPBase:
             max_response_bytes: The largest response body read, decompressed (128 MiB by default; ``None``: no
                 limit): a larger one, whether it says its size or not, is abandoned as it arrives, and raises a
                 :class:`~wintergrab.errors.FetchError` (``kind="too_large"``) that retrying does not repeat.
+            credentials: Headers and cookies for one site each (:class:`~wintergrab.credentials.Credentials`):
+                sent to that site only, redirects included (every hop is looked at).
         """
         if proxy and proxies:
             raise ValueError("Pass either proxy= or proxies=, not both")
@@ -156,6 +160,10 @@ class _HTTPBase:
         if max_response_bytes is not None and max_response_bytes < 1:
             raise ConfigurationError("must be a number of bytes, or None", key="max_response_bytes")
         self.max_response_bytes = max_response_bytes
+        self.credentials = coerce(credentials)
+        #: Whether redirects are followed here, hop by hop: to check each (a network policy), or to give each
+        #: hop the headers of its own site's credentials, and no other's.
+        self._by_hop = self.network_policy is not None or any(c.headers for c in self.credentials)
 
     # -- helpers ---------------------------------------------------------- #
     def _session_kwargs(self) -> dict[str, Any]:
@@ -331,7 +339,7 @@ class _HTTPBase:
     ) -> list[dict[str, Any]]:
         host = domain or (urlsplit(url).hostname if url else None) or ""
         if isinstance(cookies, Mapping):
-            return [{"name": k, "value": v, "domain": host, "path": "/"} for k, v in cookies.items()]
+            return [{"name": k, "value": v, "domain": host, "path": "/", "secure": False} for k, v in cookies.items()]
         return [
             {
                 "name": c["name"],
@@ -342,6 +350,13 @@ class _HTTPBase:
             }
             for c in cookies
         ]
+
+    def _signed(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """A hop's request arguments with the headers of its site's credentials (under its own)."""
+        extra = for_url(self.credentials, str(kwargs["url"]))
+        if not extra:
+            return kwargs
+        return dict(kwargs, headers=merge_headers(extra, kwargs.get("headers") or {}))
 
     def _report(self, proxy: str | None, from_rotator: bool, ok: bool) -> None:
         if from_rotator and self.proxies is not None:
@@ -372,6 +387,9 @@ class Fetcher(_HTTPBase):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._session = curl_requests.Session(**self._session_kwargs())
+        for item in self.credentials:  # (the session's cookies go to their domain only, redirects included)
+            if item.cookies:
+                self.add_cookies(item.cookies, domain=item.site)
 
     def request(
         self,
@@ -449,17 +467,20 @@ class Fetcher(_HTTPBase):
         raise AssertionError("unreachable")  # pragma: no cover
 
     def _send(self, kwargs: dict[str, Any], proxy: str | None) -> tuple[Any, list[str] | None]:
-        """One request (following redirects). With a network policy every hop is checked."""
+        """One request (following redirects). With a network policy every hop is checked; with credentials each
+        hop has its own site's headers."""
         policy = self.network_policy
-        if policy is None:
+        if not self._by_hop:
             return self._session.request(**kwargs), None
         follow = kwargs["allow_redirects"]
         kwargs = dict(kwargs, allow_redirects=False)
         history: list[str] = []
         while True:
-            policy.check_sync(str(kwargs["url"]), proxied=proxy is not None)
-            raw = self._session.request(**kwargs)
-            policy.check_connected(str(kwargs["url"]), getattr(raw, "primary_ip", None), proxied=proxy is not None)
+            if policy is not None:
+                policy.check_sync(str(kwargs["url"]), proxied=proxy is not None)
+            raw = self._session.request(**self._signed(kwargs))
+            if policy is not None:
+                policy.check_connected(str(kwargs["url"]), getattr(raw, "primary_ip", None), proxied=proxy is not None)
             hop = self._next_hop(raw, kwargs, history) if follow else None
             if hop is None:
                 return raw, history
@@ -534,6 +555,9 @@ class AsyncFetcher(_HTTPBase):
         self._loop: asyncio.AbstractEventLoop | None = None
         # Cookies to (re)apply to new sessions, keyed by (domain, path, name).
         self._pending_cookies: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for item in self.credentials:  # (the session's cookies go to their domain only, redirects included)
+            if item.cookies:
+                self.add_cookies(item.cookies, domain=item.site)
 
     def _get_session(self) -> curl_requests.AsyncSession:
         loop = asyncio.get_running_loop()
@@ -645,17 +669,20 @@ class AsyncFetcher(_HTTPBase):
     async def _send(
         self, session: curl_requests.AsyncSession, kwargs: dict[str, Any], proxy: str | None
     ) -> tuple[Any, list[str] | None]:
-        """One request (following redirects). With a network policy every hop is checked."""
+        """One request (following redirects). With a network policy every hop is checked; with credentials each
+        hop has its own site's headers."""
         policy = self.network_policy
-        if policy is None:
+        if not self._by_hop:
             return await session.request(**kwargs), None
         follow = kwargs["allow_redirects"]
         kwargs = dict(kwargs, allow_redirects=False)
         history: list[str] = []
         while True:
-            await policy.check(str(kwargs["url"]), proxied=proxy is not None)
-            raw = await session.request(**kwargs)
-            policy.check_connected(str(kwargs["url"]), getattr(raw, "primary_ip", None), proxied=proxy is not None)
+            if policy is not None:
+                await policy.check(str(kwargs["url"]), proxied=proxy is not None)
+            raw = await session.request(**self._signed(kwargs))
+            if policy is not None:
+                policy.check_connected(str(kwargs["url"]), getattr(raw, "primary_ip", None), proxied=proxy is not None)
             hop = self._next_hop(raw, kwargs, history) if follow else None
             if hop is None:
                 return raw, history

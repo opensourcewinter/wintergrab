@@ -1017,6 +1017,45 @@ an error that says so, not a setting silently ignored
   four.
 - The CI's database job runs it against PostgreSQL 16.
 
+### Credentials: logins that stay on their site (`wintergrab.credentials`)
+
+- `Credentials(site, headers=..., cookies=...)`, for fetchers (`credentials=`)
+  and spiders (`credentials = [...]`): the site's requests (its host and the
+  hosts below it) carry them, and no other request does. Over HTTP each
+  redirect hop gets its own site's headers, so a redirect off the site
+  loses them and one onto it gains them; cookies are the session's for the
+  site's domain. In a browser, cookies are the browser's for that domain,
+  and headers go on the site's requests (the page and what it loads from
+  the site), sent from Playwright so that a redirect is followed without
+  them: tried, Chromium carries headers added to a request (`Authorization`
+  too) on to the site a redirect sends it to. Chromium then does not know
+  the address of such a page, so it refuses the page's requests to other
+  sites' private addresses: said in the docs. Its `repr` names the headers
+  and cookies, never their values.
+- `crawl` takes `-H` and `--cookie`, which it did not have (the docs said it
+  did), and `get`'s are now credentials too: for the site of the URLs given
+  (their registrable domain; for a spider file, its `start_urls` and
+  `allowed_domains`), never another. Before, `get --browser -H` gave the
+  header to every request of the page, a tracker's included.
+- `${NAME}` in `-H`, `--cookie` and `--proxy` is the environment variable,
+  read by the process itself: the command line, which anyone on the machine
+  can read, holds the name. One not set is an error that names it. A replay
+  leaves headers, cookies and proxies out of the command it runs again: it
+  reads the recorded pages and sends no request, so it needs no secret
+  (before, it kept those whose values were not masked).
+- Projects: a job's `header:`, `cookie:` and `proxy:` take `${NAME}` the same
+  way (they were refused, with nothing in their place). `credentials:` names
+  sets of variables (`club: [CLUB_TOKEN]`, or `PGPASSWORD: ${SHOP_DB_PASSWORD}`
+  to give a job a variable from another), a job names the sets it gets, and
+  every job's process now gets the scheduler's environment less the
+  variables of the sets it was not given, and less the token that triggers
+  jobs (`WINTERGRAB_TRIGGER_TOKEN`), which no job needs. Tried with two jobs
+  and the test server: the one given the token sent it, the other failed
+  saying the variable is not set, though the scheduler had it. A job whose
+  credentials cannot be read does not start, and its log says which
+  variable is missing; a value written in the file instead of `${NAME}` is
+  an error.
+
 ### Documentation and contributing
 
 - CI audits the packages wintergrab installs, with every extra and their
@@ -1037,6 +1076,10 @@ an error that says so, not a setting silently ignored
   package. Each is tested offline, and live before releases.
 
 ### Fixes
+
+- `Fetcher.add_cookies({name: value}, url=...)` (and `AsyncFetcher`'s), as
+  documented, raised `KeyError: 'secure'` whatever it was given: only the
+  list form, as a browser exports cookies, worked.
 
 - Nothing limited the size of a response: a page linking to a large file,
   or a small compressed body that unpacks to gigabytes, was read whole into

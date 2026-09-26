@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urljoin
 
+from ..credentials import Credentials, coerce, for_url, merge_headers
 from ..errors import (
     BrowserFetchError,
     BrowserNotAvailable,
@@ -208,6 +209,12 @@ class AsyncBrowserFetcher:
         cache: Cache rendered pages (``True``, a path or an
             :class:`~wintergrab.HTTPCache`); handy with ``cache_mode="prefer"``
             to render each page only once while developing.
+        credentials: Headers and cookies for one site each (:class:`~wintergrab.credentials.Credentials`):
+            sent to that site only. The cookies are the browser's for that domain; the headers go on the
+            requests to it, whether the page or what it loads, and a redirect is followed without them (so that
+            they cannot go along to another site, as Chromium would take them). Those requests are sent from
+            Playwright and their answers handed to the page, whose address Chromium then does not know: it
+            refuses the page's requests to other sites' private addresses (Private Network Access).
     """
 
     def __init__(
@@ -240,6 +247,7 @@ class AsyncBrowserFetcher:
         cache_ttl: float | None = None,
         resource_filter: ResourceFilter | Mapping[str, Any] | bool | None = None,
         network_policy: NetworkPolicy | str | bool | None = None,
+        credentials: Credentials | Iterable[Credentials] | None = None,
     ) -> None:
         if proxy and proxies:
             raise ValueError("Pass either proxy= or proxies=, not both")
@@ -259,6 +267,7 @@ class AsyncBrowserFetcher:
         self.block_resources = frozenset(block_resources or ())
         self.resource_filter = ResourceFilter.coerce(resource_filter, block_types=self.block_resources)
         self.network_policy = NetworkPolicy.coerce(network_policy)
+        self.credentials = coerce(credentials)
         self.timeout = timeout
         self.wait_until = wait_until
         self.max_pages = max(1, max_pages)
@@ -369,6 +378,15 @@ class AsyncBrowserFetcher:
     async def _prepare_context(self, context: Any) -> None:
         if self.cookies and not isinstance(self.cookies, Mapping):
             await context.add_cookies([dict(c) for c in self.cookies])
+        scoped = [
+            # (".club.example": the site and the hosts below it; an address, or "localhost", is a host of its own)
+            {"name": name, "value": value, "domain": item.site if _single_host(item.site) else "." + item.site,
+             "path": "/"}
+            for item in self.credentials
+            for name, value in item.cookies.items()
+        ]  # fmt: skip
+        if scoped:
+            await context.add_cookies(scoped)
 
     async def _acquire_context(self, proxy: str | None) -> tuple[str | None, Any]:
         """The browser context for ``proxy`` (created once, even under concurrency)."""
@@ -637,15 +655,36 @@ class AsyncBrowserFetcher:
                 if reason is not None:
                     resource_filter.stats[reason] += 1
             try:
-                if reason is None:
-                    await route.continue_()
-                else:
+                if reason is not None:
                     blocked[reason] += 1
                     await route.abort("blockedbyclient")
+                elif extra := for_url(self.credentials, url) if self._signs else {}:
+                    await self._signed(route, extra)
+                else:
+                    await route.continue_()
             except Exception:  # pragma: no cover - the page is closing
                 pass
 
         return handle
+
+    @property
+    def _signs(self) -> bool:
+        """Whether requests are given their site's credential headers (in the route handler)."""
+        return any(item.headers for item in self.credentials)
+
+    async def _signed(self, route: Any, extra: Mapping[str, str]) -> None:
+        """Send a request with its site's credential headers, and give the page the answer as it is: a redirect is
+        the browser's to follow, and it follows it without them (Chromium would carry headers added to a request on
+        to another site; Playwright does not route the hops of a redirect)."""
+        try:
+            answer = await route.fetch(
+                headers=merge_headers(extra, route.request.headers), max_redirects=0, timeout=self.timeout * 1000
+            )
+        except Exception as exc:
+            log.info("could not fetch %s: %s", route.request.url, describe(exc))
+            await route.abort("failed")
+            return
+        await route.fulfill(response=answer)
 
     async def _check_navigation(self, hops: list[str], main: Any, proxied: bool) -> str | None:
         """Check the page's redirect hops (Playwright's router only sees the first) and the address
@@ -694,7 +733,7 @@ class AsyncBrowserFetcher:
         refused: list[str] = []
         proxied = self._proxied(proxy)
         try:
-            if self.resource_filter or self.network_policy is not None:
+            if self.resource_filter or self.network_policy is not None or self._signs:
                 await page.route("**/*", self._router(page, blocked, proxied, refused))
             if headers:
                 await page.set_extra_http_headers(dict(headers))
@@ -1067,3 +1106,8 @@ class BrowserFetcher:
             self.close(timeout=10)
         except Exception:
             pass
+
+
+def _single_host(site: str) -> bool:
+    """Whether a site is one host with none below it that cookies could reach: an address, or a one-label name."""
+    return "." not in site or site.replace(".", "").isdigit() or ":" in site

@@ -6,7 +6,7 @@ checks that it is up to date.
 
 ## `wintergrab`: Fetching, parsing and the most used names
 
-- **`AsyncBrowserFetcher(*, headless: bool = True, executable_path: str | None = None, channel: str | None = None, proxy: str | None = None, proxies: ProxyRotator | Sequence[str] | None = None, user_agent: str | None = None, locale: str = 'en-US', timezone_id: str | None = None, viewport: tuple[int, int] = (1366, 768), extra_headers: Mapping[str, str] | None = None, cookies: Mapping[str, str] | Sequence[Mapping[str, Any]] | None = None, block_resources: Iterable[str] = ('image', 'media', 'font'), timeout: float = 30.0, wait_until: str = 'load', max_pages: int = 4, retries: int = 1, retry_statuses: Iterable[int] = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}, wait_for_challenge: bool = True, challenge_timeout: float = 20.0, user_data_dir: str | None = None, launch_args: Sequence[str] | None = None, adaptive_storage: AdaptiveStorage | None = None, cache: HTTPCache | str | bool | None = None, cache_mode: str | None = None, cache_ttl: float | None = None, resource_filter: ResourceFilter | Mapping[str, Any] | bool | None = None, network_policy: NetworkPolicy | str | bool | None = None)`** (class). Fetch pages with a real (headless) Chromium via Playwright.
+- **`AsyncBrowserFetcher(*, headless: bool = True, executable_path: str | None = None, channel: str | None = None, proxy: str | None = None, proxies: ProxyRotator | Sequence[str] | None = None, user_agent: str | None = None, locale: str = 'en-US', timezone_id: str | None = None, viewport: tuple[int, int] = (1366, 768), extra_headers: Mapping[str, str] | None = None, cookies: Mapping[str, str] | Sequence[Mapping[str, Any]] | None = None, block_resources: Iterable[str] = ('image', 'media', 'font'), timeout: float = 30.0, wait_until: str = 'load', max_pages: int = 4, retries: int = 1, retry_statuses: Iterable[int] = {408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}, wait_for_challenge: bool = True, challenge_timeout: float = 20.0, user_data_dir: str | None = None, launch_args: Sequence[str] | None = None, adaptive_storage: AdaptiveStorage | None = None, cache: HTTPCache | str | bool | None = None, cache_mode: str | None = None, cache_ttl: float | None = None, resource_filter: ResourceFilter | Mapping[str, Any] | bool | None = None, network_policy: NetworkPolicy | str | bool | None = None, credentials: Credentials | Iterable[Credentials] | None = None)`** (class). Fetch pages with a real (headless) Chromium via Playwright.
   - `aclose(self)`: Close every tab, context and the browser itself.
   - `close(self)`: Close every tab, context and the browser itself.
   - `export_cookies(self, url: str | None = None, *, proxy: str | None = None) -> list[dict[str, Any]]`: Cookies of the browser session (optionally only those sent to ``url``).
@@ -60,6 +60,8 @@ checks that it is up to date.
 - **`CrawlResult(items: list[Any] = ..., stats: dict[str, Any] = ..., status: str = 'finished', crawl_dir: str | None = None, failures: list[FailureDiagnosis] = ..., metrics: dict[str, Any] = ..., changes: Any = None, profile: Any = None, fetch_strategy: Any = None, optimizer: Any = None, run_id: str | None = None)`** (class). What :meth:`Spider.run` returns.
   - `failure_report(self, limit: int = 10) -> str`: The failure diagnoses as readable text.
   - `save(self, path: str | Path) -> Path`: Write :attr:`items` to ``.jsonl``, ``.json`` or ``.csv``.
+- **`Credentials(site: str, headers: Mapping[str, str] = ..., cookies: Mapping[str, str] = ...)`** (class). Headers and cookies for the requests to one site, and to no other (see the module docs).
+  - `covers(self, url: str) -> bool`: Whether a request to ``url`` (or to a host) is to the site: its host, or a host below it.
 - **`DropItem`** (exception). Raised by a pipeline to drop an item; the message says why (counted in the stats).
 - **`ExportError`** (exception). Items could not be written to an output.
 - **`ExpressionError`** (exception). A filter/computed-field expression is invalid, or failed on a record (see :mod:`wintergrab.data.expressions`).
@@ -992,13 +994,14 @@ checks that it is up to date.
 ## `wintergrab.project`: Projects and the scheduler
 
 - **`PROJECT_FILES`** = `('wintergrab.yaml', 'wintergrab.yml', 'wintergrab.toml', 'wintergrab.json')`
-- **`Job(name: str, kind: str, target: str, options: dict[str, Any] = ..., settings: dict[str, Any] = ..., schedule: Schedule | None = None, enabled: bool = True, start_within: timedelta | None = None, description: str = '', watch: str | None = None, check: timedelta = ..., after: tuple[str, ...] = ())`** (class). One job of a project (see the module docs).
+- **`Job(name: str, kind: str, target: str, options: dict[str, Any] = ..., settings: dict[str, Any] = ..., schedule: Schedule | None = None, enabled: bool = True, start_within: timedelta | None = None, description: str = '', watch: str | None = None, check: timedelta = ..., after: tuple[str, ...] = (), credentials: tuple[str, ...] = ())`** (class). One job of a project (see the module docs).
   - `command(self, *, workspace: str | None = None, project: str | None = None) -> list[str]`: The ``wintergrab`` command line that runs the job.
   - `trigger(self) -> str`: What runs the job, in words: ``"every 2 hours"``, ``"when https://.../sitemap.xml changes"``...
 - **`JobResult(job: Job, status: str, exit_code: int, started: float, finished: float, run: Run | None = None, log: Path | None = None)`** (class). What running a job gave.
   - `describe(self) -> str`
 - **`Project(path: str | os.PathLike[str])`** (class). A project file (see the module docs).
   - `dependents(self, name: str) -> list[Job]`: The jobs that run after ``name``.
+  - `environment(self, job: Job) -> dict[str, str]`: The environment the job's process gets: this process's, less the variables the project's credentials name (their own, and those their values come from) and the token that triggers jobs, plus the variables of the credentials the job is given, their values read now.
   - `run_job(self, job: Job, *, log_file: Path | None = None, runner: Callable[..., int] | None = None) -> JobResult`: Run ``job`` in a process of its own (its output to ``log_file``, or through).
   - `select(self, names: Iterable[str] | None) -> list[Job]`
   - `webhooks(self) -> list[Webhook]`: The project's webhooks (``${NAME}`` read from the environment now).
@@ -1107,6 +1110,15 @@ checks that it is up to date.
   - `strategy(self, strategy: Any, *, before: str | None = None)`: An extraction strategy class, tried by extractors (after the built-in ones, or ``before`` one).
 - **`load_plugins(*, force: bool = False) -> list[PluginInfo]`**. Load the installed plugins, once (``force``: again).
 - **`plugins() -> list[PluginInfo]`**. The plugins loaded so far.
+
+## `wintergrab.credentials`: Credentials
+
+- **`VARIABLE`**: a Pattern
+`Credentials`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
+
+- **`expand(text: str, where: str) -> str`**. ``text`` with each ``${NAME}`` the environment variable ``NAME`` (an error, naming it, when it is not set).
+- **`for_url(credentials: Iterable[Credentials], url: str) -> dict[str, str]`**. The headers of the credentials covering ``url`` (where two say the same, the more specific site's).
+- **`site_of(url: str) -> str`**. The site credentials given with ``url`` are for: its registrable domain (``https://www.club.example/`` is ``club.example``); an IP address or a one-label host (``localhost``) as it is.
 
 ## `wintergrab.storage.parquet`: Parquet
 
