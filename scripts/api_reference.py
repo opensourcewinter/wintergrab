@@ -14,6 +14,7 @@ import importlib
 import inspect
 import re
 import sys
+import typing
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,8 @@ def _summary(obj: Any) -> str:
 def _annotation(value: Any) -> str:
     if value is inspect.Parameter.empty:
         return ""
+    if isinstance(value, typing.ForwardRef):  # a NamedTuple's fields, before Python 3.14
+        return value.__forward_arg__
     return value if isinstance(value, str) else inspect.formatannotation(value)
 
 
