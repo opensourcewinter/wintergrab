@@ -12,7 +12,8 @@ domains and how each was throttled, its extraction (pages with no complete recor
 fields that came or went), what changed since the last run, and its events. A running crawl's
 page refreshes itself, from the metrics the crawl keeps every two seconds.
 
-The same as JSON: ``/api/runs``, ``/api/runs/RUN`` and ``/api/jobs``.
+The same as JSON: ``/api/runs``, ``/api/runs/RUN`` and ``/api/jobs``; and the records a run collected,
+a page at a time: ``/api/runs/RUN/items?offset=0&limit=100``.
 
 It is for this machine: it listens on 127.0.0.1, only answers requests addressed to it (a web page
 elsewhere cannot reach it through DNS rebinding), changes nothing, and shows what crawls
@@ -35,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
-from .errors import ConfigurationError
+from .errors import ConfigurationError, WintergrabError, describe
 from .redact import redact, redact_argv
 from .runs import DEFAULT_WORKSPACE, Run, RunRegistry
 
@@ -238,15 +239,47 @@ class Dashboard:
         return data
 
     def _output_size(self, run: Run) -> int | None:
-        if not run.output:
+        path = self._output_path(run)
+        try:
+            return path.stat().st_size if path is not None else None
+        except OSError:
+            return None
+
+    def _output_path(self, run: Run) -> Path | None:
+        """The file ``run`` wrote its records to, where it is (as given, or from the workspace's directory)."""
+        if not run.output or "://" in run.output:
             return None
         path = Path(run.output)
         for candidate in (path, self.workspace.resolve().parent / path):
-            try:
-                return candidate.stat().st_size
-            except OSError:
-                continue
+            if candidate.is_file():
+                return candidate
         return None
+
+    def items(self, run: Run, *, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+        """A page of the records ``run`` collected, read from its output file (``/api/runs/RUN/items``):
+        ``{"run", "offset", "limit", "items", "next"}``, ``next`` the next page's offset (``None``: the
+        last page), and a ``note`` when the rest could not be read (a crawl still writing it)."""
+        from .data.io import read_records
+
+        path = self._output_path(run)
+        if path is None:
+            if not run.output:
+                raise ConfigurationError(f"{run.id} kept no output")
+            if "://" in run.output:
+                raise ConfigurationError(f"{run.id} wrote to {run.output}: read its records there")
+            raise ConfigurationError(f"{run.id}'s output {run.output} is not here any more")
+        page: dict[str, Any] = {"run": run.id, "offset": offset, "limit": limit, "items": [], "next": None}
+        try:
+            for index, record in enumerate(read_records(path)):
+                if index < offset:
+                    continue
+                if len(page["items"]) == limit:
+                    page["next"] = offset + limit
+                    break
+                page["items"].append(record)
+        except WintergrabError as exc:  # (its last line not written whole yet...)
+            page["note"] = f"the rest could not be read (yet): {describe(exc)}"
+        return page
 
 
 # ---------------------------------------------------------------------------------------------- #
@@ -474,7 +507,9 @@ def render_run(dashboard: Dashboard, run: Run) -> str:
         f'<p><a href="/">← runs</a></p><div class="top"><div><h1>RUN {esc(run.id)}</h1>'
         f"<div>{esc(name)} · {_badge(state)} · {esc(_when(run.started))} · {esc(_seconds(took))}"
         f"{' · recorded' if run.recorded else ''}</div></div>"
-        f'<div class="muted"><a href="/api/runs/{esc(run.id)}">JSON</a></div></div>'
+        f'<div class="muted"><a href="/api/runs/{esc(run.id)}">JSON</a>'
+        + (f' · <a href="/api/runs/{esc(run.id)}/items">records</a>' if data.get("output_bytes") is not None else "")
+        + "</div></div>"
     )
     if command:
         header += f'<p class="muted"><code>wintergrab {esc(" ".join(command))}</code></p>'
@@ -658,6 +693,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json([dashboard.summary(run) for run in dashboard.runs(_int(query.get("limit"), 200))], head)
             elif segments[:2] == ["api", "runs"] and len(segments) == 3:
                 self._json(dashboard.run_data(dashboard.run(segments[2])), head)
+            elif segments[:2] == ["api", "runs"] and len(segments) == 4 and segments[3] == "items":
+                offset = _int(query.get("offset"), 0, low=0, high=10**12)
+                limit = _int(query.get("limit"), 100, high=1000)
+                self._json(dashboard.items(dashboard.run(segments[2]), offset=offset, limit=limit), head)
             elif segments == ["api", "jobs"]:
                 self._json(dashboard.jobs(), head)
             else:
@@ -698,9 +737,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-def _int(values: list[str] | None, default: int) -> int:
+def _int(values: list[str] | None, default: int, *, low: int = 1, high: int = 10_000) -> int:
     try:
-        return max(1, min(int((values or [""])[0]), 10_000))
+        return max(low, min(int((values or [""])[0]), high))
     except ValueError:
         return default
 

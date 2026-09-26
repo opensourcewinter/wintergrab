@@ -71,7 +71,14 @@ The same data is available as JSON, for scripts and other tools:
 |---|---|
 | `/api/runs` | The runs, newest first (`?limit=N`, 200 by default) |
 | `/api/runs/RUN` | One run: its record, `state`, `metrics`, a summary of its `events`, and the size of its output |
+| `/api/runs/RUN/items` | The records the run collected, a page at a time (`?offset=0&limit=100`, 1,000 at most): `{"items": [...], "next": 100}`, `next` being `null` on the last page |
 | `/api/jobs` | The project's jobs: schedule, next time, last status and run |
+
+A run's records are read from its output file, in any format a crawl
+writes (JSON Lines, CSV, SQLite, Parquet...), found as it was given or from
+the workspace's directory; while a crawl is still writing it, a `note` says
+the rest could not be read yet. A run that wrote to a database or an object
+store is read there (its URL is kept without its password).
 
 ## Safety
 
@@ -80,8 +87,8 @@ The dashboard is for the machine it runs on:
 - It listens on 127.0.0.1. It answers only requests addressed to
   `127.0.0.1` or `localhost`, so a web page elsewhere cannot read it
   through DNS rebinding.
-- It changes nothing. It only reads the workspace, and other methods than
-  `GET` are refused.
+- It changes nothing. It only reads the workspace and the runs' output
+  files, and other methods than `GET` are refused.
 - What crawls collected is shown as text, never as markup. Pages carry a
   Content Security Policy that allows no script at all, and links to
   crawled pages send no referrer.

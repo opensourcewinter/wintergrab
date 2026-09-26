@@ -178,3 +178,32 @@ def test_a_project_s_jobs(tmp_path, dashboard_server) -> None:
     assert jobs[0]["next"] is not None and jobs[1]["next"] is None
     page = fetch(dashboard_server(project.workspace, project), "/")[2]
     assert "<h2>Jobs</h2>" in page and "daily at 06:00" in page and "when asked" in page
+
+
+def test_a_run_s_records_a_page_at_a_time(tmp_path, dashboard_server) -> None:
+    workspace = tmp_path / "ws"
+    registry = RunRegistry(workspace)
+    output = tmp_path / "books.jsonl"  # (as given to the crawl, from the workspace's directory)
+    output.write_text("".join(json.dumps({"title": f"Book {n}", "price": n}) + "\n" for n in range(1, 6)),
+                      encoding="utf-8")  # fmt: skip
+    for output_of in ("books.jsonl", "postgresql://***@db.example/shop?table=books", None, "gone.jsonl"):
+        run = registry.create("books")
+        run.status, run.finished, run.output = "finished", run.started + 1, output_of
+        registry.save(run)
+    server = dashboard_server(workspace)
+
+    first = json.loads(fetch(server, "/api/runs/run-1/items?limit=2")[2])
+    assert [r["title"] for r in first["items"]] == ["Book 1", "Book 2"] and first["next"] == 2
+    last = json.loads(fetch(server, "/api/runs/run-1/items?offset=4&limit=2")[2])
+    assert [r["title"] for r in last["items"]] == ["Book 5"] and last["next"] is None
+    assert json.loads(fetch(server, "/api/runs/run-1/items")[2])["limit"] == 100  # (the default)
+    assert 'href="/api/runs/run-1/items">records</a>' in fetch(server, "/runs/run-1")[2]
+    with output.open("a", encoding="utf-8") as fh:
+        fh.write('{"title": "Book 6", "pri')  # a crawl still writing it
+    growing = json.loads(fetch(server, "/api/runs/run-1/items?offset=4")[2])
+    assert [r["title"] for r in growing["items"]] == ["Book 5"] and "could not be read (yet)" in growing["note"]
+    status, _, said = fetch(server, "/api/runs/run-2/items")
+    assert status == 404 and "read its records there" in said  # a database: not read from here
+    assert "kept no output" in fetch(server, "/api/runs/run-3/items")[2]
+    assert "is not here any more" in fetch(server, "/api/runs/run-4/items")[2]
+    assert fetch(server, "/api/runs/run-9/items")[0] == 404

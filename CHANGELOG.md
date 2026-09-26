@@ -911,6 +911,10 @@ an error that says so, not a setting silently ignored
   credentials.
 - Runs keep their metrics (`metrics.json`: every two seconds while they
   run, then the final ones) and the quality reports of their records.
+- `/api/runs/RUN/items?offset=&limit=` serves the records a run collected,
+  a page at a time, from its output file (any format a crawl writes); the
+  run page links it. A crawl still writing its file gives the records read
+  so far and a note.
 
 ### Storage adapters (`wintergrab.storage`)
 
