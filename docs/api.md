@@ -324,7 +324,7 @@ checks that it is up to date.
 
 `Spider`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
 
-- **`open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter`**. Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``).
+- **`open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter`**. Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``).
 - **`write_items(path: str | os.PathLike[str], items: list[Any]) -> Path`**. Write a list of items in one go (format chosen by extension).
 
 ## `wintergrab.extraction`: Typed records from pages
@@ -1089,6 +1089,22 @@ checks that it is up to date.
   - `flush(self)`: Push buffered items to disk (called on checkpoints and at the end).
   - `write(self, item: Any)`
 - **`read_postgres(url: str) -> Iterator[dict[str, Any]]`**. The rows of a table as records: a table wintergrab wrote gives its fields back by their names.
+
+## `wintergrab.storage.mysql`: MySQL and MariaDB
+
+- **`MySQLExporter(url: str, *, append: bool, unique_key: str | None = None)`** (class). Items as the rows of a MySQL or MariaDB table (see the module docs).
+  - `close(self)`
+  - `flush(self)`: Push buffered items to disk (called on checkpoints and at the end).
+  - `write(self, item: Any)`
+- **`read_mysql(url: str) -> Iterator[dict[str, Any]]`**. The rows of a table as records: a table wintergrab wrote gives its fields back by their names and types (nested values as the objects and lists they were).
+
+## `wintergrab.storage.mongodb`: MongoDB
+
+- **`MongoExporter(url: str, *, append: bool, unique_key: str | None = None)`** (class). Items as the documents of a MongoDB collection (see the module docs).
+  - `close(self)`
+  - `flush(self)`: Push buffered items to disk (called on checkpoints and at the end).
+  - `write(self, item: Any)`
+- **`read_mongodb(url: str) -> Iterator[dict[str, Any]]`**. The documents of a collection as records, in the order they were first written (without MongoDB's ``_id``).
 
 ## `wintergrab.dashboard`: The dashboard
 

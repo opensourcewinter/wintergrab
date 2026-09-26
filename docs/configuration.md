@@ -52,12 +52,15 @@ need nothing more.
 |---|---|
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_API_KEY` | Keys of the [model](models.md) providers |
 | `PGPASSWORD` (and `~/.pgpass`) | The PostgreSQL password, kept out of the output URL |
+| `MYSQL_PWD` (and `~/.my.cnf`) | The MySQL or MariaDB password, kept out of the output URL |
+| `WINTERGRAB_MONGODB_PASSWORD` | The MongoDB password, for an output URL that names a user without one |
 | `${NAME}` in a project's webhooks | Any variable: secrets for webhooks |
 | `WINTERGRAB_PLUGINS=0` | Load no [plugin](plugins.md) |
 | `WINTERGRAB_BROWSER_PATH` | A Chrome or Chromium binary to use instead of Playwright's |
 | `WINTERGRAB_ADAPTIVE_DB` | Where adaptive selectors keep their fingerprints |
 | `WINTERGRAB_LIVE=1` | (tests) Run the tests against real websites |
 | `WINTERGRAB_TEST_POSTGRES` | (tests) A PostgreSQL URL to test the PostgreSQL output against |
+| `WINTERGRAB_TEST_MYSQL`, `WINTERGRAB_TEST_MONGODB` | (tests) A MySQL (or MariaDB) and a MongoDB URL, the same way |
 
 The usual proxy variables (`HTTPS_PROXY`...) apply to model and webhook
 requests, which use the standard library. Crawls use the proxies you give
@@ -69,7 +72,8 @@ Keep credentials out of files that are shared or committed:
 
 - **Webhooks**: read secrets from the environment with `${NAME}`.
 - **Models**: read keys from the environment.
-- **PostgreSQL**: use `PGPASSWORD` or `~/.pgpass`.
+- **Databases**: use `PGPASSWORD` or `~/.pgpass` (PostgreSQL), `MYSQL_PWD`
+  or `~/.my.cnf` (MySQL, MariaDB), `WINTERGRAB_MONGODB_PASSWORD` (MongoDB).
 - **Proxies**: a proxy file can hold its passwords.
 
 Wherever wintergrab writes settings or command lines down, it leaves

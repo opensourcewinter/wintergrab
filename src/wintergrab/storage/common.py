@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 from ..errors import ConfigurationError, ExportError
 from ..utils import replace_file
 
-__all__ = ["Spool", "as_text", "column_kinds", "kind_of", "require", "widen"]
+__all__ = ["Spool", "as_text", "column_kinds", "column_name", "kind_of", "require", "widen"]
 
 
 def require(module: str, extra: str, what: str) -> Any:
@@ -61,6 +62,21 @@ def column_kinds(records: Iterable[dict[str, Any]]) -> dict[str, str]:
         for key, value in record.items():
             kinds[key] = widen(kinds.get(key, "null"), kind_of(value))
     return kinds
+
+
+_NOT_NAME = re.compile(r"[^0-9a-zA-Z_]")
+
+
+def column_name(key: str, used: set[str]) -> str:
+    """A database column for field ``key``: letters, digits and _ (``Price (USD)`` is ``price_usd``), at most 55
+    characters, unlike every name in ``used``."""
+    base = re.sub(r"_+", "_", _NOT_NAME.sub("_", key)).strip("_").lower()[:55] or "field"
+    if base[0].isdigit():
+        base = "f_" + base
+    name, n = base, 2
+    while name in used:
+        name, n = f"{base}_{n}", n + 1
+    return name
 
 
 def as_text(value: Any) -> str | None:

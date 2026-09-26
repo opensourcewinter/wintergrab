@@ -1,5 +1,5 @@
 """Write scraped items as they arrive: JSON Lines, JSON, CSV, SQLite, and through
-:mod:`wintergrab.storage` Parquet, Excel and PostgreSQL (or any format registered with
+:mod:`wintergrab.storage` Parquet, Excel, PostgreSQL, MySQL and MongoDB (or any format registered with
 :func:`register_exporter`)."""
 
 from __future__ import annotations
@@ -393,6 +393,10 @@ EXPORTERS: dict[str, type[Exporter] | str] = {
 URL_EXPORTERS: dict[str, type[Exporter] | str] = {
     "postgresql": "wintergrab.storage.postgres:PostgresExporter",
     "postgres": "wintergrab.storage.postgres:PostgresExporter",
+    "mongodb": "wintergrab.storage.mongodb:MongoExporter",
+    "mongodb+srv": "wintergrab.storage.mongodb:MongoExporter",
+    "mysql": "wintergrab.storage.mysql:MySQLExporter",
+    "mariadb": "wintergrab.storage.mysql:MySQLExporter",
 }
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
 
@@ -426,7 +430,7 @@ def _resolve(entry: type[Exporter] | str) -> type[Exporter]:
 
 def open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter:
     """Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``,
-    ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``).
+    ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``).
 
     ``"-"`` writes JSON Lines to standard output.
     """

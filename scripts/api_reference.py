@@ -50,6 +50,8 @@ MODULES = [
     ("wintergrab.storage.parquet", "Parquet"),
     ("wintergrab.storage.xlsx", "Excel"),
     ("wintergrab.storage.postgres", "PostgreSQL"),
+    ("wintergrab.storage.mysql", "MySQL and MariaDB"),
+    ("wintergrab.storage.mongodb", "MongoDB"),
     ("wintergrab.dashboard", "The dashboard"),
     ("wintergrab.builder", "The visual builder"),
     ("wintergrab.redact", "Keeping credentials out"),

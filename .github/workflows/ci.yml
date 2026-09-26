@@ -77,8 +77,8 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
-  postgres:
-    name: test (PostgreSQL output)
+  databases:
+    name: test (database outputs)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -89,6 +89,33 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ping: 1}).ok'"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: wintergrab-ci
+          MYSQL_DATABASE: wintergrab
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pwintergrab-ci"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: wintergrab-ci
+          MARIADB_DATABASE: wintergrab
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "healthcheck.sh --connect --innodb_initialized"
+          --health-interval 5s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -96,10 +123,16 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e ".[dev]"
-      - name: Test the storage adapters against PostgreSQL
+      - name: Test the storage adapters against PostgreSQL, MongoDB and MySQL
         env:
           WINTERGRAB_TEST_POSTGRES: postgresql://postgres:wintergrab-ci@localhost:5432/postgres
-        run: python -m pytest -q tests/test_storage.py
+          WINTERGRAB_TEST_MONGODB: mongodb://127.0.0.1:27017/wintergrab
+          WINTERGRAB_TEST_MYSQL: mysql://root:wintergrab-ci@127.0.0.1:3306/wintergrab
+        run: python -m pytest -q -rs tests/test_storage.py
+      - name: Test the MySQL output against MariaDB
+        env:
+          WINTERGRAB_TEST_MYSQL: mariadb://root:wintergrab-ci@127.0.0.1:3307/wintergrab
+        run: python -m pytest -q -rs tests/test_storage.py -k mysql
 
   package:
     runs-on: ubuntu-latest

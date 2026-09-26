@@ -12,6 +12,8 @@ file extension or URL picks the format:
 | `items.parquet` (`.pq`) | A Parquet file, a typed column per field | `pip install "wintergrab[parquet]"` |
 | `items.xlsx` | An Excel workbook, a column per field | `pip install "wintergrab[xlsx]"` |
 | `postgresql://user@host/db?table=NAME` | Rows of a PostgreSQL table, upserted on `unique_key` | `pip install "wintergrab[postgres]"` |
+| `mysql://user@host/db?table=NAME` (`mariadb://`) | Rows of a MySQL or MariaDB table, upserted on `unique_key` | `pip install "wintergrab[mysql]"` |
+| `mongodb://user@host/db?collection=NAME` (`mongodb+srv://`) | Documents of a MongoDB collection, upserted on `unique_key` | `pip install "wintergrab[mongodb]"` |
 | `-` | JSON Lines on standard output | |
 
 ```bash
@@ -31,7 +33,7 @@ starts.
 The same outputs are inputs. `wintergrab data validate book.schema.json
 books.parquet`, `data quality books.xlsx`, and
 `read_records("postgresql://.../shop?table=books")` read them back, nested
-values included.
+values included (and `mysql://...`, `mongodb://...`).
 
 ## Parquet
 
@@ -104,6 +106,69 @@ name that it did not create is refused, so pick another with
 `?table=NAME`. Where the URL is shown or kept (the summary, logs, a run's
 record), its user and password are left out: `postgresql://***@db.example/shop`.
 
+## MySQL and MariaDB
+
+```bash
+pip install "wintergrab[mysql]"
+export MYSQL_PWD=...         # or the [client] section of ~/.my.cnf: keep the password out of the URL
+wintergrab crawl https://shop.example/ --auto -o "mysql://crawler@db.example/shop?table=products" --unique-key url
+```
+
+The database is the URL's path, and the table is `items` unless the URL
+says `?table=NAME`. `mariadb://` URLs work the same. The URL's other
+parameters are the connection's: `connect_timeout`, `unix_socket`,
+`ssl_ca`, `ssl_cert`, `ssl_key`, `ssl_verify_cert`, `ssl_verify_identity`.
+Any other is an error, not ignored.
+
+Tables work as PostgreSQL's do: created on first use, a column per field,
+upserts on `unique_key`, a fresh crawl without one emptying its table, and
+only tables wintergrab created written to. Columns are typed from the
+field's first value (a field that is null until then waits for one):
+`BOOLEAN`, `BIGINT`, `DOUBLE`, or `LONGTEXT` for text and for nested
+values, kept as JSON and given back as the objects and lists they were. A
+column widens as PostgreSQL's does, and a boolean column that gets text
+keeps its values as `true` and `false`.
+
+A long text column cannot have a unique index in MySQL, so the key's
+column has a stored companion, `_wg_key_<column>`: the SHA-256 of its
+value, uniquely indexed. Rows without a value for the key are added,
+however many. Tested against MySQL 8.4 and MariaDB 10.11 and 11.
+
+## MongoDB
+
+```bash
+pip install "wintergrab[mongodb]"
+export WINTERGRAB_MONGODB_PASSWORD=...   # read when the URL names a user without a password
+wintergrab crawl https://shop.example/ --auto -o "mongodb://crawler@db.example/shop?collection=products" --unique-key url
+```
+
+The database is the URL's path, and the collection is `items` unless the
+URL says `?collection=NAME`. `mongodb+srv://` URLs work too. The URL's
+other parameters (`authSource`, `tls`, `replicaSet`...) are the
+connection's, checked by pymongo: a misspelt one is an error.
+
+Each item is a document, its values as JSON has them: nothing is typed or
+flattened, and each value keeps its own type (7 and `"X7"` in one field
+stay a number and a text). Integers beyond 64 bits, which MongoDB cannot
+hold, are text. A record's own `_id` field is kept as `_id_`, since `_id`
+is MongoDB's, and a field name beginning with `$`, which MongoDB reads as an
+operator or a reference, begins with a full-width dollar sign (U+FF04)
+instead. Both are read back as they were.
+
+- **Upserts**: with `unique_key`, each document replaces the one with the
+  same key, whole: fields the new record does not have are gone, unlike a
+  table's upsert, which updates the columns given. A unique index keeps the
+  key unique; documents without a value for it stay out of the index.
+- **Fresh crawls**: without `unique_key`, a fresh crawl empties its
+  collection first. A resumed crawl adds to it.
+- **Only its own**: wintergrab names the collections it created in a
+  `_wintergrab_collections` collection beside them, and refuses others of
+  the same name.
+
+Reading a collection gives its documents in the order they were first
+written, without MongoDB's `_id`. A collection wintergrab did not write is
+read too: dates become ISO text, and object ids text.
+
 ## Your own
 
 An output format is an `Exporter` registered by extension or URL scheme.
@@ -133,9 +198,12 @@ constructor then takes `unique_key` too. A URL exporter gets the URL.
 
 ## Limits
 
-- Object storage (S3 and the like), MySQL and MongoDB have no built-in
-  adapter yet. Write a file and copy it, or register your own.
+- Object storage (S3 and the like) has no built-in adapter yet. Write a
+  file and copy it, or register your own.
 - Parquet and Excel files appear when the crawl ends: follow a long crawl
   in its spool, or write JSON Lines and convert them afterwards.
-- PostgreSQL widens columns with `ALTER TABLE`. On a big table that
-  rewrites it, once per widening.
+- PostgreSQL, MySQL and MariaDB widen columns with `ALTER TABLE`. On a big
+  table that rewrites it, once per widening.
+- Where the URL is shown or kept (the summary, logs, a run's record), its
+  user and password are left out: `mysql://***@db.example/shop`. The
+  environment is the place for passwords.

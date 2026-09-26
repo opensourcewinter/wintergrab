@@ -857,16 +857,32 @@ an error that says so, not a setting silently ignored
   - `postgresql://user@host/db?table=NAME` (`wintergrab[postgres]`,
     psycopg 3): typed columns that widen when a value does not fit, `jsonb`
     for nested values, upserts on `unique_key`. It only writes tables it
-    created, and keeps passwords out of what it shows.
+    created, and keeps passwords out of what it shows;
+  - `mysql://user@host/db?table=NAME` and `mariadb://` (`wintergrab[mysql]`,
+    PyMySQL): the same tables in MySQL and MariaDB. Nested values are JSON
+    text given back as they were, and the unique key is kept by the
+    SHA-256 of its value in a uniquely indexed column beside it, since a
+    long text column cannot hold a unique index. Passwords from `MYSQL_PWD`
+    or `~/.my.cnf`; an unknown URL option is an error;
+  - `mongodb://user@host/db?collection=NAME` and `mongodb+srv://`
+    (`wintergrab[mongodb]`, pymongo): a document per item, values as JSON
+    has them, upserts replacing the document with the same key (a unique
+    index keeps it so). Only collections it created are written to; the
+    password can come from `WINTERGRAB_MONGODB_PASSWORD`, and pymongo checks
+    the URL's options.
 - Parquet and Excel files are written when the crawl ends. Until then the
   items are spooled beside them, so a stopped crawl loses nothing and a
   resumed one continues.
-- `read_records` (and every `wintergrab data` command) reads Parquet, Excel
-  and PostgreSQL tables too.
+- `read_records` (and every `wintergrab data` command) reads Parquet, Excel,
+  PostgreSQL and MySQL tables and MongoDB collections too.
 - `register_exporter(".ext" | "scheme", ...)` and `register_reader(...)` add
   formats. A class or `"module:Class"` works: optional libraries are
   imported only when used.
-- A CI job tests the PostgreSQL output against a PostgreSQL 16 server.
+- A CI job tests the database outputs against PostgreSQL 16, MongoDB 7,
+  MySQL 8.4 and MariaDB 11 servers.
+- A PostgreSQL run without `unique_key` after one with it failed on the
+  first repeated key, the earlier run's unique index still in place. The
+  index now goes with the key.
 
 ### Documentation and contributing
 

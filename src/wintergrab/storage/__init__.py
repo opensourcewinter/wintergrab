@@ -7,6 +7,10 @@ Output                    What                                   Needs
 ``items.xlsx``            An Excel workbook, a column a field     ``pip install "wintergrab[xlsx]"``
 ``postgresql://.../db``   Rows of a PostgreSQL table, upserted    ``pip install "wintergrab[postgres]"``
                           on ``unique_key``
+``mysql://.../db``        Rows of a MySQL or MariaDB table,       ``pip install "wintergrab[mysql]"``
+                          upserted on ``unique_key``
+``mongodb://.../db``      Documents of a MongoDB collection,      ``pip install "wintergrab[mongodb]"``
+                          upserted on ``unique_key``
 ========================  =====================================  ==============================
 
 A spider writes to them like to any output (``output = "items.parquet"``, ``crawl ... -o

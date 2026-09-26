@@ -30,12 +30,11 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from ..errors import ConfigurationError, ExportError
 from ..redact import redact_url
 from ..spider.exporters import Exporter, _json_default, _size, dumps, to_dict
-from .common import kind_of, require
+from .common import column_name, kind_of, require
 
 __all__ = ["PostgresExporter", "read_postgres"]
 
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
-_COLUMN = re.compile(r"[^0-9a-zA-Z_]")
 _META = "_wintergrab_columns"
 _ROWID = "_wg_rowid"
 _TYPES = {"bool": "boolean", "int": "bigint", "float": "double precision", "str": "text", "json": "jsonb"}
@@ -66,16 +65,6 @@ def _connect(url: str) -> tuple[Any, list[str]]:
         return psycopg.connect(dsn, autocommit=False), names
     except psycopg.Error as exc:
         raise ConfigurationError(f"cannot connect to {redact_url(url)}: {str(exc).strip()}", key="output") from None
-
-
-def _column_name(key: str, used: set[str]) -> str:
-    base = re.sub(r"_+", "_", _COLUMN.sub("_", key)).strip("_").lower()[:55] or "field"
-    if base[0].isdigit():
-        base = "f_" + base
-    name, n = base, 2
-    while name in used:
-        name, n = f"{base}_{n}", n + 1
-    return name
 
 
 def _index_name(table: str, column: str) -> str:
@@ -152,8 +141,7 @@ class PostgresExporter(Exporter):
         elif not append and not self.unique_key:
             self._execute(sql.SQL("TRUNCATE {}").format(self._table))  # a fresh crawl replaces its rows
         self._load_columns(rows)
-        if self.unique_key:
-            self._unique_index()
+        self._unique_index()  # (without a unique key, one an earlier run made goes)
         self._conn.commit()
 
     def _load_columns(self, rows: list[tuple[str, str, str]] | None = None) -> None:
@@ -198,7 +186,7 @@ class PostgresExporter(Exporter):
         sql = self._sql
         column = self._columns.get(key)
         if column is None:
-            column = _column_name(key, self._used)
+            column = column_name(key, self._used)
             pg_type = _TYPES.get(kind, "text")
             self._execute(
                 sql.SQL("ALTER TABLE {} ADD COLUMN {} " + pg_type).format(self._table, sql.Identifier(column))

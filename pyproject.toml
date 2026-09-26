@@ -44,6 +44,8 @@ yaml = ["pyyaml>=6.0"]
 parquet = ["pyarrow>=14"]
 xlsx = ["openpyxl>=3.1"]
 postgres = ["psycopg[binary]>=3.1"]
+mongodb = ["pymongo>=4.6"]
+mysql = ["pymysql[rsa]>=1.1"]
 pdf = ["pypdf>=4"]
 all = [
     "playwright>=1.45",
@@ -53,6 +55,8 @@ all = [
     "pyarrow>=14",
     "openpyxl>=3.1",
     "psycopg[binary]>=3.1",
+    "pymongo>=4.6",
+    "pymysql[rsa]>=1.1",
     "pypdf>=4",
 ]
 dev = [
@@ -61,6 +65,8 @@ dev = [
     "pyarrow>=14",
     "openpyxl>=3.1",
     "psycopg[binary]>=3.1",
+    "pymongo>=4.6",
+    "pymysql[rsa]>=1.1",
     "pypdf>=4",
     "jsonschema>=4.0",
     "pytest>=8.0",
