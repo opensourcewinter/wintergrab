@@ -225,6 +225,9 @@ class Spider:
     #: Headers added to every HTTP request.
     default_headers: Mapping[str, str] = {}
     timeout: float = 30.0
+    #: The largest response body read, decompressed (128 MiB; ``None``: no limit). A larger one, whether it says
+    #: its size or not, is abandoned as it arrives: the page fails (``too_large``) and is not retried.
+    max_response_bytes: int | None = 128 * 1024 * 1024
     verify: bool | str = True
     #: Attempts after a failure / retryable status / block.
     retries: int = 3
@@ -433,6 +436,7 @@ class Spider:
                 max_connections=max(16, self.concurrency * 2),
                 cache=self.http_cache(),
                 network_policy=self.get_network_policy(),
+                max_response_bytes=self.max_response_bytes,
             ),
             default=not self.use_browser,
         )

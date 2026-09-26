@@ -40,6 +40,7 @@ with wg.Fetcher(impersonate="chrome", retries=3) as fetcher:
 | `proxy` | – | One proxy for every request. |
 | `proxies` | – | A list of proxies or a `ProxyRotator` to rotate through. |
 | `timeout` | `30` | Seconds before giving up on a request. |
+| `max_response_bytes` | `134217728` (128 MiB) | The largest body read, decompressed. A larger one, whether it says its size or not (a compressed "bomb" too), is abandoned as it arrives with a `FetchError` (`kind="too_large"`) that is not retried. `None`: no limit. |
 | `retries` | `2` | Extra attempts after network errors or a retryable status. |
 | `backoff`, `max_backoff` | `0.5`, `30` | Exponential backoff between retries (with jitter). `Retry-After` is honoured. |
 | `retry_statuses` | 408, 425, 429, 500, 502, 503, 504, 520-524 | Statuses worth retrying. |

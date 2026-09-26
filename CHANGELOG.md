@@ -1020,6 +1020,14 @@ an error that says so, not a setting silently ignored
 
 ### Fixes
 
+- Nothing limited the size of a response: a page linking to a large file,
+  or a small compressed body that unpacks to gigabytes, was read whole into
+  memory. `max_response_bytes` (fetchers and spiders; 128 MiB by default,
+  `None` for none) abandons a larger body as it arrives, whether it says its
+  size or not, decompressed bodies included (libcurl's own limit). It is a
+  `FetchError` (`kind="too_large"`) that is not retried, and the failure
+  report says to raise the limit if those pages are wanted.
+
 - A fetcher's retry log lines showed the whole URL, a key in its query
   included (Google's search API takes its key there). Log lines now mask
   query parameters named like credentials (`key=***`, `api_key=***`) with

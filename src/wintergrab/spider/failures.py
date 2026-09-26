@@ -318,6 +318,8 @@ def _cause(group: _Group) -> tuple[str | None, str | None]:
         return "invalid URL", None
     if kind == "cache":
         return "not in the HTTP cache (offline mode)", None
+    if kind == "too_large":
+        return "the response is larger than max_response_bytes (raise it if these pages are wanted)", None
     if group.category == "browser":
         return None, "the page failed to load or render in the browser"
     return None, None

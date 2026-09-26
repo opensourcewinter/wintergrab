@@ -544,6 +544,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `impersonate` | `"chrome"` | Browser fingerprint for the default HTTP session. |
 | `default_headers` | `{}` | Headers for the default HTTP session. |
 | `timeout` | `30` | Seconds per request. |
+| `max_response_bytes` | 128 MiB | The largest body read, decompressed: a larger page fails (`too_large`) without a retry. `None`: no limit. |
 | `verify` | `True` | TLS verification (or CA bundle path). |
 | `retries` | `3` | Retries per request. |
 | `retry_statuses` | 408, 425, 429, 5xx… | Statuses that are retried. |

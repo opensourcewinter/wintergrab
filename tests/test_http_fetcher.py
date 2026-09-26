@@ -194,3 +194,85 @@ async def test_no_proactor_warning_from_curl_cffi(site, monkeypatch) -> None:
         async with AsyncFetcher() as http:
             assert (await http.get(site.url + "/products/page/1")).status == 200
     assert not [w for w in caught if "Proactor" in str(w.message)]
+
+
+@pytest.fixture(scope="module")
+def big_server():
+    """Bodies larger than a limit: one that says its size, one that does not, and a gzip bomb."""
+    import gzip
+    import threading
+    from collections import Counter
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    bomb = gzip.compress(b"\0" * 30_000_000)  # (29 KB on the wire, 30 MB unpacked)
+    hits: Counter[str] = Counter()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:
+            pass
+
+        def do_GET(self) -> None:
+            hits[self.path] += 1
+            try:
+                if self.path == "/big":
+                    self.send_response(200)
+                    self.send_header("Content-Length", "3000000")
+                    self.end_headers()
+                    self.wfile.write(b"x" * 3_000_000)
+                elif self.path == "/streamed":
+                    self.send_response(200)
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.end_headers()
+                    for _ in range(30):
+                        self.wfile.write(b"186a0\r\n" + b"y" * 100_000 + b"\r\n")
+                    self.wfile.write(b"0\r\n\r\n")
+                elif self.path == "/bomb":
+                    self.send_response(200)
+                    self.send_header("Content-Encoding", "gzip")
+                    self.send_header("Content-Length", str(len(bomb)))
+                    self.end_headers()
+                    self.wfile.write(bomb)
+                else:
+                    page = b"<html><body><a href='/big'>a big file</a></body></html>"
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html")
+                    self.send_header("Content-Length", str(len(page)))
+                    self.end_headers()
+                    self.wfile.write(page)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # (the client gave up on it: the point)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_address[1]}", hits
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_response_too_large_is_abandoned(big_server) -> None:
+    url, hits = big_server
+    with Fetcher(max_response_bytes=1_000_000, retries=2, backoff=0) as fetcher:
+        assert fetcher.get(url + "/").status == 200
+        for path in ("/big", "/streamed", "/bomb"):  # said, not said, and unpacked past it
+            with pytest.raises(FetchError, match=r"larger than max_response_bytes \(1,000,000 bytes\)") as error:
+                fetcher.get(url + path)
+            assert error.value.kind == "too_large" and not error.value.retryable and hits[path] == 1  # not retried
+    with Fetcher(max_response_bytes=None) as fetcher:
+        assert len(fetcher.get(url + "/big").body) == 3_000_000  # (no limit)
+
+
+def test_a_crawl_gives_up_on_a_page_too_large(big_server) -> None:
+    url, _ = big_server
+
+    class Links(wg.Spider):
+        name = "links"
+        max_response_bytes = 1_000_000
+
+        def parse(self, response):
+            for href in response.css("a::attr(href)").getall():
+                yield response.follow(href)
+
+    result = Links(start_urls=[url + "/"], retries=2, log_level="WARNING").run()
+    assert result.stats["pages"] == 2 and result.stats.get("retries", 0) == 0
+    [failure] = result.failures
+    assert failure.signature == "FetchError:too_large" and "larger than max_response_bytes" in failure.confirmed_cause

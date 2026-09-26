@@ -138,7 +138,8 @@ class FetchError(WintergrabError):
             invalid TLS certificate, a policy refusal...).
         kind: Finer-grained reason: ``"dns"``, ``"connect"``, ``"tls"``,
             ``"timeout"``, ``"proxy"``, ``"redirects"``, ``"protocol"``,
-            ``"invalid_url"``, ``"policy"``, ``"browser"``, ``"cache"`` or ``"unknown"``.
+            ``"invalid_url"``, ``"policy"``, ``"browser"``, ``"cache"``, ``"too_large"``
+            (past ``max_response_bytes``) or ``"unknown"``.
     """
 
     category = "network"

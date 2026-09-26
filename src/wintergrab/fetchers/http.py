@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin, urlsplit
 
 from curl_cffi import requests as curl_requests
+from curl_cffi.const import CurlOpt
 from curl_cffi.requests import exceptions as curl_exc
 
 from ..errors import ConfigurationError, FetchError, FetchTimeout, NetworkError, PolicyError, ProxyError, describe
@@ -37,6 +38,9 @@ PROXY_FAILURE_STATUSES: frozenset[int] = frozenset({407, 502, 504})
 _HTTP_VERSIONS = {1: "HTTP/1.0", 2: "HTTP/1.1", 3: "HTTP/2", 30: "HTTP/3"}
 
 REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+#: The largest response body read by default (decompressed).
+DEFAULT_MAX_RESPONSE_BYTES = 128 * 1024 * 1024
+_CURLE_FILESIZE_EXCEEDED = 63  # (libcurl's error when a body passes CURLOPT_MAXFILESIZE)
 
 # Per-request options that only make sense for browser fetchers.
 BROWSER_ONLY_OPTIONS = frozenset(
@@ -82,6 +86,7 @@ class _HTTPBase:
         cache_mode: str | None = None,
         cache_ttl: float | None = None,
         network_policy: NetworkPolicy | str | bool | None = None,
+        max_response_bytes: int | None = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
         """
         Args:
@@ -118,6 +123,9 @@ class _HTTPBase:
                 redirect hop is checked, and so is the address actually
                 connected to. Refusals raise
                 :class:`~wintergrab.errors.NetworkPolicyError`.
+            max_response_bytes: The largest response body read, decompressed (128 MiB by default; ``None``: no
+                limit): a larger one, whether it says its size or not, is abandoned as it arrives, and raises a
+                :class:`~wintergrab.errors.FetchError` (``kind="too_large"``) that retrying does not repeat.
         """
         if proxy and proxies:
             raise ValueError("Pass either proxy= or proxies=, not both")
@@ -145,6 +153,9 @@ class _HTTPBase:
         self.cache = HTTPCache.coerce(cache, mode=cache_mode, ttl=cache_ttl)
         self._cache_layer = CacheLayer(self.cache) if self.cache is not None else None
         self.network_policy = NetworkPolicy.coerce(network_policy)
+        if max_response_bytes is not None and max_response_bytes < 1:
+            raise ConfigurationError("must be a number of bytes, or None", key="max_response_bytes")
+        self.max_response_bytes = max_response_bytes
 
     # -- helpers ---------------------------------------------------------- #
     def _session_kwargs(self) -> dict[str, Any]:
@@ -159,6 +170,8 @@ class _HTTPBase:
             kwargs["impersonate"] = self.impersonate
         if self.http_version:
             kwargs["http_version"] = self.http_version
+        if self.max_response_bytes is not None:  # (libcurl counts the body as decompressed: a gzip bomb stops too)
+            kwargs["curl_options"] = {CurlOpt.MAXFILESIZE_LARGE: self.max_response_bytes}
         return kwargs
 
     def _pick_proxy(self, explicit: str | None) -> tuple[str | None, bool]:
@@ -236,6 +249,9 @@ class _HTTPBase:
         where = f" via {proxy_label(proxy)}" if proxy else ""
         message = f"{describe(exc)}{where}"
         common: dict[str, Any] = {"cause": exc, "proxy": proxy}
+        if getattr(exc, "code", None) == _CURLE_FILESIZE_EXCEEDED:
+            return FetchError(url, f"the response is larger than max_response_bytes ({self.max_response_bytes:,} bytes)",
+                              retryable=False, kind="too_large", **common)  # fmt: skip
         if isinstance(exc, (curl_exc.Timeout, asyncio.TimeoutError, TimeoutError)):
             return FetchTimeout(url, message, **common)
         if isinstance(exc, curl_exc.ProxyError) or (proxy is not None and "proxy" in str(exc).lower()):
