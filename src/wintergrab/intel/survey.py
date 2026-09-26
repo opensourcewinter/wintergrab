@@ -123,6 +123,8 @@ class _SurveySpider(Spider):
     capture_api = False
     keep_pages = False
     url_rules = True  # skip media, archives and crawler traps
+    #: ``prefer(url) -> score``: links worth more are followed first.
+    prefer: Any = None
 
     def __init__(self, **settings: Any) -> None:
         super().__init__(**settings)
@@ -132,6 +134,8 @@ class _SurveySpider(Spider):
         request = Request(url, dont_filter=False)
         if self.capture_api:
             request.options["capture"] = True
+        if self.prefer is not None:
+            request.priority = int(10 * float(self.prefer(url)))
         return request
 
     def start_requests(self) -> Any:
@@ -167,7 +171,7 @@ def survey_site(
     browser: bool = False,
     timeout: float = 20.0,
     keep_pages: bool = False,
-    prefer: Callable[[str], bool] | None = None,
+    prefer: Callable[[str], bool | float] | None = None,
     extra_urls: Iterable[str] = (),
     log_level: str | None = "WARNING",
     **spider_settings: Any,
@@ -180,7 +184,8 @@ def survey_site(
         obey_robots: Obey robots.txt (it is read either way).
         browser: Render the pages, and record their API calls.
         keep_pages: Keep the sampled pages (``survey.pages``).
-        prefer: Sitemap URLs to sample first (``prefer(url) -> bool``).
+        prefer: How much a page is worth sampling (``prefer(url) -> score``, ``True``/``False`` too):
+            the sitemaps' pages are sampled best first, and links are followed best first.
         extra_urls: Pages to visit besides the start page and the sitemap sample.
     """
     from ..fetchers import Fetcher
@@ -208,9 +213,14 @@ def survey_site(
         host = host_of(origin)
         listed = [e.loc for e in read.entries if host_of(e.loc) == host]
         share = max(0, pages // 3)
-        liked = [u for u in listed if prefer(u)] if prefer is not None else []
-        samples = _spread(liked, share)
-        samples += _spread([u for u in listed if u not in set(samples)], share - len(samples))
+        if prefer is not None:
+            scores = {u: float(prefer(u)) for u in listed}
+            for best in sorted({s for s in scores.values() if s > 0}, reverse=True):
+                samples += _spread([u for u in listed if scores[u] == best], share - len(samples))
+                if len(samples) >= share:
+                    break
+        taken = set(samples)
+        samples += _spread([u for u in listed if u not in taken], share - len(samples))
     spider = _SurveySpider(
         start_urls=list(dict.fromkeys([start, *extra_urls, *samples])),
         allowed_domains=[host_of(start)],
@@ -220,6 +230,7 @@ def survey_site(
         use_browser=browser,
         capture_api=browser,
         keep_pages=keep_pages,
+        prefer=prefer,
         timeout=timeout,
         output=None,
         keep_items=False,

@@ -45,6 +45,7 @@ from .failures import FailureTracker
 from .frontier import DiskScheduler
 from .metrics import CrawlMetrics
 from .middleware import DropItem, IgnoreRequest
+from .optimizer import CrawlOptimizer
 from .progress import ProgressDisplay
 from .robots import RobotsPolicy
 from .scheduler import Scheduler
@@ -118,6 +119,8 @@ class Engine:
         self.url_normalizer = URLNormalizer.coerce(spider.url_normalizer)
         self.url_rules = URLRules.coerce(spider.url_rules)
         self.adaptive = FetchStrategy.coerce(spider.adaptive_fetch)
+        self.optimizer = CrawlOptimizer.coerce(spider.optimize, crawl_dir=spider.crawl_dir)
+        self._continued: set[int] = set()  # with the optimizer: attempts whose request goes on (a retry...)
         self.network_policy = spider.get_network_policy()
         self._policy_warned: set[str] = set()
         self.priority_fn = spider.priority_fn
@@ -214,6 +217,8 @@ class Engine:
         return self.checkpoint is not None and (self._status in ("paused", "limit") or self._fatal is not None)
 
     def _requeue(self, request: Request) -> None:
+        if self.optimizer is not None:
+            self._continued.add(id(request))
         self.scheduler.push(request.replace(dont_filter=True), force=True)
 
     def _begin_stop(self, status: str) -> None:
@@ -386,6 +391,8 @@ class Engine:
                 request, wait = self.scheduler.pop_ready(self.throttle, now)
             if request is None:
                 break
+            if self.optimizer is not None and self._drop_unneeded(request):
+                continue
             slot = self.throttle.slot(request.host)
             self.throttle.on_start(slot, now)
             if request.retries == 0:
@@ -701,8 +708,11 @@ class Engine:
         request.meta.setdefault("depth", 0)
         if self.priority_fn is not None:
             request.priority = int(self.priority_fn(request))
+        if self.optimizer is not None:
+            self.optimizer.enqueued(request, None)
         self._check_serializable(request)
-        self.scheduler.push(request)
+        if not self.scheduler.push(request) and self.optimizer is not None:
+            self.optimizer.discard(request)
 
     async def _shutdown(self) -> CrawlResult:
         spider = self.spider
@@ -770,6 +780,7 @@ class Engine:
         profile = self._close_profiler(status)
         changes = self._close_history(status)
         strategy = self._close_adaptive()
+        optimizer = self._close_optimizer()
         result = CrawlResult(
             items=self.items,
             stats=dict(self.stats),
@@ -780,6 +791,7 @@ class Engine:
             changes=changes,
             profile=profile,
             fetch_strategy=strategy,
+            optimizer=optimizer,
         )
         self._log_progress(final=True)
         try:
@@ -940,8 +952,12 @@ class Engine:
         s = self.stats
         elapsed = s.get("elapsed_seconds", 0) if final else time.monotonic() - self._started
         rate = s.get("pages", 0) / elapsed * 60 if elapsed else 0.0
+        expected = ""
+        if self.optimizer is not None and not final:
+            forecast = self.optimizer.forecast()
+            expected = f", ~{forecast['items']:.0f} more items expected, {self.optimizer.skipped} skipped"
         log.info(
-            "%s%d pages (%.0f/min), %d items, %d retries, %d errors, %d queued, %d in flight",
+            "%s%d pages (%.0f/min), %d items, %d retries, %d errors, %d queued, %d in flight%s",
             "done: " if final else "",
             s.get("pages", 0),
             rate,
@@ -950,6 +966,7 @@ class Engine:
             s.get("errors", 0),
             len(self.scheduler),
             len(self._inflight),
+            expected,
         )
 
     # ------------------------------------------------------------------ #
@@ -1159,6 +1176,11 @@ class Engine:
             self.throttle.on_finish(slot)
             if self._persistent and id(request) not in self._ack_deferred:
                 self._ack(request)  # children are queued by now: safe to forget the request
+            if self.optimizer is not None:
+                if id(request) in self._continued:
+                    self._continued.discard(id(request))  # retried, rendered, requeued: not finished
+                else:
+                    self.optimizer.done(request)
             self._wake()
 
     async def _fetch_failed(
@@ -1325,6 +1347,8 @@ class Engine:
 
     def _schedule_later(self, request: Request, delay: float, original: Request | None = None) -> None:
         assert self._loop is not None
+        if original is not None and self.optimizer is not None:
+            self._continued.add(id(original))
         if delay <= 0:
             self.scheduler.push(request, force=True)
             self._wake()
@@ -1395,7 +1419,7 @@ class Engine:
         callback = request.callback or self.spider.parse
         if isinstance(callback, str):
             callback = getattr(self.spider, callback)
-        items: list[Any] | None = [] if self.history is not None else None
+        items: list[Any] | None = [] if self.history is not None or self.optimizer is not None else None
         try:
             await self._consume(callback(response, **request.cb_kwargs), request, items)
             if self.history is not None:
@@ -1403,10 +1427,16 @@ class Engine:
         except (CheckpointError, BrowserNotAvailable) as exc:
             self._requeue(request)  # so the page is processed again after a resume
             self.fail(exc)
+            return
         except Exception as exc:
             self.stats.inc("callback_errors")
             self.failures.failure(request.host, request.url, error=exc, final=True, stage="callback")
             log.exception("error in %s for %s: %s", getattr(callback, "__name__", callback), response.url, exc)
+        if self.optimizer is not None:
+            try:
+                self.optimizer.page(request, response, len(items or ()))
+            except Exception as exc:  # pragma: no cover - learning must never break a crawl
+                log.error("optimizer: %s", describe(exc))
 
     async def _consume(self, result: Any, parent: Request, items: list[Any] | None = None) -> None:
         """Handle what a callback returned; ``items`` collects the items it produced."""
@@ -1450,6 +1480,11 @@ class Engine:
             return
         if self.url_normalizer is not None:
             request.url = self.url_normalizer(request.url)
+        optimizer = self.optimizer
+        rewritten = False
+        if optimizer is not None and not request.dont_filter:
+            url = optimizer.rewrite(request.url)
+            rewritten, request.url = url != request.url, url
         if spider.allowed_domains and not domain_matches(request.host, spider.allowed_domains):
             self.stats.inc("offsite_filtered")
             return
@@ -1459,12 +1494,29 @@ class Engine:
                 self.stats.inc("rules_filtered")
                 self.stats.inc(f"rules_filtered/{reason}")
                 return
+        # the optimizer only looks at requests the duplicate filter would let through
+        fresh = optimizer if optimizer is not None and not self._seen_before(request) else None
+        if fresh is not None:
+            if rewritten:
+                self.stats.inc("optimizer/rewritten")
+            if not request.dont_filter and fresh.duplicate(request.url):
+                self.stats.inc("optimizer/duplicates")  # fetched already, with a parameter that changes nothing
+                self.scheduler.restore_seen([request.fingerprint()])  # from now on a plain duplicate
+                return
+            if fresh.skip(request, parent):
+                return  # its pattern gives nothing (counted by the optimizer: optimizer/skipped)
         if self.priority_fn is not None:
             request.priority = int(self.priority_fn(request))
+        elif fresh is not None:
+            request.priority += fresh.boost(request.url)
+        if fresh is not None:
+            fresh.enqueued(request, parent)
         self._check_serializable(request)
         if self.scheduler.push(request):
             self.stats.inc("enqueued")
             self._wake()
+        elif fresh is not None:
+            fresh.discard(request)
 
     def _check_serializable(self, request: Request) -> None:
         """Fail early (with a clear message) if a request could not be checkpointed."""
@@ -1560,6 +1612,41 @@ class Engine:
         except OSError as exc:
             log.error("could not save the fetch statistics to %s: %s", adaptive.path, exc)
         return adaptive
+
+    def _drop_unneeded(self, request: Request) -> bool:
+        """With the optimizer: whether a request just taken from the queue can be left out, because
+        since it was queued its pattern was found barren, or its page was fetched under another
+        address (with a parameter found to change nothing)."""
+        optimizer = self.optimizer
+        if optimizer is None or request.dont_filter or request.depth == 0:
+            return False  # start requests are always fetched
+        if not optimizer.skip(request):
+            if not optimizer.duplicate(optimizer.rewrite(request.url)):
+                return False
+            self.stats.inc("optimizer/duplicates")
+        optimizer.done(request)
+        if self._persistent:
+            self._ack(request)
+        return True
+
+    def _seen_before(self, request: Request) -> bool:
+        """Whether the duplicate filter would drop ``request`` anyway."""
+        scheduler = self.scheduler
+        return bool(scheduler.dedupe) and not request.dont_filter and request.fingerprint() in scheduler.seen
+
+    def _close_optimizer(self) -> Any:
+        optimizer = self.optimizer
+        if optimizer is None:
+            return None
+        if optimizer.skipped:
+            self.stats["optimizer/skipped"] = optimizer.skipped
+        if optimizer.patterns:
+            log.info("what the optimizer learned:\n%s", optimizer.describe())
+        try:
+            optimizer.save()
+        except OSError as exc:
+            log.error("could not save what the optimizer learned to %s: %s", optimizer.path, exc)
+        return optimizer
 
     def _fetch_options(self, request: Request) -> dict[str, Any]:
         options = dict(request.options)

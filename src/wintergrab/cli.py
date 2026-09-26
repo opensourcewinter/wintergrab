@@ -590,7 +590,8 @@ def cmd_goal(args: argparse.Namespace) -> int:
     # the plan on stdout when it is all there is; on stderr when the records may go to stdout
     shown = sys.stdout if args.plan_only else sys.stderr
     if args.plan_only or args.verbose >= 0:
-        print(plan.describe(), file=shown)
+        whole = bool(args.plan) or args.plan_only  # else "Understood:" said what the goal is
+        print(plan.describe() if whole else "\n" + plan.describe(goal=False), file=shown)
         if args.explain:
             print("\nWhat the estimates rest on:\n" + plan.explain(), file=shown)
     if args.plan_only:
@@ -615,6 +616,7 @@ def cmd_goal(args: argparse.Namespace) -> int:
         keep_items=output == "-",
         log_level="DEBUG" if args.verbose > 0 else ("WARNING" if args.verbose < 0 else "INFO"),
         progress=False if output == "-" else None,
+        optimize=not args.no_optimize,
     )
     if args.verbose >= 0:
         print(result.summary(), file=sys.stderr)
@@ -811,6 +813,7 @@ def cmd_crawl(args: argparse.Namespace) -> int:
         "history": args.history,
         "profile": args.profile,
         "adaptive_fetch": args.fetch_stats or (True if args.auto_browser else None),
+        "optimize": args.optimize,
     }
     if args.retry_failed:
         overrides["retry_dead_letters"] = True
@@ -1544,6 +1547,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="save the site's profile and topology (sections, dead ends, orphans...) here as JSON",
     )
     c.add_argument(
+        "--optimize",
+        nargs="?",
+        const=True,
+        metavar="FILE",
+        help="learn which URL patterns give items: fetch those first, skip the ones that give nothing, drop "
+        "parameters that change nothing (FILE: keep what was learned for the next crawls)",
+    )
+    c.add_argument(
         "--skip-fresh", action="store_true", help="with --history: skip pages that have probably not changed"
     )
     c.add_argument("--fresh", action="store_true", help="ignore saved state and start over")
@@ -1735,6 +1746,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     gp.add_argument("--sample", type=int, default=30, metavar="N", help="pages to survey per site (30)")
     gp.add_argument("--max-pages", type=int, metavar="N", help="stop after N pages")
+    gp.add_argument(
+        "--no-optimize",
+        action="store_true",
+        help="fetch every page the plan leads to (by default, URL patterns that give nothing are skipped)",
+    )
     gp.add_argument("--browser", "-b", action="store_true", help="survey with a browser (slower)")
     gp.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (default 20)")
     gp.add_argument("-o", "--output", metavar="FILE", help="save the records (.jsonl, .csv, .json); default stdout")

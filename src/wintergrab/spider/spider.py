@@ -63,6 +63,9 @@ class CrawlResult:
     #: With ``adaptive_fetch``: the :class:`~wintergrab.fetchers.strategy.FetchStrategy`, with what it
     #: learned about each URL pattern.
     fetch_strategy: Any = None
+    #: With ``optimize``: the :class:`~wintergrab.spider.optimizer.CrawlOptimizer`, with what it learned
+    #: about each URL pattern (``describe()``).
+    optimizer: Any = None
 
     @property
     def paused(self) -> bool:
@@ -228,6 +231,11 @@ class Spider:
     #: With ``adaptive_fetch``: CSS selectors a usable page has; a page fetched over HTTP where
     #: one of them finds nothing goes to the browser.
     render_if_missing: Sequence[str] = ()
+    #: Learn during the crawl which URL patterns give items: fetch those first, skip the patterns
+    #: that give nothing, drop query parameters that change nothing (see
+    #: :mod:`wintergrab.spider.optimizer`): ``True``, a file that keeps what was learned across
+    #: crawls, or a :class:`~wintergrab.spider.optimizer.CrawlOptimizer`.
+    optimize: Any = False
     #: Session to retry *blocked* requests with (e.g. ``"browser"``).
     fallback_session: str | None = None
     #: Copy cookies from browser responses into the HTTP sessions, so a session

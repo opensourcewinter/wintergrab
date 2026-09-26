@@ -314,8 +314,45 @@
   `--check`), and `wintergrab review FILE` (`--accept`, `--choice`,
   `--reject`, `--correct`, `--note`).
 
+### Crawl optimization (`wintergrab.spider.optimizer`)
+
+- `Spider.optimize = True` (or a file that keeps what was learned; `crawl
+  --optimize [FILE]`) makes a crawl learn, per URL pattern, how many items
+  its pages yield and whether they lead to pages that do. Past a site's
+  first path segment, more than five different words in one place count as
+  one pattern (`/tag/{word}`). With that:
+  - requests of productive patterns go first;
+  - patterns with 20 settled pages that never gave or led to an item are
+    skipped. One request in ten is still fetched, and nothing is skipped
+    before an item is found. A pattern that gave something once is never
+    skipped;
+  - query parameters shown to change nothing (pages alike with and without
+    them, twice, never otherwise) are dropped from later URLs. Pages
+    already fetched under them are not fetched again.
+- `result.optimizer.describe()` reports what was learned. The stats count
+  `optimizer/skipped`, `optimizer/duplicates` and `optimizer/rewritten`,
+  and the progress line and progress logs show the items expected from
+  the queue. With a `crawl_dir`, what was learned survives pauses.
+- On the test site's `/shop/` (150 products, `?ref=` links, a tag cloud
+  leading nowhere), crawls took:
+  - 203 pages instead of 376, with all 150 items;
+  - 172 pages on the next crawl, which loaded the saved file;
+  - 56 pages instead of 92 with `max_items = 50`.
+
+  Where there is nothing to save (the benchmark site), it costs about 5%
+  speed: 985 pages/s instead of 1,033.
+- Goal runs use it by default (`optimize=False`, `wintergrab goal
+  --no-optimize`), and fetch record pages before more listing pages: the
+  first 40 of the shop's products took 50 pages instead of 81.
+
 ### Fixes
 
+- A goal on part of a site (`on shop.example/shop/`) could plan to extract
+  record pages found in the sitemap outside that part, and collect nothing.
+  The survey now samples the pages of that part first, then pages that look
+  like the goal's records, then their listings. It does so in the sitemap
+  sample and in the links it follows (`survey_site(prefer=)` takes a score).
+- `wintergrab goal` printed how it understood the request twice.
 - Spiders with URL rules (`wintergrab crawl URL --sitemap ...`) skipped the
   `.xml.gz` sitemaps of a sitemap index as archive downloads. Sitemap URLs
   are no longer held to the extension and `allow` rules, which are about

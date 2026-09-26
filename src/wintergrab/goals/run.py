@@ -12,7 +12,10 @@ engine fills the goal's fields (with their confidence, ``_confidence``); a
 data :class:`~wintergrab.data.Pipeline` keeps the records that meet the
 goal's conditions and drops duplicates (the same URL: pages that name their
 canonical URL count once). Pages whose content needs JavaScript go to a
-browser when the plan says so, and the crawl stops at the goal's limit.
+browser when the plan says so, record pages are fetched before more listing
+pages, and the crawl stops at the goal's limit. The crawl learns as it goes
+(:mod:`wintergrab.spider.optimizer`): URL patterns that give nothing are
+skipped, and query parameters that change nothing are dropped.
 """
 
 from __future__ import annotations
@@ -108,11 +111,13 @@ class GoalSpider(Spider):
                 return  # a record page leads out of the goal's sections ("related items"), not to more of them
         wander = plan is None or not plan.follow
         for link in response.links(same_domain=True):
-            if wander or plan.is_target(link) or plan.is_followed(link):  # type: ignore[union-attr]
+            if plan is not None and plan.is_target(link):
+                yield response.follow(link, priority=20)  # record pages first: a limit is reached sooner
+            elif wander or plan.is_followed(link):  # type: ignore[union-attr]
                 yield response.follow(link)
         next_url = response.next_page()
         if next_url:
-            yield response.follow(next_url)
+            yield response.follow(next_url, priority=10)  # then more of the listing
 
 
 @dataclass
@@ -165,7 +170,8 @@ def run_plan(
     Args:
         max_pages: Stop after this many pages.
         keep_items: Keep the records in memory (``result.records``); by default when there is no ``output``.
-        settings: More :class:`~wintergrab.Spider` settings (``concurrency``, ``cache``, ``obey_robots_txt``...).
+        settings: More :class:`~wintergrab.Spider` settings (``concurrency``, ``cache``, ``obey_robots_txt``...);
+            ``optimize=False`` fetches every page the plan leads to (see :mod:`wintergrab.spider.optimizer`).
     """
     goal = plan.goal
     result = GoalResult(plan=plan, output=output)
@@ -178,6 +184,7 @@ def run_plan(
         stages.append(Deduplicate(key="url", name="duplicates"))
     pipeline = Pipeline(stages, name="goal")
     options: dict[str, Any] = dict(settings)
+    options.setdefault("optimize", True)  # skip what gives nothing, drop parameters that change nothing
     if any(site.fetch == "adaptive" for site in sites):
         strategy = FetchStrategy()
         for site in sites:

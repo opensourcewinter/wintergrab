@@ -177,6 +177,13 @@ Event-loop side experiment at 0 ms latency, concurrency 64 (`results_eventloop.j
   - Two dispatcher changes were tried before and made no difference (412 → 413): refilling the pipeline synchronously in `_task_done`, and freeing the download slot before the callback runs.
   - At concurrency 64 the gap mostly closes (879). At 256 the crawl is CPU-bound again (999).
 
+### The crawl optimizer
+
+With the crawl optimizer (`bench_wintergrab.py --optimize`, `Spider.optimize`)
+the benchmark crawl ran at 985 pages/s instead of 1,033 (median of 3, 64
+requests in flight). That is its cost on a site where it has nothing to
+save: all 10,000 pages lead to items, and no URL has a query string.
+
 ## Profile of wintergrab (latency 0, concurrency 64)
 
 Measured with py-spy (`--native`, 250 Hz, 3,914 samples) on commit `97d46d1`. Each sample is charged to the innermost identifiable frame. The "Before" column is the same measurement on the previous run's build (4,091 samples), which used 1.14 ms CPU per page; this build uses 0.95 ms. The shares are of a smaller total, so a layer whose absolute cost did not change (lxml parsing, curl_cffi) takes a larger share now.

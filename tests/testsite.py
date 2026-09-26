@@ -26,6 +26,17 @@ BOOKS_PER_PAGE = 4
 RATINGS = ["One", "Two", "Three", "Four", "Five"]
 PRODUCT_PAGES = 5
 PER_PAGE = 4
+# /shop/: categories of products (with ?ref= parameters that change nothing) and a tag cloud that leads nowhere
+SHOP_CATEGORIES = ["phones", "laptops", "tablets", "cameras", "watches"]
+SHOP_PER_CATEGORY = 30
+SHOP_PER_PAGE = 10
+SHOP_TAGS = [
+    "red", "blue", "green", "black", "white", "silver", "gold", "pink", "purple", "orange", "yellow", "grey",
+    "brown", "navy", "teal", "olive", "maroon", "beige", "cyan", "lime", "steel", "plastic", "glass", "leather",
+    "wood", "carbon", "metal", "fabric", "rubber", "ceramic", "light", "heavy", "small", "large", "slim", "thick",
+    "fast", "quiet", "loud", "bright", "cheap", "premium", "classic", "modern", "retro", "sport", "travel", "office",
+    "gaming", "kids", "outdoor", "indoor", "smart", "basic", "compact", "rugged", "wireless", "portable", "durable", "elegant",
+]  # fmt: skip
 
 
 def product(i: int) -> dict[str, Any]:
@@ -120,6 +131,8 @@ class Handler(BaseHTTPRequestHandler):
             site.log.append((time.monotonic(), self.path, dict(self.headers)))
         q = lambda name, default=None: query.get(name, [default])[0]  # noqa: E731
 
+        if path.startswith("/shop/"):
+            return self._shop(path, query)
         if path == "/":
             links = "".join(f"<li><a href='/products/page/{n}'>Page {n}</a></li>" for n in range(1, PRODUCT_PAGES + 1))
             return self.send(200, layout("Test shop", f"<h1 id='title'>Test shop</h1><ul class='pages'>{links}</ul>"))
@@ -489,6 +502,50 @@ def _books_page(handler: Handler, path: str) -> None:
 
 
 Handler._books = _books_page  # type: ignore[attr-defined]
+
+
+def _shop_page(handler: Handler, path: str, query: dict[str, list[str]]) -> None:
+    """Categories of products whose links carry ?ref= (which changes nothing), and a tag cloud of pages that
+    only lead to more tags."""
+    tags = SHOP_TAGS
+
+    def tag_links(start: int, count: int) -> str:
+        return "".join(f"<a class='tag' href='/shop/tag/{tags[(start + k) % len(tags)]}'>#</a> " for k in range(count))
+
+    if path == "/shop/":
+        cats = "".join(f"<li><a href='/shop/c/{c}'>{c}</a></li>" for c in SHOP_CATEGORIES)
+        return handler.send(200, layout("Shop", f"<h1>Shop</h1><ul>{cats}</ul><div>{tag_links(0, 30)}</div>"))
+    if path.startswith("/shop/c/") and path[8:] in SHOP_CATEGORIES:
+        c = SHOP_CATEGORIES.index(path[8:])
+        n = int(query.get("page", ["1"])[0])
+        first = c * SHOP_PER_CATEGORY + (n - 1) * SHOP_PER_PAGE + 1
+        items = "".join(
+            f"<li><a href='/shop/p/{i}?ref=c-{path[8:]}'>Item {i}</a></li>" for i in range(first, first + SHOP_PER_PAGE)
+        )
+        more = SHOP_PER_CATEGORY // SHOP_PER_PAGE
+        nxt = f"<a class='next' href='/shop/c/{path[8:]}?page={n + 1}'>next</a>" if n < more else ""
+        return handler.send(
+            200, layout(f"{path[8:]} {n}", f"<h1>{path[8:]}</h1><ul>{items}</ul>{nxt}{tag_links(n, 5)}")
+        )
+    if path.startswith("/shop/p/"):
+        i = int(path[8:])
+        c = (i - 1) // SHOP_PER_CATEGORY
+        first = c * SHOP_PER_CATEGORY + 1
+        related = "".join(
+            f"<a href='/shop/p/{first + (i - first + k) % SHOP_PER_CATEGORY}?ref=related'>more</a> " for k in (1, 2)
+        )
+        body = (
+            f"<h1>Shop product {i}</h1><p class='price'>${10 + i}.00</p><div>{related}</div>"
+            f"<a href='/shop/c/{SHOP_CATEGORIES[c]}'>back</a> {tag_links(i, 5)}"
+        )
+        return handler.send(200, layout(f"Shop product {i}", body))
+    if path.startswith("/shop/tag/") and path[10:] in tags:
+        k = tags.index(path[10:])
+        return handler.send(200, layout(f"#{path[10:]}", f"<h1>#{path[10:]}</h1>{tag_links(k * 7 + 1, 8)}"))
+    return handler.send(404, layout("Not found", "<p>nope</p>"))
+
+
+Handler._shop = _shop_page  # type: ignore[attr-defined]
 
 
 class SiteServer(ThreadingHTTPServer):

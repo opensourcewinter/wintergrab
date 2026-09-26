@@ -117,6 +117,7 @@ Options for any crawl:
 | `--proxy URL`, `--proxy-file FILE` | `proxies` |
 | `-b/--browser` | `use_browser = True` |
 | `--auto-browser`, `--fetch-stats FILE`, `--render-if-missing SEL` | `adaptive_fetch`: HTTP first, a browser for the pages that [need one](spiders.md#http-first-a-browser-when-needed) |
+| `--optimize [FILE]` | `optimize`: [learn what to crawl](spiders.md#learning-what-to-crawl) (promising URL patterns first, barren ones skipped, parameters that change nothing dropped); FILE keeps what was learned for the next crawls |
 | `--public-only` | `network_policy = "public"` |
 | `--normalize-urls` | `url_normalizer = True` |
 | `--block-trackers` | `resource_filter = True` |
@@ -200,7 +201,7 @@ See [intelligence.md](intelligence.md#site-profiles).
 
 ```bash
 wintergrab goal "REQUEST" [--site URL] [--sample N] [--plan-only] [--save-plan FILE] [--explain] [--json]
-                          [-y] [--confirm-over N] [--max-pages N] [--browser] [-o FILE]
+                          [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-optimize] [-o FILE]
 wintergrab goal --plan FILE [-y] [-o FILE]
 ```
 
@@ -211,7 +212,9 @@ estimates, and collects the records: JSON Lines on stdout, or `-o FILE`.
 Plans of more than `--confirm-over` requests (200) ask first, or need `--yes`
 without a terminal. `--plan-only` shows the plan and stops; `--save-plan`
 keeps it as JSON to edit and run later with `--plan`; `--explain` says what
-each estimate rests on. See [goals.md](goals.md).
+each estimate rests on. The crawl skips URL patterns that give nothing and
+drops query parameters that change nothing; `--no-optimize` fetches every
+page the plan leads to. See [goals.md](goals.md).
 
 ## `wintergrab heal`: a self-healing extractor's versions
 

@@ -323,6 +323,74 @@ class Shop(Spider):
     priority_fn = product_pages_first
 ```
 
+## Learning what to crawl
+
+```python
+class Shop(Spider):
+    optimize = True                   # or "shop.optimizer.json": keep what was learned for the next crawls
+```
+
+With `optimize`, a crawl learns from its own pages which URL patterns are
+worth fetching (`shop.example/p/{int}`, `shop.example/tag/{word}`). Past a
+site's first path segment, more than five different words in one place
+count as one pattern. For each pattern it counts the pages fetched, the
+items their callbacks yielded (and the pipelines kept), and whether they
+led to pages that did. Then it acts in three ways:
+
+- **Promising pages first.** Requests of patterns whose pages yield items
+  get priority +20. Those of patterns whose pages lead to such pages
+  (listings, categories) get +10.
+- **Barren patterns are skipped.** A page is *settled* once the pages it led
+  to (two levels down, its own pattern's pages aside) have been fetched. A
+  pattern with 20 settled pages, none of which ever gave an item or led to
+  one, is skipped. One request in ten is still fetched, in case, and one
+  that finds something makes the pattern productive for good. A pattern
+  that gave something once is never skipped, even when its later pages
+  only lead to items found already. Nothing is skipped before the crawl
+  has found an item. Requests queued before their pattern was judged are
+  skipped when their turn comes.
+- **Parameters that change nothing are dropped.** Sometimes pages that
+  differ in one query parameter only (`?ref=nav`, `?ref=footer`, or none)
+  have the same text and links. When that happens twice and never
+  otherwise, the parameter is dropped from the pattern's later URLs. A page
+  already fetched with it is not fetched again. JavaScript app shells, the
+  same HTML whatever the URL, teach nothing.
+
+Start requests, sitemaps and `dont_filter` requests are never skipped or
+rewritten. The crawl's results report what happened:
+
+- `result.optimizer.describe()` says what was learned about each pattern;
+- the stats count `optimizer/skipped` (different URLs),
+  `optimizer/duplicates` and `optimizer/rewritten`;
+- the progress line shows the items expected from the queue: each pattern's
+  queued requests times its items per page.
+
+With `crawl_dir` and `optimize = True`, what was learned is kept in
+`crawl_dir/optimizer.json`, for the resumed crawl and the next ones.
+
+The test site's `/shop/` section (`tests/testsite.py`) has 150 products in
+five categories. Their links carry a `?ref=` that changes nothing, and a
+cloud of 60 tag pages leads only to itself. Crawling it gave:
+
+| Crawl of `/shop/` | Pages fetched | Items |
+|---|---:|---:|
+| without `optimize` | 376 | 150 |
+| with `optimize` | 203 | 150 |
+| again, with the file the first crawl saved | 172 | 150 |
+| again, `max_items = 50` | 56 | 50 |
+| without `optimize`, `max_items = 50` | 92 | 50 |
+
+Where there is nothing to save, it costs some speed. The benchmark site
+(`benchmarks/`) has 10,000 pages that all lead to items and no query
+strings. There the crawl ran at 985 pages/s instead of 1,033 (−5%), and
+every page was still fetched.
+
+It is off by default. Skipping a pattern means missing the records that
+only its pages lead to, if its first 20 pages led to none. Patterns come
+from URLs: a site whose URLs say nothing of their pages
+(`/index.php?id=...` for everything) gives one pattern and nothing to
+learn. And a crawl whose items come from every page has nothing to skip.
+
 ## Dead letters, events and metrics
 
 Requests given up on are kept in `crawl_dir/dead_letters.jsonl` and can be
@@ -455,6 +523,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `budget_soft_limit` / `budget_soft_priority` | `None` / `1` | Past this fraction of a budget, only start requests with at least this priority. |
 | `crawl_order` | `"bfs"` | `"bfs"` or `"dfs"` among equal priorities. |
 | `priority_fn` | `None` | `request -> int` priority for every queued request. |
+| `optimize` | `False` | [Learn which URL patterns give items](#learning-what-to-crawl): fetch them first, skip those that give nothing, drop query parameters that change nothing. `True`, or a file that keeps what was learned. |
 | `middlewares` / `pipelines` | `()` | [Downloader middleware and item pipelines](#middleware-and-pipelines). |
 | `dead_letters` / `retry_dead_letters` | `True` / `False` | Record failed requests in `crawl_dir/dead_letters.jsonl`; queue them again. |
 | `event_log` | `None` | Write events as JSON lines (`True` = `crawl_dir/events.jsonl`). |

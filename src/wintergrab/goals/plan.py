@@ -265,11 +265,13 @@ class GoalPlan:
             total = total + site.estimate
         return total
 
-    def describe(self) -> str:
-        """The goal as understood, then each site's steps and estimates, and the warnings."""
-        lines = ["Goal: " + self.goal.describe().replace("\n", "\n      ")]
+    def describe(self, *, goal: bool = True) -> str:
+        """The goal as understood (unless ``goal=False``), then each site's steps and estimates, and
+        the warnings."""
+        lines = ["Goal: " + self.goal.describe().replace("\n", "\n      ")] if goal else []
         for plan in self.sites:
-            lines.append("")
+            if lines:
+                lines.append("")
             lines.append(f"{plan.site}  ({plan.strategy})")
             lines.extend(f"  {i}. {step}" for i, step in enumerate(plan.steps, 1))
             lines.append("  Estimates:")
@@ -345,9 +347,17 @@ def plan_goal(
     for site in goal.sites:
         survey = (surveys or {}).get(site)
         if survey is None:
+            section = urlsplit(site).path.rstrip("/")
+            words = _scope_words(goal)
 
-            def prefer(url: str) -> bool:
-                return classify_url(url).type in kind.page_types or any(w in url.lower() for w in _scope_words(goal))
+            def prefer(url: str, section: str = section, words: list[str] = words) -> int:
+                """How much a page is worth sampling: in the part of the site given, and like the goal's
+                records (or, less, their listings) or its words."""
+                path = urlsplit(url).path
+                score = 2 if section and (path == section or path.startswith(section + "/")) else 0
+                seen_as = classify_url(url).type
+                score += 2 if seen_as in kind.page_types else 1 if seen_as in kind.listing_types else 0
+                return score + (1 if any(w in url.lower() for w in words) else 0)
 
             survey = survey_site(
                 site,

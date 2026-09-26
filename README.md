@@ -51,6 +51,11 @@ thousands of pages), the same API scales up.
   site (robots.txt, sitemaps, a sample of pages), shows a plan with what it
   will cost, and collects clean, typed records. Pages that need JavaScript go
   to a browser, the others stay on fast HTTP.
+- **Learns as it crawls.** With `--optimize`, a crawl learns which URL
+  patterns give items. It fetches those first, skips the patterns whose
+  pages lead nowhere, and stops downloading pages under parameters that
+  change nothing. On the test site's shop, that is 203 pages instead of
+  376, with every item found, and 172 on the next crawl.
 - **Survives redesigns.** With `--heal`, an extractor notices when its
   selectors stop matching and finds replacements. It tests them on the
   failing pages and applies them only when other evidence on the page

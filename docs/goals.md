@@ -5,28 +5,28 @@ of records you mean, surveys the site, shows you a plan with what it will
 cost, and collects the records.
 
 ```bash
-wintergrab goal "Find all books rated 4 stars or more with title, price and rating" --site https://books.example/
+wintergrab goal "Find all books rated 4 stars or more with title, price and rating" --site https://books.example/books/
 ```
 
 ```
 Understood: products with name, price, currency, rating, url
-            on https://books.example/
+            on https://books.example/books/
             in the section(s): books
             where rating >= 4   (rated 4 stars or more)
             duplicates removed
-Surveying https://books.example/: robots.txt, sitemaps, 30 pages...
+Surveying https://books.example/books/: robots.txt, sitemaps, 30 pages...
 
-https://books.example/  (follow)
+https://books.example/books/  (follow)
   1. robots.txt allows crawling; 3 sitemap(s) list 8 pages.
   2. Follow links from /books/ through /books/** and pagination to the product pages (/books/catalogue/*/index.html), over HTTP.
-  3. Extract name, price, currency, rating, url: sampled product pages gave name 4/4, price 4/4, rating 4/4.
+  3. Extract name, price, currency, rating, url: sampled product pages gave name 12/12, price 12/12, rating 12/12.
   4. Keep the records where (rating >= 4).
   5. Remove duplicates: records with the same URL (pages that name their canonical URL count once).
   Estimates:
-    pages with records: at least 8, plus 2 listing pages
-    requests: 11 (none in a browser)
-    download: 8.1 KB; time: 0 s; CPU: 0 s
-    records: about 4 (556 bytes as JSON Lines)
+    pages with records: at least 12, plus 3 listing pages
+    requests: 16 (none in a browser)
+    download: 12.1 KB; time: 0 s; CPU: 0 s
+    records: about 4 (558 bytes as JSON Lines)
 4 record(s)
 fields found: name 100%, price 100%, currency 100%, rating 100%, url 100%
 left out: 8 not meeting the conditions
@@ -34,7 +34,8 @@ left out: 8 not meeting the conditions
 ```
 
 (A run against the repository's test site, `tests/testsite.py`, a miniature
-of books.toscrape.com with twelve books; its address is shortened here.)
+of books.toscrape.com with twelve books; its address is shortened here, and
+the crawl's log lines are left out.)
 
 The records go to stdout as JSON Lines, or to a file with `-o books.jsonl`
 (`.csv` and `.json` work too). Each has the fields asked for and its
@@ -76,9 +77,11 @@ goal = parse_goal("well paid remote jobs", parser=my_model_reader)
 
 ## The plan
 
-`plan_goal(goal)` surveys each site (robots.txt, the sitemaps, and 30 pages:
-the start page and pages spread across the sitemaps, the ones that look like
-the goal's first) and learns from the sample:
+`plan_goal(goal)` surveys each site: robots.txt, the sitemaps, and 30
+pages. Those are the start page, pages spread across the sitemaps, and the
+pages their links lead to. Pages in the part of the site the goal names come
+first, then pages that look like the goal's records, then their listings. It
+learns from the sample:
 
 - which pages hold the records: classified as the kind's pages (product,
   article, job...), or, for pages that list nothing, giving a record with its
@@ -136,13 +139,26 @@ print(result.summary())
 result.counts                            # records, filtered, duplicates, pages, browser_pages...
 ```
 
-The run is one [spider](spiders.md) (`GoalSpider`) for all the plan's sites:
-the extraction engine fills the fields, a [data pipeline](data.md) keeps the
-records that meet the conditions and drops those with a URL already seen,
-pages that need JavaScript go to a browser when the survey saw some
-([adaptive fetching](spiders.md#http-first-a-browser-when-needed)), and the
-crawl stops at the goal's limit. With a goal that watches for changes and an
-output file, the pages' [history](history.md) is kept next to it.
+The run is one [spider](spiders.md) (`GoalSpider`) for all the plan's
+sites:
+
+- the extraction engine fills the fields;
+- a [data pipeline](data.md) keeps the records that meet the conditions and
+  drops those with a URL already seen;
+- pages that need JavaScript go to a browser when the survey saw some
+  ([adaptive fetching](spiders.md#http-first-a-browser-when-needed));
+- record pages are fetched before more listing pages, so a limit ("the first
+  40") is reached sooner. On the test site's `/shop/`, 40 products took 50
+  pages instead of 81;
+- the crawl stops at the goal's limit;
+- the crawl [learns what to crawl](spiders.md#learning-what-to-crawl): URL
+  patterns that give nothing are skipped, and query parameters that change
+  nothing are dropped. For all 150 products of `/shop/`, that meant 197
+  pages instead of 226. `optimize=False` (`--no-optimize`) fetches everything
+  the plan leads to.
+
+With a goal that watches for changes and an output file, the pages'
+[history](history.md) is kept next to it.
 
 ## Limits
 
