@@ -36,6 +36,7 @@ MODULES = [
     ("wintergrab.data.places", "Where records are"),
     ("wintergrab.data.graph", "Knowledge graphs"),
     ("wintergrab.goals", "Goals in plain words"),
+    ("wintergrab.goals.api", "Records from the API a site's pages call"),
     ("wintergrab.intel", "Page types, technologies, site profiles"),
     ("wintergrab.history", "What changed between crawls"),
     ("wintergrab.runs", "Run records and replay"),

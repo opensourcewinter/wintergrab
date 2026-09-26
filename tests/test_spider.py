@@ -151,6 +151,20 @@ def test_robots_and_offsite(site) -> None:
     rude = Links(obey_robots_txt=False).run()
     assert any("/private/" in i["url"] for i in rude.items)
 
+    class Told(Spider):  # an errback hears of the refusal, and may do without the page
+        log_level = None
+
+        def start_requests(self):
+            yield Request(site.url + "/private/1", errback="refused")
+
+        def refused(self, request, error):
+            yield {"refused": request.url, "why": type(error).__name__, "policy": error.policy}
+            yield Request(site.url + "/links?n=1")
+
+    told = Told().run()
+    assert told.items[0] == {"refused": site.url + "/private/1", "why": "RobotsPolicyError", "policy": "robots"}
+    assert told.stats["robots_blocked"] == 1 and told.stats["pages"] >= 1
+
 
 def test_retries_and_errors(fresh_site) -> None:
     errors: list[str] = []

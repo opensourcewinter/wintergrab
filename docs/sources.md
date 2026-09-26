@@ -109,7 +109,9 @@ when it steps by a page's size.
 
 It reads; it requests nothing. A spider that follows an API's pages
 requests them as any other page, under robots.txt and the
-[network policy](fetching.md#network-policy-ssrf-protection).
+[network policy](fetching.md#network-policy-ssrf-protection). A goal's plan
+does: when the API a site's pages call holds the goal's records, the run
+asks it page by page (see [goals](goals.md#records-from-the-sites-api)).
 
 ## GraphQL
 
@@ -118,7 +120,7 @@ operation name: `POST /graphql {"operationName": "Reviews", "query":
 "query Reviews(...)"}`, a persisted query by GET
 (`?operationName=Menu&extensions=...`), or a batch of several. Each
 operation is its own API. A mutation changes data: it is listed, but never
-as a source.
+as a source, and a goal's plan never collects from one.
 
 ## In a site's profile
 

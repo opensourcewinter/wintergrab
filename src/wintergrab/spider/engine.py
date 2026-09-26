@@ -1034,6 +1034,8 @@ class Engine:
                 except FetchError:
                     pass  # e.g. DNS trouble: the fetch reports (and retries) it
             if self.robots is not None and not await self._robots_allow(request, domain):
+                if request.errback is not None:  # told, as of any refusal: it may do without the page
+                    await self._errback(request, RobotsPolicyError(request.url))
                 return
             if spider.skip_fresh and request.depth > 0 and self._still_fresh(request):
                 self.stats.inc("history_skipped")
@@ -1458,17 +1460,24 @@ class Engine:
             kind=getattr(error, "kind", None),
             status=getattr(error, "status", None),
         )
-        errback = request.errback
-        if isinstance(errback, str):
-            errback = getattr(spider, errback)
+        if request.errback is not None:
+            await self._errback(request, error)
+            return
         try:
-            if errback is not None:
-                result = errback(request, error)
-                await self._consume(result, request)
-            elif quiet:
+            if quiet:
                 log.debug("giving up on %s: %s", request.url, error)
             else:
                 await maybe_await(spider.on_error(request, error))
+        except Exception as exc:
+            log.exception("error handler failed for %s: %s", request.url, exc)
+
+    async def _errback(self, request: Request, error: BaseException) -> None:
+        errback = request.errback
+        if isinstance(errback, str):
+            errback = getattr(self.spider, errback)
+        assert errback is not None
+        try:
+            await self._consume(errback(request, error), request)
         except Exception as exc:
             log.exception("error handler failed for %s: %s", request.url, exc)
 

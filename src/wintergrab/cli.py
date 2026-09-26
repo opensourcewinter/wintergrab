@@ -716,7 +716,14 @@ def cmd_goal(args: argparse.Namespace) -> int:
                 print(
                     f"Surveying {', '.join(goal.sites)}: robots.txt, sitemaps, {args.sample} pages...", file=sys.stderr
                 )
-            plan = plan_goal(goal, sample=args.sample, browser=args.browser, timeout=args.timeout, log_level=level)
+            plan = plan_goal(
+                goal,
+                sample=args.sample,
+                browser=args.browser,
+                timeout=args.timeout,
+                log_level=level,
+                api=not args.no_api,
+            )
     except WintergrabError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -753,6 +760,7 @@ def cmd_goal(args: argparse.Namespace) -> int:
         output,
         max_pages=args.max_pages,
         keep_items=output == "-",
+        use_api=not args.no_api,
         log_level="DEBUG" if args.verbose > 0 else ("WARNING" if args.verbose < 0 else "INFO"),
         progress=False if output == "-" else None,
         optimize=not args.no_optimize,
@@ -2781,6 +2789,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="fetch every page the plan leads to (by default, URL patterns that give nothing are skipped)",
     )
     gp.add_argument("--browser", "-b", action="store_true", help="survey with a browser (slower)")
+    gp.add_argument(
+        "--no-api",
+        action="store_true",
+        help="read the pages, even where the site's pages call an API that holds the records "
+        "(by default the plan collects from it)",
+    )
     gp.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (default 20)")
     gp.add_argument("-o", "--output", metavar="FILE", help="save the records (.jsonl, .csv, .json); default stdout")
     gp.add_argument("--json", action="store_true", help="print the plan as JSON (and collect nothing)")

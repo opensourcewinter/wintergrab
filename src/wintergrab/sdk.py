@@ -92,9 +92,11 @@ class WinterGrab:
         model = self._model_object()
         return parse_goal(text, sites=sites, parser=model_reader(model) if model is not None else None)
 
-    def plan(self, goal: str | Goal, *, sites: list[str] | None = None, sample: int = 30) -> GoalPlan:
+    def plan(self, goal: str | Goal, *, sites: list[str] | None = None, sample: int = 30, api: bool = True) -> GoalPlan:
         """Survey the goal's sites (robots.txt, sitemaps, ``sample`` pages each) and plan the crawl: what to fetch,
-        how, and what it will cost. Nothing is collected yet: :meth:`run` the plan."""
+        how, and what it will cost. Nothing is collected yet: :meth:`run` the plan. ``api``: collect from the API
+        a site's pages call, when it holds the goal's records (:mod:`wintergrab.goals.api`); ``False`` reads
+        the pages."""
         from .goals import plan_goal
 
         if isinstance(goal, str):
@@ -109,6 +111,7 @@ class WinterGrab:
             timeout=self.timeout,
             log_level=self.log_level,
             settings=self._spider_settings(),
+            api=api,
         )
 
     def run(
@@ -119,19 +122,21 @@ class WinterGrab:
         sites: list[str] | None = None,
         sample: int = 30,
         max_pages: int | None = None,
+        api: bool = True,
         **settings: Any,
     ) -> GoalResult:
         """Collect a goal's records into ``output`` (``.jsonl``, ``.csv``, a database URL...; kept in
         ``result.records`` when there is none). A goal that is not planned yet is planned first (:meth:`plan`).
-        ``settings``: more :class:`~wintergrab.Spider` settings for this run."""
+        ``api=False`` reads the pages even where the plan found an API. ``settings``: more
+        :class:`~wintergrab.Spider` settings for this run."""
         from .errors import ConfigurationError
         from .goals import GoalPlan
 
         if isinstance(goal, GoalPlan) and sites:
             raise ConfigurationError("a plan's sites are those it surveyed: plan the goal again to add sites")
-        plan = goal if isinstance(goal, GoalPlan) else self.plan(goal, sites=sites, sample=sample)
+        plan = goal if isinstance(goal, GoalPlan) else self.plan(goal, sites=sites, sample=sample, api=api)
         options = {"obey_robots_txt": self.obey_robots, "timeout": self.timeout, **self._spider_settings(), **settings}
-        return plan.run(output, max_pages=max_pages, log_level=self.log_level, **options)
+        return plan.run(output, max_pages=max_pages, use_api=api, log_level=self.log_level, **options)
 
     async def arun(
         self,

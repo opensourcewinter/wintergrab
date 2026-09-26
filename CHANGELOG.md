@@ -591,6 +591,37 @@ an error that says so, not a setting silently ignored
 - Type inference no longer reads a path or file name as a quantity
   (`/img/3m-tape.png` is no length). docs/sources.md.
 
+### Records from a site's API (`wintergrab.goals.api`)
+
+- A goal's plan collects from the JSON API a site's pages call, when it
+  holds the goal's records: the planner renders up to three of the sampled
+  pages that need JavaScript (every page with `--browser`), records their
+  calls, and takes a call that answers with the records' names and at least
+  as many of the goal's fields as the pages give, and whose next page can
+  be asked for. The run asks it page by page over HTTP (by page number,
+  offset, cursor or next URL; GraphQL cursors in its variables), instead
+  of a request per record page. The plan shows it (`(api, else sitemap)`,
+  the field mapping `name <- title, price <- price.amount...`) and keeps it
+  in its JSON (`SitePlan.api`). On the test shop, 10 laptops took 3
+  requests instead of 12.
+- Only reading calls (GETs, GraphQL queries), no header the page added, and
+  no API called with a key or token in its URL or body: a plan never keeps
+  nor sends a credential. robots.txt, the network policy and the crawl's
+  throttling apply; the planner does not take an API robots.txt forbids,
+  and says why it passed over the calls that held the records.
+- An API that fails without refusing (not found, not JSON, no records)
+  leaves its site to its pages; one that refuses (401, 403, 429, 451, a bot
+  check) stops the site, with a note: it is not asked another way. A run
+  that read fewer records than the API said it has says so
+  (`GoalResult.notes`, printed with the summary).
+- `wintergrab goal --no-api`, `plan_goal(api=False)`,
+  `plan.run(use_api=False)`, `WinterGrab.plan(api=False)` read the pages.
+- An errback now hears of a robots.txt refusal (a `RobotsPolicyError`), as
+  it did of a network policy one; a request without an errback is dropped
+  quietly, as before.
+- `pagination_of` reads an answer whose total is no more than the records
+  it holds, or that says there is no more, as the only page.
+
 ### Browser actions (`wintergrab.fetchers.actions`)
 
 - `browser.get(url, actions=[...])` does steps on the page before it is

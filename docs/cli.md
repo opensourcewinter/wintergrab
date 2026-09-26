@@ -253,9 +253,9 @@ See [intelligence.md](intelligence.md#site-profiles).
 
 ```bash
 wintergrab goal "REQUEST" [--site URL] [--sample N] [--plan-only] [--save-plan FILE] [--explain] [--json]
-                          [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-optimize] [--record]
-                          [--quality FILE] [--model PROVIDER:NAME [--model-url URL]] [-o FILE]
-wintergrab goal --plan FILE [-y] [-o FILE]
+                          [-y] [--confirm-over N] [--max-pages N] [--browser] [--no-api] [--no-optimize]
+                          [--record] [--quality FILE] [--model PROVIDER:NAME [--model-url URL]] [-o FILE]
+wintergrab goal --plan FILE [-y] [--no-api] [-o FILE]
 ```
 
 Reads the request ("Find all laptops under $1000 on shop.example with name,
@@ -265,9 +265,12 @@ estimates, and collects the records: JSON Lines on stdout, or `-o FILE`.
 Plans of more than `--confirm-over` requests (200) ask first, or need `--yes`
 without a terminal. `--plan-only` shows the plan and stops; `--save-plan`
 keeps it as JSON to edit and run later with `--plan`; `--explain` says what
-each estimate rests on. The crawl skips URL patterns that give nothing and
-drops query parameters that change nothing; `--no-optimize` fetches every
-page the plan leads to. See [goals.md](goals.md).
+each estimate rests on. When the site's pages call a JSON API that holds the
+records, the plan collects from it, page by page over HTTP, and reads the
+pages only if it fails without refusing; `--no-api` reads the pages. The
+crawl skips URL patterns that give nothing and drops query parameters that
+change nothing; `--no-optimize` fetches every page the plan leads to. See
+[goals.md](goals.md#records-from-the-sites-api).
 
 ## `wintergrab generate`: a scraper for a goal, tested
 

@@ -376,6 +376,8 @@ def pagination_of(
     if current is not None and (pages is not None or more is not None):
         last = (pages is not None and current >= pages) or more is False
         return Pagination("page", None, current, size, None if last else current + 1, None, total, pages, more)
+    if more is False or (total is not None and records and 0 < total <= records):
+        return Pagination("page", None, 1, size, None, None, total, 1, more)  # the one page: it holds them all
     return None
 
 
@@ -444,6 +446,9 @@ class ApiCall:
         collections: The lists of records in its answer, the largest first.
         pagination: How its pages go, when it can be told.
         seen: The values its calls gave the pagination parameter, in order (``[1, 2]``).
+        request: The first call's JSON body (a GraphQL call's query and variables), when it has one. It is
+            left out of :meth:`to_dict`.
+        page: The page that made the first call, when known.
     """
 
     method: str
@@ -456,6 +461,8 @@ class ApiCall:
     collections: list[Collection] = field(default_factory=list)
     pagination: Pagination | None = None
     seen: list[Any] = field(default_factory=list)
+    request: Any = field(default=None, repr=False)
+    page: str | None = None
 
     @property
     def mutation(self) -> bool:
@@ -501,17 +508,20 @@ class ApiCall:
 _OPERATION = re.compile(r"^\s*(query|mutation|subscription)\b\s*([A-Za-z_]\w*)?", re.S)
 
 
-def api_calls(captured: Iterable[Any]) -> list[ApiCall]:
+def api_calls(captured: Iterable[Any], *, pages: Iterable[str | None] | None = None) -> list[ApiCall]:
     """The calls a browser recorded (``response.captured``), grouped by method, URL pattern and GraphQL
-    operation, in the order they were first made."""
+    operation, in the order they were first made. ``pages``: the page that made each call, in the same order
+    (for calls gathered from several pages)."""
     groups: dict[tuple[str, str, str | None], list[Any]] = {}
+    origins = iter(pages) if pages is not None else None
     for call in captured:
         request = _request_json(call)
         operation = _graphql_operation(call, request)
-        groups.setdefault((call.method.upper(), url_template(call.url), operation), []).append((call, request))
+        origin = next(origins, None) if origins is not None else None
+        groups.setdefault((call.method.upper(), url_template(call.url), operation), []).append((call, request, origin))
     out = []
     for (method, template, operation), calls in groups.items():
-        first, request = calls[0]
+        first, request, origin = calls[0]
         variables = _variables(request, operation)
         answer = _answer_json(first)
         collections = json_collections(answer) if answer is not None else []
@@ -520,11 +530,11 @@ def api_calls(captured: Iterable[Any]) -> list[ApiCall]:
         )
         seen: list[Any] = []
         if pagination is not None and pagination.parameter and len(calls) > 1:
-            for call, call_request in calls:
+            for call, call_request, _ in calls:
                 value = _parameter(call.url, _variables(call_request, operation), pagination.parameter)
                 seen.append(_int(value) if _int(value) is not None else value)
         elif pagination is None and len(calls) > 1:
-            pagination, seen = _stepping(calls, collections[0].count if collections else None)
+            pagination, seen = _stepping([(c, r) for c, r, _ in calls], collections[0].count if collections else None)
         out.append(
             ApiCall(
                 method=method,
@@ -537,6 +547,8 @@ def api_calls(captured: Iterable[Any]) -> list[ApiCall]:
                 collections=collections,
                 pagination=pagination,
                 seen=seen,
+                request=request,
+                page=origin,
             )
         )
     return out

@@ -262,8 +262,8 @@ checks that it is up to date.
   - `get(self, url: str, **options: Any) -> Response`: One page: over HTTP, or rendered in a browser when this WinterGrab uses one (``browser=True``).
   - `goal(self, text: str, *, sites: list[str] | None = None) -> Goal`: A request in plain words as a :class:`~wintergrab.goals.Goal`, read by the model when there is one.
   - `inspect(self, url: str, *, pages: int = 30) -> SiteSurvey`: A site's robots.txt, sitemaps and ``pages`` pages, with its profile (``survey.profile.describe()``), as ``wintergrab inspect`` reads them.
-  - `plan(self, goal: str | Goal, *, sites: list[str] | None = None, sample: int = 30) -> GoalPlan`: Survey the goal's sites (robots.txt, sitemaps, ``sample`` pages each) and plan the crawl: what to fetch, how, and what it will cost.
-  - `run(self, goal: str | Goal | GoalPlan, output: str | None = None, *, sites: list[str] | None = None, sample: int = 30, max_pages: int | None = None, **settings: Any) -> GoalResult`: Collect a goal's records into ``output`` (``.jsonl``, ``.csv``, a database URL...; kept in ``result.records`` when there is none).
+  - `plan(self, goal: str | Goal, *, sites: list[str] | None = None, sample: int = 30, api: bool = True) -> GoalPlan`: Survey the goal's sites (robots.txt, sitemaps, ``sample`` pages each) and plan the crawl: what to fetch, how, and what it will cost.
+  - `run(self, goal: str | Goal | GoalPlan, output: str | None = None, *, sites: list[str] | None = None, sample: int = 30, max_pages: int | None = None, api: bool = True, **settings: Any) -> GoalResult`: Collect a goal's records into ``output`` (``.jsonl``, ``.csv``, a database URL...; kept in ``result.records`` when there is none).
   - `sources(self, page: str | Response) -> DataSources`: Where a page's data is (:func:`~wintergrab.intel.sources.data_sources`): its HTML records, JSON-LD, embedded JSON and, in a browser, the API calls it makes.
 - **`WintergrabError`** (exception). Base class for every error raised by wintergrab.
 - **`__version__`** = `'0.2.0'`
@@ -771,12 +771,15 @@ checks that it is up to date.
   - `run(self, output: str | None = None, **options: Any) -> GoalResult`: Collect the records (see :func:`~wintergrab.goals.run.run_plan`).
   - `save(self, path: str | Path)`: Write the plan as JSON (edit it, and run it with :meth:`load` and :meth:`run`).
   - `to_dict(self, *, embed_schema: bool = False) -> dict[str, Any]`: The plan as JSON holds it; ``embed_schema``: a schema file's content rather than its name.
-- **`GoalResult(plan: GoalPlan, crawl: CrawlResult | None = None, records: list[dict[str, Any]] = ..., output: str | None = None, counts: Counter[str] = ..., found: Counter[str] = ..., pages: list[Response] = ...)`** (class). What running a plan gave: the records (when kept), the crawl's result, and counts.
+- **`GoalResult(plan: GoalPlan, crawl: CrawlResult | None = None, records: list[dict[str, Any]] = ..., output: str | None = None, counts: Counter[str] = ..., found: Counter[str] = ..., pages: list[Response] = ..., notes: list[str] = ...)`** (class). What running a plan gave: the records (when kept), the crawl's result, and counts.
   - `summary(self) -> str`: The records, the fields they have, and what was left out and why.
-- **`GoalSpider(goal: Goal, plans: list[SitePlan], *, schema: Schema | None = None, keep_pages: bool = False, **settings: Any)`** (class). Collects a goal's records, following a plan per site (see the module docs).
+- **`GoalSpider(goal: Goal, plans: list[SitePlan], *, schema: Schema | None = None, keep_pages: bool = False, use_api: bool = True, **settings: Any)`** (class). Collects a goal's records, following a plan per site (see the module docs).
+  - `api_failed(self, request: Request, error: BaseException) -> Any`: An API request that failed: a refusal is reported; another failure on the first page leaves the site to its pages.
   - `parse(self, response: Response) -> Any`: A page of a ``follow`` plan: its record if it has one, and the links that lead to more.
+  - `parse_api(self, response: Response) -> Any`: A page of a site's API: its records, and the next page.
   - `parse_record(self, response: Response) -> Any`: A page that holds a record: extract it.
-- **`SitePlan(site: str, strategy: str, start_urls: list[str] = ..., sitemap_urls: list[str] = ..., target: list[str] = ..., follow: list[str] = ..., sections: list[str] = ..., page_types: list[str] = ..., fetch: str = 'http', allowed: bool = True, crawl_delay: float | None = None, sample: dict[str, Any] = ..., estimate: Estimate = ..., steps: list[str] = ..., warnings: list[str] = ..., js_patterns: list[str] = ...)`** (class). How to get a goal's records from one site (see the module docs).
+  - `start_requests(self) -> Iterator[Request | str]`: The plans' sitemaps and start pages, and the first page of each API (whose sites' pages wait).
+- **`SitePlan(site: str, strategy: str, start_urls: list[str] = ..., sitemap_urls: list[str] = ..., target: list[str] = ..., follow: list[str] = ..., sections: list[str] = ..., page_types: list[str] = ..., fetch: str = 'http', allowed: bool = True, crawl_delay: float | None = None, sample: dict[str, Any] = ..., estimate: Estimate = ..., steps: list[str] = ..., warnings: list[str] = ..., js_patterns: list[str] = ..., api: dict[str, Any] | None = None)`** (class). How to get a goal's records from one site (see the module docs).
   - `classmethod from_dict(cls, data: dict[str, Any]) -> SitePlan`
   - `is_followed(self, url: str) -> bool`
   - `is_target(self, url: str) -> bool`
@@ -786,15 +789,29 @@ checks that it is up to date.
 - **`model_reader(model: Any, *, now: datetime | None = None) -> Callable[[str], Mapping[str, Any]]`**. A ``parser`` for :func:`~wintergrab.goals.parse_goal` that asks ``model`` (a :class:`~wintergrab.models.ModelProvider`), and falls back on the built-in rules (see the module docs).
 - **`parse_goal(text: str, *, sites: list[str] | None = None, parser: Callable[[str], Mapping[str, Any]] | None = None, now: datetime | None = None) -> Goal`**. A :class:`Goal` from a request in plain words (see the module docs).
 - **`path_pattern(urls: list[str]) -> str`**. A path pattern covering ``urls``: segments they share stay, the others become ``*``.
-- **`plan_goal(goal: Goal, *, sample: int = 30, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, surveys: dict[str, SiteSurvey] | None = None, log_level: str | None = 'WARNING', settings: Mapping[str, Any] | None = None) -> GoalPlan`**. Plan ``goal`` for each of its sites (see the module docs).
-- **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, keep_pages: bool = False, log_level: str | None = 'INFO', progress: bool | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
+- **`plan_goal(goal: Goal, *, sample: int = 30, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, surveys: dict[str, SiteSurvey] | None = None, log_level: str | None = 'WARNING', settings: Mapping[str, Any] | None = None, api: bool = True, probe: int = 3) -> GoalPlan`**. Plan ``goal`` for each of its sites (see the module docs).
+- **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, keep_pages: bool = False, use_api: bool = True, log_level: str | None = 'INFO', progress: bool | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
+
+## `wintergrab.goals.api`: Records from the API a site's pages call
+
+- **`ApiSource(method: str, url: str, body: Any = None, graphql: str | None = None, path: str = '[]', fields: dict[str, str] = ..., pagination: dict[str, Any] | None = None, per_page: int = 0, total: int | None = None, pages: int | None = None, seen_on: str = '', template: str = '', bytes: int = 0, examples: list[dict[str, Any]] = ..., read_seconds: float = 0.0)`** (class). An API a site's pages call, holding the goal's records (see the module docs).
+  - `describe(self) -> str`: ``GET shop.example/api/products?page: 4 record(s) a page (pages by page: 3 in all)``.
+  - `classmethod from_dict(cls, data: Mapping[str, Any]) -> ApiSource`
+  - `mapping(self) -> str`: ``name <- title, price <- price.amount...``: where each field is read from.
+  - `to_dict(self) -> dict[str, Any]`: The source as a plan's JSON holds it (``SitePlan.api``), without its examples.
+- **`find_api(goal: Goal, pages: Iterable[Any], *, schema: Schema | None = None, notes: list[str] | None = None) -> ApiSource | None`**. The API, among the calls ``pages`` made as they rendered (their ``captured`` calls), that answers with ``goal``'s records, their name (or title) and as many of the goal's fields as it can; ``None`` if none does, or if its pages cannot be followed.
+- **`items_at(data: Any, path: str) -> list[Mapping[str, Any]]`**. The records at ``path`` in an answer (a :class:`~wintergrab.intel.sources.Collection` path: ``items[]``, ``data.products.edges[].node``, ``[]``, ``__APOLLO_STATE__{Product}``).
+- **`map_fields(schema: Schema, fields: Iterable[str], collection: Collection, *, base_url: str | None = None) -> dict[str, str]`**. Goal field -> where ``collection``'s records hold it: the first of the field's names (its own, its aliases, :data:`API_NAMES`, schema.org's) whose values, in half the records or more, read as the field's type.
+- **`next_page(source: ApiSource, url: str, body: Any, answer: Any, records: int) -> tuple[str, Any] | None`**. The next page's URL and body after the answer to ``url``/``body`` (``records`` records in it), or ``None`` when it was the last.
+- **`records_of(source: ApiSource, answer: Any, schema: Schema, *, base_url: str | None = None) -> list[dict[str, Any]]`**. The goal's records in one of the API's answers: each record's mapped fields, read as their types (money split into amount and currency, URLs made absolute against ``base_url``: by default the page that made the call).
+- **`total_of(source: ApiSource, url: str, body: Any, answer: Any, records: int) -> int | None`**. How many records the API says it has, in its answer to ``url``/``body``, when it says.
 
 ## `wintergrab.intel`: Page types, technologies, site profiles
 
 - **`LANGUAGES`**: a tuple
 - **`PAGE_TYPES`**: a tuple
 - **`RULES`**: a tuple
-- **`ApiCall(method: str, url: str, template: str, status: int, content_type: str, calls: int = 1, graphql: str | None = None, collections: list[Collection] = ..., pagination: Pagination | None = None, seen: list[Any] = ...)`** (class). An API a page called as it rendered (recorded by a browser fetch with ``capture=True``).
+- **`ApiCall(method: str, url: str, template: str, status: int, content_type: str, calls: int = 1, graphql: str | None = None, collections: list[Collection] = ..., pagination: Pagination | None = None, seen: list[Any] = ..., request: Any = None, page: str | None = None)`** (class). An API a page called as it rendered (recorded by a browser fetch with ``capture=True``).
   - `describe(self) -> str`
   - `details(self) -> str`: How its pages go, and how many times the page called it (``""`` when there is nothing to say).
   - `head(self) -> str`: The call and what it answers: ``GET shop.example/api/products?page: 3 record(s) at items[] (...)``.
@@ -857,7 +874,7 @@ checks that it is up to date.
   - `to_dict(self) -> dict[str, Any]`
   - `walk(self) -> Iterator[TopologyNode]`: This node and every node under it, depth first.
 - **`analyze_text(text: str, *, keywords: int = 8) -> TextAnalysis`**. The language, size and keywords of ``text`` (see the module docs).
-- **`api_calls(captured: Iterable[Any]) -> list[ApiCall]`**. The calls a browser recorded (``response.captured``), grouped by method, URL pattern and GraphQL operation, in the order they were first made.
+- **`api_calls(captured: Iterable[Any], *, pages: Iterable[str | None] | None = None) -> list[ApiCall]`**. The calls a browser recorded (``response.captured``), grouped by method, URL pattern and GraphQL operation, in the order they were first made.
 - **`classify_page(page: Any, *, url: str | None = None, status: int | None = None) -> PageType`**. The type of a page (a :class:`~wintergrab.Response`, a :class:`~wintergrab.Selector` or HTML).
 - **`classify_text(text: str, model: Any, *, categories: Sequence[str] | None = None, entities: bool = True, max_chars: int = 12000) -> TextLabels`**. A topic, a category (one of ``categories``), a sentiment and the entities of ``text``, from ``model`` (a :class:`~wintergrab.models.ModelProvider`), checked (see the module docs).
 - **`classify_url(url: str) -> PageType`**. A guess from the URL alone (before fetching): cheap, and less sure than :func:`classify_page`.

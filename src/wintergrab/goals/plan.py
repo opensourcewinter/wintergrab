@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import math
 import re
 import statistics
@@ -51,11 +52,14 @@ from ..extraction import Extractor, PageContext
 from ..fetchers.strategy import needs_javascript
 from ..intel.classify import classify_page, classify_url
 from ..spider import Spider
+from .api import ApiSource, find_api
 from .goal import Goal
 
 if TYPE_CHECKING:
     from ..intel.survey import SiteSurvey
     from .run import GoalResult
+
+log = logging.getLogger("wintergrab.goals")
 
 __all__ = ["Estimate", "GoalPlan", "SitePlan", "path_pattern", "plan_goal"]
 
@@ -219,6 +223,8 @@ class SitePlan:
         estimate: What it will cost.
         steps: The plan in words.
         warnings: What may go wrong.
+        api: The API the site's pages call, holding the goal's records (:class:`~wintergrab.goals.api.ApiSource`
+            as a dict): the run asks it first, and falls back on the pages above when it fails.
     """
 
     site: str
@@ -237,6 +243,7 @@ class SitePlan:
     steps: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     js_patterns: list[str] = field(default_factory=list)
+    api: dict[str, Any] | None = None
 
     def is_target(self, url: str) -> bool:
         return _matches(url, self.target) if self.target else False
@@ -297,7 +304,7 @@ class GoalPlan:
         for plan in self.sites:
             if lines:
                 lines.append("")
-            lines.append(f"{plan.site}  ({plan.strategy})")
+            lines.append(f"{plan.site}  ({'api, else ' if plan.api else ''}{plan.strategy})")
             lines.extend(f"  {i}. {step}" for i, step in enumerate(plan.steps, 1))
             lines.append("  Estimates:")
             lines.extend("    " + line for line in plan.estimate.describe().splitlines())
@@ -376,6 +383,8 @@ def plan_goal(
     surveys: dict[str, SiteSurvey] | None = None,
     log_level: str | None = "WARNING",
     settings: Mapping[str, Any] | None = None,
+    api: bool = True,
+    probe: int = 3,
 ) -> GoalPlan:
     """Plan ``goal`` for each of its sites (see the module docs).
 
@@ -385,6 +394,10 @@ def plan_goal(
         browser: Sample with a browser (slower; finds the API calls pages make).
         surveys: Surveys already made, by site URL (they are not made again).
         settings: :class:`~wintergrab.Spider` settings for the surveys (``network_policy``, ``cache``...).
+        api: Look for an API the site's pages call that holds the goal's records, to collect them from it
+            (:mod:`wintergrab.goals.api`); ``False`` plans to read the pages.
+        probe: Without ``browser``, how many sampled pages that need JavaScript to render in one, to find the
+            API they call (:mod:`wintergrab.goals.api`); 0 renders none.
     """
     if not goal.sites:
         raise ConfigurationError("the goal names no site: add one (a URL or a domain such as shop.example)")
@@ -396,8 +409,34 @@ def plan_goal(
                 goal, site, sample=sample, obey_robots=obey_robots, browser=browser, timeout=timeout,
                 log_level=log_level, settings=settings,
             )  # fmt: skip
-        plans.append(_plan_site(goal, survey))
+        rendered = [] if browser or not api or probe <= 0 else _render_for_api(survey, probe, timeout, settings or {})
+        plans.append(_plan_site(goal, survey, rendered, api=api))
     return GoalPlan(goal=goal, sites=plans)
+
+
+def _render_for_api(survey: SiteSurvey, limit: int, timeout: float, settings: Mapping[str, Any]) -> list[Any]:
+    """Up to ``limit`` of the sampled pages that need JavaScript, rendered with their API calls recorded
+    (none when no page needs it, or when Playwright is not installed)."""
+    candidates = [page for page in survey.pages if page.is_html and needs_javascript(page)][:limit]
+    if not candidates or importlib.util.find_spec("playwright") is None:
+        return []
+    from ..errors import WintergrabError
+    from ..fetchers.browser import BrowserFetcher
+
+    log.info("rendering %d page(s) that need JavaScript, to find the API they call", len(candidates))
+    rendered: list[Any] = []
+    try:
+        with BrowserFetcher(
+            timeout=timeout, retries=0, network_policy=settings.get("network_policy"), proxies=settings.get("proxies")
+        ) as browser:
+            for page in candidates:
+                try:
+                    rendered.append(browser.get(page.url, capture=True))
+                except WintergrabError as exc:
+                    log.info("could not render %s: %s", page.url, exc)
+    except WintergrabError as exc:  # no browser to launch
+        log.info("no page rendered: %s", exc)
+    return rendered
 
 
 def survey_for(
@@ -459,7 +498,7 @@ def _robots(survey: SiteSurvey) -> urllib.robotparser.RobotFileParser | None:
     return parser
 
 
-def _plan_site(goal: Goal, survey: SiteSurvey) -> SitePlan:
+def _plan_site(goal: Goal, survey: SiteSurvey, rendered: list[Any] | None = None, *, api: bool = True) -> SitePlan:
     kind = goal.kind
     schema = goal.schema()
     extractor = Extractor(schema)
@@ -583,13 +622,95 @@ def _plan_site(goal: Goal, survey: SiteSurvey) -> SitePlan:
     if survey.sitemaps.truncated:
         warnings.append("the sitemaps were read in part (10 sitemaps, 50,000 pages): there are more pages than counted")
 
+    # -- the API the pages call ----------------------------------------------------------------- #
+    passed_over: list[str] = []
+    source = find_api(goal, [*survey.pages, *(rendered or [])], schema=schema, notes=passed_over) if api else None
+    warnings.extend(passed_over)
+    if source is not None:
+        from_api = [f for f in wanted if f in source.fields]
+        from_pages = [f for f in wanted if found[f]]
+        if robots is not None and not robots.can_fetch("*", source.url):
+            warnings.append(f"robots.txt forbids the site's API ({source.describe()}): its pages are read instead")
+        elif len(from_api) >= len(from_pages):
+            plan.api = source.to_dict()
+            passing_api = [r for r in source.examples if all(_holds(c, r) for c in conditions)]
+            plan.sample["api"] = {
+                "records": len(source.examples),
+                "fields": {f: sum(1 for r in source.examples if r.get(f) not in (None, "", [])) for f in wanted},
+                "passing": len(passing_api),
+                "examples": source.examples[:3],
+            }
+            if source.examples:
+                pass_rate = len(passing_api) / len(source.examples)
+        else:
+            missing = ", ".join(f for f in from_pages if f not in from_api)
+            warnings.append(f"the site's API ({source.describe()}) has no {missing}: its pages are read instead")
+
     # -- what it costs ------------------------------------------------------------------------ #
     plan.estimate = _estimate(
         goal, plan, survey, sizes, parse_seconds, extract_seconds, records, pass_rate, listed_targets
     )
+    if plan.api is not None and source is not None:
+        plan.estimate = _api_estimate(goal, plan, source, survey, pass_rate)
     plan.steps = _steps(goal, plan, survey, listed_targets, found, sections)
     plan.warnings = warnings
     return plan
+
+
+def _api_estimate(goal: Goal, plan: SitePlan, source: ApiSource, survey: SiteSurvey, pass_rate: float) -> Estimate:
+    """What collecting from the API costs: a request per page of it, over HTTP."""
+    basis = []
+    per_page = max(1, source.per_page)
+    pages_known = plan.estimate.pages
+    if source.pages:
+        pages, exact = source.pages, True
+        said = f", {source.total:,} records" if source.total else ""
+        basis.append(f"API pages: {pages:,}, as the API says ({per_page} records a page{said})")
+    else:
+        pages, exact = max(1, math.ceil(max(pages_known, per_page) / per_page)), False
+        basis.append(
+            f"API pages: about {pages:,} ({pages_known:,} record pages at {per_page} records a page); the API does not say"
+        )
+    if goal.limit and pass_rate > 0:
+        needed = math.ceil(goal.limit / max(pass_rate, 0.05) / per_page)
+        if needed < pages:
+            basis.append(f"the goal wants {goal.limit:,} records: about {needed:,} API pages should do")
+            pages = needed
+    requests = pages + 1  # and robots.txt
+    latency = survey.profile.average_latency or 1.0
+    rate = 1 / latency  # one page leads to the next
+    rate_basis = f"one page after another, at the sampled pages' {latency:.2f} s per response"
+    if plan.crawl_delay:
+        rate = min(rate, 1 / plan.crawl_delay)
+        rate_basis = f"robots.txt's crawl delay of {plan.crawl_delay:g} s"
+    basis.append(f"time: {rate:.2f} requests per second ({rate_basis})")
+    size = source.bytes or 20_000
+    basis.append(
+        f"download: {_size(size)} per API page "
+        + ("(the page's answer)" if source.bytes else "(assumed: the page's answer was not recorded)")
+    )
+    basis.append(f"CPU: {source.read_seconds * 1000:.1f} ms per API page to read (measured on the page's answer)")
+    available = source.total if source.total is not None else pages * per_page
+    expected = round(min(available, pages * per_page) * pass_rate)
+    if goal.limit:
+        expected = min(expected, goal.limit)
+    basis.append(f"records: {pass_rate:.0%} of the API's sampled records meet the goal's conditions")
+    record_size = (
+        statistics.fmean(len(json.dumps(r, default=str)) for r in source.examples) if source.examples else 300.0
+    )
+    return Estimate(
+        pages=pages,
+        exact=exact,
+        listing_pages=0,
+        requests=requests,
+        browser_pages=0,
+        bytes=int(requests * size),
+        seconds=round(requests / rate, 1),
+        records=expected,
+        cpu_seconds=round(pages * source.read_seconds, 1),
+        storage_bytes=int(expected * (record_size + 1)),
+        basis=basis,
+    )
 
 
 def _section_url(survey: SiteSurvey, path: str) -> str:
@@ -768,21 +889,32 @@ def _steps(
     )
     if plan.strategy == "sitemap":
         where = f" under {', '.join(sections)}" if sections else ""
-        steps.append(
-            f"Fetch the {len(listed_targets):,} {kind.name} pages the sitemaps list{where} ({patterns}), {how}."
-        )
+        pages_step = f"Fetch the {len(listed_targets):,} {kind.name} pages the sitemaps list{where} ({patterns}), {how}"
     else:
         start = ", ".join(urlsplit(u).path or "/" for u in plan.start_urls)
         via = ", ".join(plan.follow) or "every page"
-        steps.append(
-            f"Follow links from {start} through {via} and pagination to the {kind.name} pages ({patterns}), {how}."
+        pages_step = (
+            f"Follow links from {start} through {via} and pagination to the {kind.name} pages ({patterns}), {how}"
         )
-    sampled = plan.sample["record_pages"]
-    if sampled:
-        fill = ", ".join(f"{f} {n}/{sampled}" for f, n in plan.sample["fields"].items())
-        steps.append(f"Extract {', '.join(goal.fields)}: sampled {kind.name} pages gave {fill}.")
+    api = plan.sample.get("api") if plan.api is not None else None
+    if plan.api is not None and api is not None:
+        source = ApiSource.from_dict(plan.api)
+        steps.append(
+            f"Ask the API the site's pages call as they render, over HTTP: {source.describe()}. "
+            f"If it fails without refusing, {pages_step[0].lower()}{pages_step[1:]}."
+        )
+        fill = ", ".join(f"{f} {n}/{api['records']}" for f, n in api["fields"].items())
+        steps.append(
+            f"Read {', '.join(goal.fields)} from each record ({source.mapping()}): the page's answer gave {fill}."
+        )
     else:
-        steps.append(f"Extract {', '.join(goal.fields)} from the pages classified as {kind.name} pages.")
+        steps.append(pages_step + ".")
+        sampled = plan.sample["record_pages"]
+        if sampled:
+            fill = ", ".join(f"{f} {n}/{sampled}" for f, n in plan.sample["fields"].items())
+            steps.append(f"Extract {', '.join(goal.fields)}: sampled {kind.name} pages gave {fill}.")
+        else:
+            steps.append(f"Extract {', '.join(goal.fields)} from the pages classified as {kind.name} pages.")
     keep = [f.expression for f in goal.filters]
     if keep:
         steps.append("Keep the records where " + " and ".join(f"({k})" for k in keep) + ".")

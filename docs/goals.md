@@ -138,6 +138,83 @@ pages runs, `wintergrab goal` asks; when it cannot ask (no terminal), it
 needs `--yes`. robots.txt is obeyed, and a site whose robots.txt keeps
 crawlers out is not crawled.
 
+## Records from the site's API
+
+Many sites build their pages in the browser from a JSON API: the HTML is an
+empty shell until the page has asked the API for its records. The planner
+looks for that API. It renders up to three of the sampled pages that need
+JavaScript (every sampled page with `--browser`) and records the calls they
+make, as [`get --sources`](sources.md) does. If a call answers with the
+goal's records, with their name and at least as many of the goal's fields as
+the pages give, and its next page can be asked for, the plan collects from
+it: one request per page of the API, over HTTP, instead of one per record
+page.
+
+```
+$ wintergrab goal 'laptops under $800 with name, price and rating' --site http://127.0.0.1:40263 --plan-only
+...
+http://127.0.0.1:40263  (api, else sitemap)
+  1. robots.txt allows crawling; 1 sitemap(s) list 10 pages.
+  2. Ask the API the site's pages call as they render, over HTTP: GET 127.0.0.1/api/laptops?page&per_page: 4 record(s) a page (pages by page: 3 in all). If it fails without refusing, fetch the 10 product pages the sitemaps list (/p/*), adaptive fetching: HTTP, and a browser for the pages that need JavaScript.
+  3. Read name, price, currency, rating, url from each record (name <- title, price, currency <- price.currency, rating <- rating.average, url): the page's answer gave name 4/4, price 4/4, rating 4/4.
+  4. Keep the records where (price < 800 and (currency is None or currency == 'USD')).
+  5. Remove duplicates: records with the same URL (pages that name their canonical URL count once).
+  Estimates:
+    pages with records: 3
+    requests: 4 (none in a browser)
+    ...
+```
+
+(The test shop of `tests/test_goal_api.py`, on a local port: its catalog is
+an app shell that asks `/api/laptops` for ten laptops, four a page, and each
+laptop also has a page of its own, listed in the sitemap.) Its run:
+
+```
+5 record(s)
+fields found: name 100%, price 100%, currency 100%, rating 100%, url 100%
+left out: 5 not meeting the conditions
+10 record(s) from 3 page(s) of the site's API
+3 page(s) fetched, 0 error(s)
+```
+
+Reading the same laptops from their pages took 12 requests (robots.txt,
+the sitemap and ten pages); pages that need a browser would each have taken
+one.
+
+How the API is asked:
+
+- the way the page asked it: the same URL, method and body, with the page
+  parameter changed (a page number, an offset, a cursor from the last
+  answer, or the next page's URL the answer gives);
+- only reading calls: GETs and GraphQL queries. A POST that is not a GraphQL
+  query, or a GraphQL mutation, may change something, and is not used;
+- no header the page added is sent again, and an API the page called with a
+  key or a token in its URL or body (`api_key`, `accessToken`...) is not
+  used: a plan never keeps a credential, nor sends one again;
+- robots.txt, the network policy, the crawl's throttling and budgets apply as
+  to any page, and the planner does not take an API robots.txt forbids.
+
+Each field is read from the first of its names whose values read as the
+field's type: `price` from `price`, `price.amount`, `amount`...; `rating`
+from `rating`, `rating.average`, `stars`...; `url` from `url`, `link`,
+`href`... (`API_NAMES` in `wintergrab.goals.api`, besides the field's
+aliases and its schema.org names). Links in an answer are read as the page
+that asked would read them. The mapping is in the plan's JSON (`"api"`), to
+check or edit, and the plan's warnings say why an API the pages called was
+not used.
+
+When the API does not work out:
+
+| What happens | What the run does |
+|---|---|
+| It is not found or fails, or its first answer is not JSON or holds no records | Reads the site's pages as planned, with a note saying why |
+| robots.txt forbids it (it changed since the plan was made) | The same |
+| It refuses: 401, 403, 429, 451, or a bot check | Stops, with a note. The site has answered, and it is not asked another way |
+| It fails on a later page | Keeps what it read, and notes where it stopped, and how many records the API said it has |
+
+`--no-api` reads the pages instead (`plan_goal(goal, api=False)`,
+`plan.run(use_api=False)`, `wg.plan(..., api=False)`).
+
 ## In code
 
 `WinterGrab` is one entry point for goals, pages and sites, with settings
@@ -220,3 +297,8 @@ keeps the scraper only when it passes. See [generated scrapers](generate.md).
   count unknown). A larger `--sample` helps.
 - The URL tree, the patterns and the sections come from the URLs: a site
   whose URLs say nothing of its structure is crawled by following links.
+- An API is found only among the calls of the pages rendered: without
+  `--browser`, three at most, among those that look like they need
+  JavaScript. It needs Playwright. The API is asked as the page asked it
+  first; an API that pages only through headers or through a body that is
+  not GraphQL is not followed.

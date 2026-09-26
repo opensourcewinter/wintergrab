@@ -6,8 +6,11 @@
     print(result.summary())
 
 Each site's :class:`GoalSpider` follows its :class:`~wintergrab.goals.plan.SitePlan`:
-the record pages listed in the sitemaps, or links followed from the start
-pages through listings and pagination. On each record page the extraction
+the API the site's pages call when the plan found one (:mod:`wintergrab.goals.api`),
+page by page; the record pages listed in the sitemaps, or links followed from the start
+pages through listings and pagination. An API that fails without refusing (it is not
+found, it answers without records) leaves its site to its pages; one that refuses
+(401, 403, 429, 451, a bot check) is not asked another way. On each record page the extraction
 engine fills the goal's fields (with their confidence, ``_confidence``); a
 data :class:`~wintergrab.data.Pipeline` keeps the records that meet the
 goal's conditions and drops duplicates (the same URL: pages that name their
@@ -23,25 +26,32 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ..data.pipeline import Deduplicate, Filter, Pipeline
 from ..data.schema import Schema
+from ..errors import RobotsPolicyError, describe
 from ..extraction import Extractor
 from ..fetchers.resources import registrable_domain
 from ..fetchers.response import Response
 from ..fetchers.strategy import FetchStrategy
 from ..intel.classify import classify_page
+from ..request import Request
 from ..spider import CrawlResult, Spider
 from ..utils import host_of
+from .api import MAX_API_PAGES, ApiSource, next_page, records_of, total_of
 from .goal import Goal
 
 if TYPE_CHECKING:
     from .plan import GoalPlan, SitePlan
 
 __all__ = ["GoalResult", "GoalSpider", "run_plan"]
+
+#: An API's answers that refuse: they are the site's answer, and the site is not asked another way.
+_REFUSALS = (401, 403, 429, 451)
 
 
 def _url_regex(pattern: str) -> str:
@@ -61,6 +71,7 @@ class GoalSpider(Spider):
         plans: How, per site.
         schema: What records are read with (default: the goal's fields).
         keep_pages: Keep the record pages fetched (:attr:`pages`).
+        use_api: Ask the API a plan found (``False``: read the pages).
         settings: More :class:`~wintergrab.Spider` settings.
     """
 
@@ -74,18 +85,23 @@ class GoalSpider(Spider):
         *,
         schema: Schema | None = None,
         keep_pages: bool = False,
+        use_api: bool = True,
         **settings: Any,
     ) -> None:
         self.goal = goal
         # by site (www.shop.example and shop.example are one site: sitemaps mix them)
         self.plans = {registrable_domain(host_of(plan.site)): plan for plan in plans}
+        #: The APIs asked, by site; their sites' pages are read only if they fail.
+        self.apis = {site: ApiSource.from_dict(plan.api) for site, plan in self.plans.items() if use_api and plan.api}
+        pages = [plan for site, plan in self.plans.items() if site not in self.apis]
         rules = [(_url_regex(p), "parse_record") for plan in plans for p in plan.target]
         settings.setdefault("sitemap_rules", rules)
         settings.setdefault(
-            "sitemap_urls", [u for plan in plans if plan.strategy == "sitemap" for u in plan.sitemap_urls]
+            "sitemap_urls", [u for plan in pages if plan.strategy == "sitemap" for u in plan.sitemap_urls]
         )
-        settings.setdefault("start_urls", [u for plan in plans if plan.strategy == "follow" for u in plan.start_urls])
-        settings.setdefault("allowed_domains", sorted(self.plans))
+        settings.setdefault("start_urls", [u for plan in pages if plan.strategy == "follow" for u in plan.start_urls])
+        # and the hosts of the APIs, which may be elsewhere (api.shop-cdn.example)
+        settings.setdefault("allowed_domains", sorted({*self.plans, *(host_of(a.url) for a in self.apis.values())}))
         super().__init__(**settings)
         self.extractor = Extractor(schema if schema is not None else goal.schema())
         self.identity = next((f for f in goal.fields if f in ("name", "title")), goal.fields[0])
@@ -95,6 +111,111 @@ class GoalSpider(Spider):
         self.record_pages = 0
         #: The record pages fetched, with ``keep_pages``.
         self.pages: list[Response] | None = [] if keep_pages else None
+        #: API pages that held records, the records they held, and those without the record's name (or title).
+        self.api_pages = 0
+        self.api_records = 0
+        self.api_incomplete = 0
+        #: Per API site: the records its answers held, and how many its first answer said it has.
+        self.api_read: Counter[str] = Counter()
+        self.api_total: dict[str, int] = {}
+        #: What happened to an API that failed or stopped early.
+        self.api_notes: list[str] = []
+        self._api_asked: set[str] = set()
+
+    # -- the APIs ------------------------------------------------------------------------------ #
+    def start_requests(self) -> Iterator[Request | str]:
+        """The plans' sitemaps and start pages, and the first page of each API (whose sites' pages wait)."""
+        yield from cast("Iterable[Request | str]", super().start_requests())  # the base's is a generator
+        for site, source in self.apis.items():
+            yield self._api_request(site, source.url, source.body, 1)
+
+    def _api_request(self, site: str, url: str, body: Any, number: int) -> Request:
+        source = self.apis[site]
+        self._api_asked.add(url + json.dumps(body, sort_keys=True, default=str))
+        return Request(
+            url,
+            method=source.method,
+            json=body if source.method == "POST" else None,
+            headers={"Accept": "application/json"},
+            callback="parse_api",
+            errback="api_failed",
+            dont_filter=True,  # the same URL with another body (a GraphQL cursor) is another page
+            priority=30,
+            meta={"api_site": site, "api_body": body, "api_page": number},
+        )
+
+    def parse_api(self, response: Response) -> Any:
+        """A page of a site's API: its records, and the next page."""
+        site, number, body = response.meta["api_site"], response.meta["api_page"], response.meta.get("api_body")
+        source = self.apis[site]
+        try:
+            answer = response.json()
+        except ValueError:
+            answer = None
+        records = records_of(source, answer, self.extractor.schema) if answer is not None else []
+        if not records:
+            if number == 1:
+                why = "its answer holds no records" if answer is not None else "its answer is not JSON"
+                yield from self._fall_back(site, why)
+            return
+        self.api_pages += 1
+        self.api_read[site] += len(records)
+        asked = response.request.url if response.request is not None else response.url
+        if number == 1:
+            total = total_of(source, asked, body, answer, len(records))
+            if total is not None:
+                self.api_total[site] = total
+        for record in records:
+            if record.get(self.identity) in (None, "", []):
+                self.api_incomplete += 1
+                continue
+            self.api_records += 1
+            yield record
+        following = next_page(source, asked, body, answer, len(records))
+        if following is None:
+            return
+        url, next_body = following
+        if number >= MAX_API_PAGES:
+            self.api_notes.append(f"{self.plans[site].site}: stopped after {number:,} pages of its API")
+            return
+        if url + json.dumps(next_body, sort_keys=True, default=str) in self._api_asked:
+            self.api_notes.append(f"{self.plans[site].site}: its API gave page {number + 1} as one already read")
+            return
+        yield self._api_request(site, url, next_body, number + 1)
+
+    def api_failed(self, request: Request, error: BaseException) -> Any:
+        """An API request that failed: a refusal is reported; another failure on the first page leaves the site
+        to its pages."""
+        site, number = request.meta["api_site"], request.meta["api_page"]
+        name = self.plans[site].site
+        response = getattr(error, "response", None)
+        status = getattr(response, "status", None)
+        if status in _REFUSALS or (response is not None and self.is_blocked(response)):
+            how = f"HTTP {status}" if status in _REFUSALS else "a bot check"
+            note = f"{name}: its API refused ({how}): it is not asked another way"
+            self.api_notes.append(note)
+            self.logger.warning(note)
+            return
+        if isinstance(error, RobotsPolicyError):
+            why = "robots.txt forbids it"
+        else:
+            why = f"HTTP {status}" if status is not None else describe(error)
+        if number == 1:
+            yield from self._fall_back(site, why)
+        else:
+            self.api_notes.append(f"{name}: its API stopped at page {number} ({why})")
+
+    def _fall_back(self, site: str, reason: str) -> Any:
+        plan = self.plans[site]
+        note = f"{plan.site}: its API could not be used ({reason}): its pages were read instead"
+        self.api_notes.append(note)
+        self.logger.warning(note)
+        if plan.strategy == "sitemap":
+            for url in plan.sitemap_urls:
+                yield Request(url, callback="_parse_sitemap", priority=100)
+        else:
+            for url in plan.start_urls:
+                yield Request(url)
 
     def _plan(self, url: str) -> SitePlan | None:
         return self.plans.get(registrable_domain(host_of(url)))
@@ -156,6 +277,8 @@ class GoalResult:
     found: Counter[str] = field(default_factory=Counter)
     #: The record pages fetched (``run_plan(keep_pages=True)``).
     pages: list[Response] = field(default_factory=list)
+    #: What happened to an API that failed or stopped early.
+    notes: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
         """The records, the fields they have, and what was left out and why."""
@@ -171,13 +294,19 @@ class GoalResult:
             dropped.append(f"{c['duplicates']:,} duplicate(s)")
         if c["incomplete"]:
             dropped.append(f"{c['incomplete']:,} page(s) without a {self.plan.goal.kind.default_fields[0]}")
+        if c["api_incomplete"]:
+            dropped.append(f"{c['api_incomplete']:,} API record(s) without a {self.plan.goal.kind.default_fields[0]}")
         if dropped:
             lines.append("left out: " + "; ".join(dropped))
+        if c["api_pages"]:
+            lines.append(f"{c['api_records']:,} record(s) from {c['api_pages']:,} page(s) of the site's API")
         lines.append(
-            f"{c['pages']:,} page(s) fetched, {c['record_pages']:,} with a record"
+            f"{c['pages']:,} page(s) fetched"
+            + (f", {c['record_pages']:,} with a record" if c["record_pages"] or not c["api_pages"] else "")
             + (f", {c['browser_pages']:,} in a browser" if c["browser_pages"] else "")
             + f", {c['errors']:,} error(s)"
         )
+        lines.extend(f"note: {note}" for note in self.notes)
         return "\n".join(lines)
 
 
@@ -188,6 +317,7 @@ def run_plan(
     max_pages: int | None = None,
     keep_items: bool | None = None,
     keep_pages: bool = False,
+    use_api: bool = True,
     log_level: str | None = "INFO",
     progress: bool | None = None,
     **settings: Any,
@@ -200,6 +330,7 @@ def run_plan(
         max_pages: Stop after this many pages.
         keep_items: Keep the records in memory (``result.records``); by default when there is no ``output``.
         keep_pages: Keep the record pages fetched (``result.pages``).
+        use_api: Collect from the API the plan found, where it found one (``False``: read the pages).
         settings: More :class:`~wintergrab.Spider` settings (``concurrency``, ``cache``, ``obey_robots_txt``...);
             ``optimize=False`` fetches every page the plan leads to (see :mod:`wintergrab.spider.optimizer`).
     """
@@ -217,7 +348,11 @@ def run_plan(
     options.setdefault("optimize", True)  # skip what gives nothing, drop parameters that change nothing
     if options.get("record") or options.get("run_registry"):
         # a replay needs no survey, nor the plan's schema file
-        options.setdefault("run_recipe", {"goal_plan": plan.to_dict(embed_schema=True)})
+        recipe = plan.to_dict(embed_schema=True)
+        if not use_api:  # the replay reads the pages, as this run did
+            for site in recipe["sites"]:
+                site["api"] = None
+        options.setdefault("run_recipe", {"goal_plan": recipe})
     if any(site.fetch == "adaptive" for site in sites):
         strategy = FetchStrategy()
         for site in sites:
@@ -238,6 +373,7 @@ def run_plan(
         sites,
         schema=plan.extraction_schema() if plan.schema is not None else None,
         keep_pages=keep_pages,
+        use_api=use_api,
         output=output,
         keep_items=keep,
         max_pages=max_pages,
@@ -257,6 +393,15 @@ def run_plan(
     counts["errors"] = int(crawl.stats.get("errors", 0))
     counts["record_pages"] = spider.record_pages
     counts["incomplete"] = spider.incomplete
+    counts["api_pages"] = spider.api_pages
+    counts["api_records"] = spider.api_records
+    counts["api_incomplete"] = spider.api_incomplete
+    result.notes = list(spider.api_notes)
+    cut_short = crawl.status != "finished" or bool(goal.limit and counts["records"] >= goal.limit)
+    for site, total in spider.api_total.items():
+        read = spider.api_read[site]
+        if read < total and not cut_short:
+            result.notes.append(f"{spider.plans[site].site}: its API said it has {total:,} records; {read:,} were read")
     for stage in pipeline:
         counts["duplicates" if isinstance(stage, Deduplicate) else "filtered"] += stage.stats.get("dropped", 0)
     fields = [f for f in goal.fields]

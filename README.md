@@ -48,11 +48,12 @@ thousands of pages), the same API scales up.
   renders, and see where each page's data is (`get --sources`: HTML, JSON-LD,
   embedded JSON, APIs with their pagination). Sign in once in the browser,
   then continue over fast HTTP with the same cookies.
-- **Say what you want.** `wintergrab goal "Find all laptops under $1000 on
-  shop.example with name, price and rating"` reads the request, surveys the
+- **Say what you want.** `wintergrab goal 'Find all laptops under $1000 on
+  shop.example with name, price and rating'` reads the request, surveys the
   site (robots.txt, sitemaps, a sample of pages), shows a plan with what it
   will cost, and collects clean, typed records. Pages that need JavaScript go
-  to a browser, the others stay on fast HTTP.
+  to a browser, the others stay on fast HTTP; when the pages call a JSON API
+  that holds the records, it is read instead, page by page.
 - **Click to build.** `wintergrab build URL -o FILE` shows the page without
   its scripts. Click a field, a repeated card, a table or the next-page
   link, and get a schema you can read, edit and test on the page. It

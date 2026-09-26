@@ -125,6 +125,11 @@ def test_lists_of_records_in_json() -> None:
         ("https://a.example/orders", {"_links": {"next": {"href": "/orders?cursor=abc"}}}, None,
          {"kind": "next", "next_url": "https://a.example/orders?cursor=abc"}),  # HAL
         ("https://a.example/items", {"items": [{"a": 1}]}, None, None),
+        ("https://a.example/items", {"items": [], "total": 25}, None,
+         {"kind": "page", "value": 1, "total": 25, "pages": 1}),  # the one page: it holds all 25
+        ("https://a.example/items", {"items": [], "has_more": False}, None,
+         {"kind": "page", "value": 1, "pages": 1, "more": False}),
+        ("https://a.example/items", {"items": [], "total": 26}, None, None),  # more, but how to ask is not said
     ],
 )  # fmt: skip
 def test_how_an_apis_pages_go(url, answer, request_, expected) -> None:
