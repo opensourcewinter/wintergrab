@@ -74,6 +74,24 @@ def test_xlsx(tmp_path) -> None:
     assert rows[3]["note"].startswith("bell x") and len(rows[3]["note"]) == 32_767  # no control character; cut
 
 
+def test_sqlite_reads_back(tmp_path) -> None:
+    import sqlite3
+
+    path = tmp_path / "items.sqlite"
+    write(path, ITEMS, unique_key="url")  # (an integer past 64 bits once stopped it: OverflowError)
+    rows = list(read_records(path))
+    assert rows[0]["tags"] == ["a", "b"] and rows[1]["offer"] == {"amount": 9.99, "currency": "EUR"}  # as they were
+    assert rows[0]["ok"] is True and rows[1]["ok"] is False and rows[2]["big"] == str(2**70)
+    assert (rows[0]["code"], rows[1]["code"], rows[3]["value"]) == (7, "X7", "a plain value")  # kept as they are
+    write(path, [{"url": "https://s.example/9", "ok": "maybe", "tags": "none"}], unique_key="url", append=True)
+    rows = list(read_records(path))
+    assert rows[-1]["ok"] == "maybe" and rows[0]["ok"] == 1 and rows[0]["tags"] == '["a", "b"]'  # mixed: as kept
+    with sqlite3.connect(tmp_path / "other.db") as connection:
+        connection.execute("CREATE TABLE products (name TEXT)")
+    with pytest.raises(ConfigurationError, match="no 'items' table"):
+        list(read_records(tmp_path / "other.db"))
+
+
 def test_crawls_write_them_and_data_commands_read_them(site, tmp_path, capsys) -> None:
     pytest.importorskip("pyarrow")
     pytest.importorskip("openpyxl")
@@ -457,6 +475,102 @@ def test_mysql_urls(monkeypatch, tmp_path) -> None:
         parse_target("mysql://db.example/shop?ssl_verify_cert=perhaps")
     monkeypatch.delenv("MYSQL_PWD")
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))  # (the home on Windows)
     (tmp_path / ".my.cnf").write_text("[client]\npassword = from-the-file\n", encoding="utf-8")
     arguments, _ = parse_target("mysql://crawler@db.example/shop")
     assert "password" not in arguments and arguments["read_default_file"] == str(tmp_path / ".my.cnf")
+
+
+# -- S3: against moto's S3 server, run here ------------------------------------------------------------- #
+@pytest.fixture
+def s3(monkeypatch, tmp_path):
+    pytest.importorskip("s3fs")
+    server_module = pytest.importorskip("moto.server")
+    server = server_module.ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    for name in ("AWS_PROFILE", "AWS_ENDPOINT_URL", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.setenv("WINTERGRAB_UPLOADS", str(tmp_path / "uploads"))
+    endpoint = f"http://{host}:{port}"
+    import urllib.request
+
+    import s3fs
+
+    urllib.request.urlopen(urllib.request.Request(f"{endpoint}/moto-api/reset", method="POST"))  # (state is shared)
+    fs = s3fs.S3FileSystem(client_kwargs={"endpoint_url": endpoint})
+    fs.mkdir("wg-bucket")
+    yield endpoint, fs
+    server.stop()
+
+
+def test_s3(s3, site, tmp_path, capsys) -> None:
+    endpoint, fs = s3
+    url = f"s3://wg-bucket/crawls/items.jsonl?endpoint_url={endpoint}"
+    exporter = write(url, ITEMS[:3])
+    assert fs.exists("wg-bucket/crawls/items.jsonl") and exporter.count == 3 and exporter.bytes_written > 100
+    rows = list(read_records(url))
+    assert len(rows) == 3 and rows[1]["offer"] == {"amount": 9.99, "currency": "EUR"}  # as JSON Lines hold them
+    assert not list((tmp_path / "uploads").rglob("*.jsonl"))  # uploaded: nothing left behind
+
+    write(url, [{"url": "https://s.example/5"}], append=True)  # a resumed crawl, its local file gone: continued
+    assert [r["url"] for r in read_records(url)][-2:] == ["https://s.example/3", "https://s.example/5"]
+    stopped = open_exporter(url, append=False)  # a crawl that stops before it ends...
+    stopped.write({"url": "https://s.example/6"})
+    stopped.flush()
+    resumed = write(url, [{"url": "https://s.example/7"}], append=True)  # ...continued by the next
+    assert [r["url"] for r in read_records(url)] == ["https://s.example/6", "https://s.example/7"]
+    assert resumed.count == 1
+
+    if __import__("importlib").util.find_spec("pyarrow"):
+        parquet = f"s3://wg-bucket/crawls/items.parquet?endpoint_url={endpoint}"
+        write(parquet, ITEMS[:3])
+        assert [r.get("price") for r in read_records(parquet)] == [10.0, 12.5, None]  # a typed column
+    measured = open_exporter(f"s3://wg-bucket/measured.sqlite?endpoint_url={endpoint}")
+    for n in range(50):
+        measured.write({"url": f"https://s.example/{n}", "text": "x" * 200})
+    measured.flush()
+    assert measured.bytes_written > 10_000  # SQLite counts no bytes: its file does (max_output_bytes)
+    measured.close()
+    formats = [".json", ".sqlite", *([".xlsx"] if __import__("importlib").util.find_spec("openpyxl") else [])]
+    for suffix in formats:  # every file output, as an object
+        target = f"s3://wg-bucket/crawls/items{suffix}?endpoint_url={endpoint}"
+        write(target, ITEMS[:2], unique_key="url")
+        write(target, [{"url": "https://s.example/2", "price": 13}], unique_key="url", append=True)
+        rows = list(read_records(target))
+        assert rows[0]["url"] == "https://s.example/1" and rows[-1]["url"] == "https://s.example/2", suffix
+        assert len(rows) == (2 if suffix == ".sqlite" else 3), suffix  # (SQLite upserts on the key)
+
+    from wintergrab.cli import main
+
+    books = f"s3://wg-bucket/books.csv?endpoint_url={endpoint}"
+    assert main(["-q", "crawl", site.url + "/books/", "--allow", "/books/", "--max-pages", "3", "--auto", "-o",
+                 books, "--no-progress"]) == 0  # fmt: skip
+    capsys.readouterr()
+    assert main(["data", "quality", books]) == 0 and "record(s), quality score" in capsys.readouterr().out
+
+
+def test_s3_urls(s3, monkeypatch, tmp_path) -> None:
+    endpoint, _ = s3
+    with pytest.raises(ConfigurationError, match="holds no credentials"):
+        open_exporter(f"s3://AKIA:secret@wg-bucket/items.jsonl?endpoint_url={endpoint}")
+    with pytest.raises(ConfigurationError, match="unknown option 'acl'"):
+        open_exporter(f"s3://wg-bucket/items.jsonl?endpoint_url={endpoint}&acl=public-read")
+    with pytest.raises(ConfigurationError, match="extension picks the format"):
+        open_exporter(f"s3://wg-bucket/items.txt?endpoint_url={endpoint}")
+    with pytest.raises(ConfigurationError, match="name the bucket and the object"):
+        open_exporter(f"s3://wg-bucket/?endpoint_url={endpoint}")
+    with pytest.raises(ConfigurationError, match="there is no bucket 'nothing-here'"):
+        open_exporter(f"s3://nothing-here/items.jsonl?endpoint_url={endpoint}")
+    with pytest.raises(ConfigurationError, match="no such object"):
+        list(read_records(f"s3://wg-bucket/missing.jsonl?endpoint_url={endpoint}"))
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"):
+        monkeypatch.delenv(name)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "none"))
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "none"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    with pytest.raises(ConfigurationError, match="no AWS credentials found"):
+        open_exporter(f"s3://wg-bucket/other.jsonl?endpoint_url={endpoint}&region=eu-west-1")

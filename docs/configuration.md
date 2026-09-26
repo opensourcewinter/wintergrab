@@ -54,6 +54,8 @@ need nothing more.
 | `PGPASSWORD` (and `~/.pgpass`) | The PostgreSQL password, kept out of the output URL |
 | `MYSQL_PWD` (and `~/.my.cnf`) | The MySQL or MariaDB password, kept out of the output URL |
 | `WINTERGRAB_MONGODB_PASSWORD` | The MongoDB password, for an output URL that names a user without one |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_PROFILE`, `AWS_ENDPOINT_URL`... | S3 credentials and endpoint, for `s3://` outputs, as the AWS tools read them |
+| `WINTERGRAB_UPLOADS` | Where items for an `s3://` output wait for their upload (default `.wintergrab/uploads`) |
 | `${NAME}` in a project's webhooks | Any variable: secrets for webhooks |
 | `WINTERGRAB_PLUGINS=0` | Load no [plugin](plugins.md) |
 | `WINTERGRAB_BROWSER_PATH` | A Chrome or Chromium binary to use instead of Playwright's |
@@ -74,6 +76,8 @@ Keep credentials out of files that are shared or committed:
 - **Models**: read keys from the environment.
 - **Databases**: use `PGPASSWORD` or `~/.pgpass` (PostgreSQL), `MYSQL_PWD`
   or `~/.my.cnf` (MySQL, MariaDB), `WINTERGRAB_MONGODB_PASSWORD` (MongoDB).
+- **S3**: the AWS credential chain (`AWS_ACCESS_KEY_ID`..., profiles, roles);
+  an `s3://` URL holding credentials is refused.
 - **Proxies**: a proxy file can hold its passwords.
 
 Wherever wintergrab writes settings or command lines down, it leaves

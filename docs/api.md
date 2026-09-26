@@ -324,7 +324,7 @@ checks that it is up to date.
 
 `Spider`: see [`wintergrab`](#wintergrab-fetching-parsing-and-the-most-used-names).
 
-- **`open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter`**. Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``).
+- **`open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter`**. Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``, ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``, ``s3://``).
 - **`write_items(path: str | os.PathLike[str], items: list[Any]) -> Path`**. Write a list of items in one go (format chosen by extension).
 
 ## `wintergrab.extraction`: Typed records from pages
@@ -700,7 +700,7 @@ checks that it is up to date.
 ## `wintergrab.data.io`: Reading records
 
 - **`READERS`**: a dict
-- **`RECORD_SUFFIXES`** = `('.jsonl', '.ndjson', '.json', '.csv', '.parquet', '.pq', '.xlsx')`
+- **`RECORD_SUFFIXES`**: a tuple
 - **`URL_READERS`**: a dict
 - **`read_records(path: str | Path, *, limit: int | None = None) -> Iterator[dict[str, Any]]`**. The records in a file, one at a time.
 - **`register_reader(key: str, reader: Reader | str)`**. Read more: ``".ext"`` for files with that extension, ``"scheme"`` for ``scheme://`` URLs.
@@ -1105,6 +1105,14 @@ checks that it is up to date.
   - `flush(self)`: Push buffered items to disk (called on checkpoints and at the end).
   - `write(self, item: Any)`
 - **`read_mongodb(url: str) -> Iterator[dict[str, Any]]`**. The documents of a collection as records, in the order they were first written (without MongoDB's ``_id``).
+
+## `wintergrab.storage.objects`: S3 and S3-compatible object storage
+
+- **`ObjectExporter(url: str, *, append: bool, unique_key: str | None = None)`** (class). Items in an object of an S3 bucket, in the format its extension names (see the module docs).
+  - `close(self)`
+  - `flush(self)`: Push buffered items to disk (called on checkpoints and at the end).
+  - `write(self, item: Any)`
+- **`read_object(url: str) -> Iterator[dict[str, Any]]`**. The records in an object of an S3 bucket, read as a file of its extension is.
 
 ## `wintergrab.dashboard`: The dashboard
 

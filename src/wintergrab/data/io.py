@@ -24,6 +24,9 @@ READERS: dict[str, Reader | str] = {
     ".parquet": "wintergrab.storage.parquet:read_parquet",
     ".pq": "wintergrab.storage.parquet:read_parquet",
     ".xlsx": "wintergrab.storage.xlsx:read_xlsx",
+    ".sqlite": "wintergrab.spider.exporters:read_sqlite",
+    ".sqlite3": "wintergrab.spider.exporters:read_sqlite",
+    ".db": "wintergrab.spider.exporters:read_sqlite",
 }
 #: Readers by URL scheme (``postgresql://...``).
 URL_READERS: dict[str, Reader | str] = {
@@ -33,6 +36,7 @@ URL_READERS: dict[str, Reader | str] = {
     "mongodb+srv": "wintergrab.storage.mongodb:read_mongodb",
     "mysql": "wintergrab.storage.mysql:read_mysql",
     "mariadb": "wintergrab.storage.mysql:read_mysql",
+    "s3": "wintergrab.storage.objects:read_object",
 }
 RECORD_SUFFIXES = (".jsonl", ".ndjson", ".json", ".csv", *READERS)
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
@@ -80,7 +84,7 @@ def read_records(path: str | Path, *, limit: int | None = None) -> Iterator[dict
     objects (or an object holding one under ``items``, ``records``, ``data``...).
     ``.csv``: one record per row, values as strings. ``.parquet``, ``.xlsx``,
     ``postgresql://.../db?table=NAME``, ``mysql://.../db?table=NAME`` and
-    ``mongodb://.../db?collection=NAME``: see :mod:`wintergrab.storage`.
+    ``mongodb://.../db?collection=NAME``, ``s3://bucket/items.jsonl``: see :mod:`wintergrab.storage`.
     ``"-"``: JSON Lines on standard input.
     """
     records = _read(str(path))

@@ -869,12 +869,21 @@ an error that says so, not a setting silently ignored
     has them, upserts replacing the document with the same key (a unique
     index keeps it so). Only collections it created are written to; the
     password can come from `WINTERGRAB_MONGODB_PASSWORD`, and pymongo checks
-    the URL's options.
+    the URL's options;
+  - `s3://bucket/path/items.jsonl` (`wintergrab[s3]`, s3fs): any file output
+    as an object of an S3 bucket (or of MinIO, R2... with `?endpoint_url=`),
+    the format by its extension. Items wait in a local file and are uploaded
+    when the crawl ends; a stopped crawl keeps them for the resumed one.
+    Credentials come from the AWS chain only (a URL holding some is
+    refused), and a missing bucket or missing credentials are said at the
+    start.
 - Parquet and Excel files are written when the crawl ends. Until then the
   items are spooled beside them, so a stopped crawl loses nothing and a
   resumed one continues.
 - `read_records` (and every `wintergrab data` command) reads Parquet, Excel,
-  PostgreSQL and MySQL tables and MongoDB collections too.
+  SQLite, PostgreSQL and MySQL tables, MongoDB collections and S3 objects
+  too. A SQLite output keeps the kinds of value each column has held, so
+  lists, objects and booleans read back as they were.
 - `register_exporter(".ext" | "scheme", ...)` and `register_reader(...)` add
   formats. A class or `"module:Class"` works: optional libraries are
   imported only when used.
@@ -904,6 +913,9 @@ an error that says so, not a setting silently ignored
   package. Each is tested offline, and live before releases.
 
 ### Fixes
+
+- The SQLite output stopped with an `OverflowError` on an integer beyond 64
+  bits; such integers are now text, as in the other outputs.
 
 - A site survey (`inspect`, `plan_goal`) read robots.txt and the sitemaps
   (sitemap indexes included) outside the network policy, proxies and cache

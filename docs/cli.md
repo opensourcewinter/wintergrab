@@ -104,7 +104,7 @@ wintergrab crawl URL [options]                     # a quick crawl without code
 
 Items are streamed as JSON Lines to stdout unless you pass `-o FILE`
 (`.jsonl`, `.json`, `.csv`, `.sqlite`, `.parquet`, `.xlsx`, or a
-`postgresql://`, `mysql://` or `mongodb://` URL: see [storage.md](storage.md)). A summary goes to stderr at the end, with a
+`postgresql://`, `mysql://`, `mongodb://` or `s3://` URL: see [storage.md](storage.md)). A summary goes to stderr at the end, with a
 short diagnosis of the most common failures (the full
 [failure report](observability.md#failure-reports) with `-v`).
 

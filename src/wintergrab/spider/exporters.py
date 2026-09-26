@@ -1,5 +1,5 @@
 """Write scraped items as they arrive: JSON Lines, JSON, CSV, SQLite, and through
-:mod:`wintergrab.storage` Parquet, Excel, PostgreSQL, MySQL and MongoDB (or any format registered with
+:mod:`wintergrab.storage` Parquet, Excel, PostgreSQL, MySQL, MongoDB and S3 (or any format registered with
 :func:`register_exporter`)."""
 
 from __future__ import annotations
@@ -254,10 +254,12 @@ class SqliteExporter(Exporter):
     With ``unique_key`` the table gets a unique index on that column and
     items are *upserted*: re-running a crawl updates existing rows instead of
     duplicating them - handy for keeping a product catalogue current.
-    Nested values are stored as JSON text. Item keys are mapped to safe,
-    case-insensitively unique column names; the mapping is kept in the
-    database (``_wintergrab_columns``) so later runs reuse it. The exporter
-    only ever touches an ``items`` table it created itself.
+    Nested values are stored as JSON text, and true and false as 1 and 0. Item
+    keys are mapped to safe, case-insensitively unique column names; the
+    mapping is kept in the database (``_wintergrab_columns``) so later runs
+    reuse it, with the kinds of value each column has held, so that
+    :func:`read_sqlite` gives lists, objects and booleans back as they were.
+    The exporter only ever touches an ``items`` table it created itself.
     """
 
     table = "items"
@@ -281,11 +283,20 @@ class SqliteExporter(Exporter):
         if self.table in tables and not append and not unique_key:
             self._conn.execute(f"DROP TABLE {self.table}")  # a fresh crawl replaces its own previous output
             self._conn.execute(f"DELETE FROM {self.meta_table}")
-        self._conn.execute(f"CREATE TABLE IF NOT EXISTS {self.meta_table} (key TEXT PRIMARY KEY, col TEXT NOT NULL)")
+        self._conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {self.meta_table} (key TEXT PRIMARY KEY, col TEXT NOT NULL, kinds TEXT)"
+        )
+        if "kinds" not in {row[1] for row in self._conn.execute(f"PRAGMA table_info({self.meta_table})")}:
+            self._conn.execute(f"ALTER TABLE {self.meta_table} ADD COLUMN kinds TEXT")  # (a file from before them)
         self._conn.execute(
             f"CREATE TABLE IF NOT EXISTS {self.table} ({_q(self.rowid)} INTEGER PRIMARY KEY AUTOINCREMENT)"
         )
-        self._columns: dict[str, str] = dict(self._conn.execute(f"SELECT key, col FROM {self.meta_table}").fetchall())
+        meta = self._conn.execute(f"SELECT key, col, kinds FROM {self.meta_table}").fetchall()
+        self._columns: dict[str, str] = {key: col for key, col, _ in meta}
+        #: The kinds of value each key's column has held ("unknown": it was written before they were kept).
+        self._kinds: dict[str, set[str]] = {
+            key: set(kinds.split(",")) - {""} if kinds is not None else {"unknown"} for key, _, kinds in meta
+        }
         self._used = {c.lower() for c in self._columns.values()} | {self.rowid.lower()}
         self._used |= {row[1].lower() for row in self._conn.execute(f"PRAGMA table_info({self.table})")}
         if unique_key:
@@ -317,15 +328,25 @@ class SqliteExporter(Exporter):
         while column.lower() in self._used:
             column, n = f"{base}_{n}", n + 1
         self._conn.execute(f"ALTER TABLE {self.table} ADD COLUMN {_q(column)}")
-        self._conn.execute(f"INSERT INTO {self.meta_table} (key, col) VALUES (?, ?)", (key, column))
+        self._conn.execute(f"INSERT INTO {self.meta_table} (key, col, kinds) VALUES (?, ?, '')", (key, column))
         self._columns[key] = column
+        self._kinds[key] = set()
         self._used.add(column.lower())
         return column
+
+    def _saw(self, key: str, value: Any) -> None:
+        kind = _sqlite_kind(value)
+        kinds = self._kinds.setdefault(key, set())
+        if kind not in kinds:
+            kinds.add(kind)
+            self._conn.execute(f"UPDATE {self.meta_table} SET kinds = ? WHERE key = ?", (",".join(sorted(kinds)), key))
 
     @staticmethod
     def _value(v: Any) -> Any:
         if isinstance(v, bool):
             return int(v)
+        if isinstance(v, int) and not -(2**63) <= v < 2**63:
+            return str(v)  # SQLite's integers are 64-bit: beyond, as text (as every output has them)
         if isinstance(v, (str, int, float, bytes)) or v is None:
             return v
         return json.dumps(v, default=_json_default, ensure_ascii=False)
@@ -335,6 +356,8 @@ class SqliteExporter(Exporter):
         if not isinstance(row, Mapping):
             row = {"value": row}
         values = {self._column_for(str(k)): self._value(v) for k, v in row.items()}
+        for k, v in row.items():
+            self._saw(str(k), v)
         columns = ", ".join(_q(c) for c in values)
         marks = ", ".join("?" for _ in values)
         sql = f"INSERT INTO {self.table} ({columns}) VALUES ({marks})"
@@ -352,6 +375,61 @@ class SqliteExporter(Exporter):
     def close(self) -> None:
         self._conn.commit()
         self._conn.close()
+
+
+def _sqlite_kind(value: Any) -> str:
+    """How a value is kept in a SQLite column: as it is, as 1 or 0, or as JSON text."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (str, int, float, bytes)):
+        return "plain"
+    return "json"
+
+
+def read_sqlite(path: str) -> Any:
+    """The items of a SQLite output (its ``items`` table), under their own names. A column that only ever held
+    lists and objects gives them back as they were, and one that only held true and false gives booleans; any
+    other gives its values as they are kept (JSON text, 1 and 0 among other values)."""
+    from ..errors import ConfigurationError
+
+    connection = sqlite3.connect(path)
+    try:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if SqliteExporter.table not in tables:
+            raise ConfigurationError(f"{path}: no {SqliteExporter.table!r} table (not a SQLite output of wintergrab)")
+        names: dict[str, str] = {}
+        kinds: dict[str, set[str] | None] = {}
+        meta = SqliteExporter.meta_table
+        if meta in tables:
+            has_kinds = "kinds" in {row[1] for row in connection.execute(f"PRAGMA table_info({meta})")}
+            for key, column, kept in connection.execute(
+                f"SELECT key, col, {'kinds' if has_kinds else 'NULL'} FROM {meta}"
+            ):
+                names[column] = key
+                kinds[column] = set(kept.split(",")) - {""} if kept is not None else None
+        rowid = SqliteExporter.rowid
+        columns_of_table = {row[1] for row in connection.execute(f"PRAGMA table_info({SqliteExporter.table})")}
+        order = f" ORDER BY {_q(rowid)}" if rowid in columns_of_table else ""
+        cursor = connection.execute(f"SELECT * FROM {SqliteExporter.table}{order}")
+        columns = [d[0] for d in cursor.description]
+        for row in cursor:
+            record: dict[str, Any] = {}
+            for column, value in zip(columns, row, strict=True):
+                if value is None or column == rowid:
+                    continue
+                held = kinds.get(column)
+                if held and held <= {"json", "null"} and isinstance(value, str):
+                    value = json.loads(value)
+                elif held and held <= {"bool", "null"}:
+                    value = bool(value)
+                record[names.get(column, column)] = value
+            yield record
+    except sqlite3.Error as exc:
+        raise ConfigurationError(f"cannot read {path}: {exc}") from None
+    finally:
+        connection.close()
 
 
 class StdoutExporter(Exporter):
@@ -397,6 +475,7 @@ URL_EXPORTERS: dict[str, type[Exporter] | str] = {
     "mongodb+srv": "wintergrab.storage.mongodb:MongoExporter",
     "mysql": "wintergrab.storage.mysql:MySQLExporter",
     "mariadb": "wintergrab.storage.mysql:MySQLExporter",
+    "s3": "wintergrab.storage.objects:ObjectExporter",
 }
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://")
 
@@ -430,7 +509,7 @@ def _resolve(entry: type[Exporter] | str) -> type[Exporter]:
 
 def open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_key: str | None = None) -> Exporter:
     """Pick an exporter by the output's extension (``.jsonl``, ``.json``, ``.csv``, ``.sqlite``/``.db``,
-    ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``).
+    ``.parquet``, ``.xlsx``) or URL scheme (``postgresql://``, ``mysql://``, ``mongodb://``, ``s3://``).
 
     ``"-"`` writes JSON Lines to standard output.
     """

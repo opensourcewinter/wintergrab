@@ -14,6 +14,7 @@ file extension or URL picks the format:
 | `postgresql://user@host/db?table=NAME` | Rows of a PostgreSQL table, upserted on `unique_key` | `pip install "wintergrab[postgres]"` |
 | `mysql://user@host/db?table=NAME` (`mariadb://`) | Rows of a MySQL or MariaDB table, upserted on `unique_key` | `pip install "wintergrab[mysql]"` |
 | `mongodb://user@host/db?collection=NAME` (`mongodb+srv://`) | Documents of a MongoDB collection, upserted on `unique_key` | `pip install "wintergrab[mongodb]"` |
+| `s3://bucket/path/items.jsonl` | Any file output (by its extension) as an object of an S3 bucket, or of an S3-compatible store | `pip install "wintergrab[s3]"` |
 | `-` | JSON Lines on standard output | |
 
 ```bash
@@ -33,7 +34,17 @@ starts.
 The same outputs are inputs. `wintergrab data validate book.schema.json
 books.parquet`, `data quality books.xlsx`, and
 `read_records("postgresql://.../shop?table=books")` read them back, nested
-values included (and `mysql://...`, `mongodb://...`).
+values included (and `mysql://...`, `mongodb://...`, `s3://...`).
+
+## SQLite
+
+Each field is a column of an `items` table, and nested values are JSON
+text. With `unique_key`, rows are upserted on it; without, a fresh crawl
+replaces the table. wintergrab keeps the kinds of value each column has
+held, so reading the file back gives lists, objects and true and false as
+they were, where a column only ever held them; a column that mixed them
+gives its values as kept (JSON text, 1 and 0). Integers beyond 64 bits,
+which SQLite cannot hold, are text.
 
 ## Parquet
 
@@ -169,6 +180,31 @@ Reading a collection gives its documents in the order they were first
 written, without MongoDB's `_id`. A collection wintergrab did not write is
 read too: dates become ISO text, and object ids text.
 
+## S3 and S3-compatible object storage
+
+```bash
+pip install "wintergrab[s3]"
+export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=...   # or AWS_PROFILE, ~/.aws/credentials, a machine's role
+wintergrab crawl https://shop.example/ --auto -o s3://my-bucket/crawls/products.parquet
+wintergrab crawl https://shop.example/ --auto -o "s3://crawls/products.jsonl?endpoint_url=https://minio.example:9000"
+```
+
+The object's extension picks the format, as a file's does: `.jsonl`,
+`.json`, `.csv`, `.parquet`, `.xlsx`, `.sqlite`. While the crawl runs, the
+items are written to a local file under `.wintergrab/uploads/`
+(`WINTERGRAB_UPLOADS` to put it elsewhere). The file is uploaded when the
+crawl ends, so the object appears whole. If the crawl stops, its items stay
+there, and the resumed crawl continues them and uploads them. A resumed
+crawl whose local file is gone continues the object itself.
+
+Credentials come from the environment, as the AWS tools read them, and never
+from the URL: a URL with a user or password is refused. S3-compatible
+stores (MinIO, Cloudflare R2, Backblaze B2...) take `?endpoint_url=...` (or
+`AWS_ENDPOINT_URL`); `?region=` and `?profile=` are read too, and any other
+parameter is an error. A missing bucket or missing credentials are said
+when the crawl starts, not when it ends. `read_records("s3://...")` reads an
+object back by its extension.
+
 ## Your own
 
 An output format is an `Exporter` registered by extension or URL scheme.
@@ -198,8 +234,10 @@ constructor then takes `unique_key` too. A URL exporter gets the URL.
 
 ## Limits
 
-- Object storage (S3 and the like) has no built-in adapter yet. Write a
-  file and copy it, or register your own.
+- Google Cloud Storage and Azure Blob Storage have no built-in adapter
+  yet (their S3-compatible endpoints aside). Write a file and copy it, or
+  register your own.
+- An object in S3 appears when the crawl ends, as a Parquet file does.
 - Parquet and Excel files appear when the crawl ends: follow a long crawl
   in its spool, or write JSON Lines and convert them afterwards.
 - PostgreSQL, MySQL and MariaDB widen columns with `ALTER TABLE`. On a big

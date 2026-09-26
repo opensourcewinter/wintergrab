@@ -11,6 +11,8 @@ Output                    What                                   Needs
                           upserted on ``unique_key``
 ``mongodb://.../db``      Documents of a MongoDB collection,      ``pip install "wintergrab[mongodb]"``
                           upserted on ``unique_key``
+``s3://bucket/items.csv`` A file output as an object of an S3     ``pip install "wintergrab[s3]"``
+                          bucket (by its extension)
 ========================  =====================================  ==============================
 
 A spider writes to them like to any output (``output = "items.parquet"``, ``crawl ... -o

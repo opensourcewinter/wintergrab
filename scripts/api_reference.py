@@ -52,6 +52,7 @@ MODULES = [
     ("wintergrab.storage.postgres", "PostgreSQL"),
     ("wintergrab.storage.mysql", "MySQL and MariaDB"),
     ("wintergrab.storage.mongodb", "MongoDB"),
+    ("wintergrab.storage.objects", "S3 and S3-compatible object storage"),
     ("wintergrab.dashboard", "The dashboard"),
     ("wintergrab.builder", "The visual builder"),
     ("wintergrab.redact", "Keeping credentials out"),
