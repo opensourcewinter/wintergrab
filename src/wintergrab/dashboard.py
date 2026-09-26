@@ -355,8 +355,10 @@ h1{font-size:15px;letter-spacing:.12em;margin:0 0 4px}h2{font-size:16px;margin:2
 .scroll{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-radius:8px}
 table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);
 vertical-align:top}th{font-size:12px;color:var(--muted);font-weight:600}tr:last-child td{border-bottom:0}
-td{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-.badge{display:inline-block;padding:0 8px;border-radius:10px;border:1px solid currentColor;font-size:12px}
+td{font-variant-numeric:tabular-nums;overflow-wrap:break-word}td a,td code{overflow-wrap:anywhere}
+td:first-child a{overflow-wrap:normal;white-space:nowrap}
+.badge{display:inline-block;padding:0 8px;border-radius:10px;border:1px solid currentColor;font-size:12px;
+white-space:nowrap}
 .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.live{color:var(--live)}
 nav.sections{display:flex;flex-wrap:wrap;gap:4px 14px}td.name{white-space:nowrap}
 details{margin-top:8px}summary{cursor:pointer;color:var(--muted)}code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;

@@ -859,6 +859,7 @@ def cmd_dashboard(args: argparse.Namespace) -> int:
     workspace = args.workspace or (str(project.workspace) if project is not None else DEFAULT_WORKSPACE)
     server = serve(workspace, project=project, host=args.host, port=args.port)
     print(f"wintergrab dashboard: {server.url}  ({workspace}; Ctrl+C to stop)", file=sys.stderr)
+    _print_other_devices(server)
     if args.open:
         webbrowser.open(server.url)
     try:
@@ -895,6 +896,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     print(f"wintergrab build: {server.url}  ({page.url} -> {args.output}; Ctrl+C to stop)", file=sys.stderr)
+    _print_other_devices(server)
     if args.open:
         webbrowser.open(server.url)
     try:
@@ -1447,6 +1449,29 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # data
 # --------------------------------------------------------------------------- #
+def other_devices_url(host: str, port: int) -> str | None:
+    """Where other devices (a phone on this network) reach a server listening on every address
+    (``0.0.0.0``): this machine's address on its network; ``None`` for other hosts, or with no network."""
+    import socket
+
+    if host not in ("0.0.0.0", "::", ""):
+        return None
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))  # a documentation address: nothing is sent, the route picks the interface
+            address = str(probe.getsockname()[0])
+    except OSError:
+        return None
+    return None if address.startswith("127.") or address == "0.0.0.0" else f"http://{address}:{port}/"
+
+
+def _print_other_devices(server: Any) -> None:
+    host, port = server.server_address[:2]
+    url = other_devices_url(host.decode() if isinstance(host, bytes) else str(host), port)
+    if url:
+        print(f"  from other devices on this network (a phone): {url}", file=sys.stderr)
+
+
 def _write_records(records: Iterable[Any], output: str | None) -> int:
     from .spider.exporters import open_exporter
 

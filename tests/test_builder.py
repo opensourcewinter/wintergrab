@@ -235,6 +235,46 @@ def test_the_builder_in_a_browser(builder) -> None:
     assert schema["title"].selectors == ["h3 a::attr(title)"] and schema["price"].type == "money"
 
 
+def test_the_builder_on_a_phone(builder) -> None:
+    sync_api = pytest.importorskip("playwright.sync_api")
+    from wintergrab.fetchers.browser import _discover_chromium
+
+    with sync_api.sync_playwright() as playwright:
+        browser = None
+        for path in [None, *_discover_chromium()]:
+            try:
+                browser = playwright.chromium.launch(**({"executable_path": path} if path else {}))
+                break
+            except Exception:
+                continue
+        if browser is None:
+            pytest.skip("no Chromium to run")
+        context = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        page = context.new_page()
+        expect = sync_api.expect
+        page.goto(builder.url)
+        shown = page.frame_locator("#page")
+        page.locator('input[name="mode"][value="card"]').tap()
+        shown.locator("article.product_pod p.price_color").first.tap()
+        expect(page.locator("#container")).to_have_value("article.product_pod")
+        shown.locator("article.product_pod h3 a").nth(1).tap()
+        expect(page.locator("#proposal")).to_be_visible()
+        view, proposal = page.locator(".view").bounding_box(), page.locator("#proposal").bounding_box()
+        assert view is not None and proposal is not None
+        assert view["width"] == 390 and 250 < view["height"] < 500  # the page across the screen, on top
+        assert proposal["y"] >= view["y"] + view["height"]  # what was tapped is proposed beneath it, in sight
+        assert page.evaluate("document.documentElement.scrollWidth") == 390  # nothing wider than the screen
+        browser.close()
+
+
+def test_the_address_for_other_devices() -> None:
+    from wintergrab.cli import other_devices_url
+
+    assert other_devices_url("127.0.0.1", 8711) is None  # this machine only: nothing to open elsewhere
+    url = other_devices_url("0.0.0.0", 8711)  # this machine's address on its network, when it has one
+    assert url is None or re.fullmatch(r"http://(?!127\.)\d+\.\d+\.\d+\.\d+:8711/", url)
+
+
 def test_the_build_command(site, tmp_path, monkeypatch, capsys) -> None:
     from wintergrab import builder
 

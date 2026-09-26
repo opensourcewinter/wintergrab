@@ -49,3 +49,13 @@ table.fields td:last-child { width: 1%; }
 #records td { font-size: 12px; max-width: 220px; overflow-wrap: anywhere; }
 #records td.missing { color: var(--muted); }
 #suggested button { margin: 2px 4px 2px 0; font-size: 12px; }
+/* Phones and narrow windows: the page on top, where it stays while the panel scrolls beneath it. */
+@media (max-width: 760px) {
+  main { flex-direction: column; height: auto; min-height: 100vh; }
+  .view { position: sticky; top: 0; z-index: 1; flex: none; height: 45vh; height: 45svh;
+    border-right: 0; border-bottom: 2px solid var(--line); }
+  .panel { flex: none; max-width: none; min-width: 0; overflow: visible; padding: 12px 14px 40px; }
+  #proposal, #message { scroll-margin-top: calc(45svh + 12px); }
+  fieldset.modes label { padding: 4px 0; }
+  .scroll { max-height: none; }
+}

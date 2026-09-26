@@ -12,7 +12,9 @@ wintergrab crawl https://books.toscrape.com/ --extract books.schema.json -o book
 
 It prints the address to open (`http://127.0.0.1:8711/`), or opens it with
 `--open`. The page is on the left, without its scripts; the specification
-is on the right.
+is on the right. On a phone or in a narrow window, the page is on top, where
+it stays while the specification scrolls beneath it, and a tap picks as a
+click does.
 
 ## Picking
 
@@ -78,7 +80,7 @@ extraction hints for listing pages, as `selectors` are for fields.
 | `--name NAME` | `record` | What the records are (a new schema's name). |
 | `--browser` | | Fetch the page in a browser, for pages built by JavaScript. |
 | `--timeout SEC` | 30 | To fetch the page. |
-| `--host`, `--port` | 127.0.0.1, 8711 | Where the builder listens. |
+| `--host`, `--port` | 127.0.0.1, 8711 | Where the builder listens (`0.0.0.0`: also for other devices; see below). |
 | `--open` | | Open it in a browser. |
 
 ## Safety
@@ -94,6 +96,12 @@ Its images, styles and fonts load as they would in a browser, from its site
 or wherever it takes them, but without a referrer. The builder listens on this machine only and answers only to its
 own address. Every change needs a token that only its page holds, sent as
 JSON from that page.
+
+To build from another device, such as a phone on the same network, start it
+with `--host 0.0.0.0`: it prints the address to open there
+(`http://192.168.1.20:8711/`). Anyone who can reach that address can then
+read the page and save the schema (it says so when it starts), so do this
+only on a network you trust.
 
 ## In code
 

@@ -88,9 +88,11 @@ The dashboard is for the machine it runs on:
 - Credentials are left out of what it shows: see
   [runs](runs.md#what-a-run-keeps).
 
-`--host 0.0.0.0` makes it reachable from other machines. It then shows what
-your crawls collected to anyone who can reach it, with no password, and it
-says so when it starts.
+`--host 0.0.0.0` makes it reachable from other machines, a phone on your
+network too: it prints the address to open there. It then shows what your
+crawls collected to anyone who can reach it, with no password, and it says
+so when it starts. On a phone, its tiles fit two to a row and wide tables
+scroll sideways.
 
 ## In code
 
