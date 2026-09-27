@@ -271,7 +271,7 @@ checks that it is up to date.
   - `search(self, query: str, *, provider: str = 'brave', pages: int = 1, **options: Any) -> SearchAnswer`: A search API's results for ``query`` (:func:`~wintergrab.intel.serp.search`: Brave's, Google's or your SearXNG, with your key from the environment), asked under this WinterGrab's network policy.
   - `sources(self, page: str | Response) -> DataSources`: Where a page's data is (:func:`~wintergrab.intel.sources.data_sources`): its HTML records, JSON-LD, embedded JSON and, in a browser, the API calls it makes.
 - **`WintergrabError`** (exception). Base class for every error raised by wintergrab.
-- **`__version__`** = `'0.2.0'`
+- **`__version__`** = `'0.3.0'`
 - **`aget(url: str, **kwargs: Any) -> Response`**. Async :func:`get`.
 - **`apost(url: str, **kwargs: Any) -> Response`**. Async :func:`post`.
 - **`arender(url: str, **kwargs: Any) -> Response`**. Async :func:`render`.

@@ -23,6 +23,16 @@ change, and what wintergrab now writes on its own. The
 - **A template name is a schema.** `--extract product` and
   `Extractor("product")` use the product template when no file of that name
   exists. Before, they failed.
+- **A self-healing extractor asks by default.** `--heal DIR` without
+  `--review` keeps its questions in `DIR/review.jsonl` (before, they were
+  not asked); `--review FILE` still puts them elsewhere. `--review` without
+  `--heal` is an error, not an option ignored.
+- **A crawl's output is closed before its state is saved**, so what the
+  output did not take (`export_errors`, `items_not_written`) is in the
+  counts a paused crawl resumes with, and in `summary.json`.
+- **An output that fails no longer stops the crawl.** A write, a flush or a
+  close that fails is logged and counted, and `wintergrab crawl` and `goal`
+  exit with status 1 saying how many items were not written.
 
 ## Features that are gone
 
@@ -57,6 +67,12 @@ error that says so, not a setting silently ignored:
   event also gets the new ones (`site_changed`, `record_updated`,
   `job_finished`...).
 - `HTTPError` is an alias of `HTTPStatusError`.
+- `structured_data()` (and `Response.structured_data()`) has an `rdfa`
+  key beside `json_ld`, `microdata`, `opengraph`, `twitter` and `meta`.
+  Code that compares the whole dict, or lists its keys, sees one more.
+- `Deduplicator(near=...)` and the `dedupe` stage take `"minhash"` or
+  `"simhash"` as well as `True`; `to_prometheus()` takes `labels=`;
+  `CrawlMetrics.sample()` records CPU time too. All additive.
 
 ## What wintergrab now writes
 
