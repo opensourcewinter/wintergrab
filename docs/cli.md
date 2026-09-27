@@ -249,7 +249,9 @@ wintergrab inspect URL [--pages N] [--browser] [--no-robots] [--no-sitemaps] [-o
 ```
 
 Reads the site's robots.txt and sitemaps, visits `--pages` pages (30): the
-start page and a sample spread across the sitemaps, obeying robots.txt. It
+start page, a sample spread across the sitemaps, and the pages their links
+lead to, a few of each URL pattern before more of any one, obeying
+robots.txt. It
 prints the site's technologies, languages, page types, templates, structured
 data, links, API endpoints, sitemaps and crawlability, then its sections as
 a tree (`--depth` levels, 2), its navigation, feeds, paginated listings,

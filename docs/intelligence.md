@@ -198,8 +198,9 @@ crawlability: robots.txt allows crawling, crawl-delay 1; 8 page(s) with a canoni
 ```
 
 (The profile of eleven generated pages of a WordPress shop, with a
-robots.txt and sitemaps. On a live site, `inspect` visits the start page and
-a sample spread across the sitemaps, so that more templates show up.)
+robots.txt and sitemaps. On a live site, `inspect` visits the start page, a
+sample spread across the sitemaps, and the pages their links lead to, a few
+of each URL pattern before more of any one, so that more templates show up.)
 
 | Part | From |
 |---|---|
