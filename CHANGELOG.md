@@ -1178,6 +1178,9 @@ an error that says so, not a setting silently ignored
   state and summary are saved, so a close that fails is in their counts too
   (before, a paused crawl resumed without it).
 
+- `mypy` passes on Windows and macOS too: the two uses of the Unix-only
+  `resource` module are behind a platform check the type checker
+  understands, and CI checks all three platforms' stubs.
 - PostgreSQL connections (outputs, and the shared frontier) give up after 10
   seconds unless the URL says `connect_timeout` or `PGCONNECT_TIMEOUT` is
   set. libpq's own default waited more than a minute for a host that had

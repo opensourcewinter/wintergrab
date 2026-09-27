@@ -71,9 +71,11 @@ def _windows_rss() -> int | None:  # pragma: no cover - Windows only
 
 def peak_rss() -> int | None:
     """Peak resident memory in bytes (``None`` on platforms without ``resource``)."""
+    if sys.platform == "win32":  # pragma: no cover - (no resource module; the type checker knows it too)
+        return None
     try:
         import resource
-    except ImportError:  # pragma: no cover - Windows
+    except ImportError:  # pragma: no cover - a platform without it
         return None
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(peak if sys.platform == "darwin" else peak * 1024)
