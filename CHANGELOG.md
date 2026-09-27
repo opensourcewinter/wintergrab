@@ -1178,6 +1178,13 @@ an error that says so, not a setting silently ignored
   state and summary are saved, so a close that fails is in their counts too
   (before, a paused crawl resumed without it).
 
+- **A page's menus are not among its data sources.** `data_sources()`
+  (`wg.sources()`, `wintergrab get --sources`) listed every repeated group
+  `detect_records()` found as HTML records, and ranked them by records times
+  fields: a sidebar of twelve category links outranked four product cards as
+  the richest source. It lists the groups `auto_extract()` would trust now
+  (`RecordGroup.convincing`); menus, breadcrumbs and pagers score far below
+  that.
 - `mypy` passes on Windows and macOS too: the two uses of the Unix-only
   `resource` module are behind a platform check the type checker
   understands, and CI checks all three platforms' stubs.

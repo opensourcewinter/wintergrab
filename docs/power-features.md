@@ -72,7 +72,9 @@ page.auto_extract()
 wintergrab finds the page's main repeating structure (a product grid, search
 results, table rows) and ignores menus, footers and tag clouds. It then names
 the fields it finds. `page.detect_records()` returns the candidate groups
-with their generated CSS selectors if you want to take it from there.
+with their generated CSS selectors if you want to take it from there; a
+group's `convincing` says whether `auto_extract` would trust it (a menu or a
+breadcrumb trail is a candidate too, scored low).
 
 ### Learning by example
 

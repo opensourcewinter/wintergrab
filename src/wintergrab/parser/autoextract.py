@@ -1008,6 +1008,12 @@ class RecordGroup:
         """The group as a reusable :class:`LearnedSchema` (to extract other pages of the site)."""
         return LearnedSchema(self.container_selector, dict(self.fields))
 
+    @property
+    def convincing(self) -> bool:
+        """Whether the group looks like records rather than a menu, a breadcrumb trail, a pager or a footer: its
+        score reaches the one :func:`auto_extract` trusts."""
+        return self.score >= _MIN_AUTO_SCORE
+
     def __repr__(self) -> str:
         return (
             f"RecordGroup({self.container_selector!r}, {len(self.elements)} records, "
@@ -1062,7 +1068,7 @@ def auto_extract(root: Any, base_url: str | None = None, *, min_records: int = 3
     """
     doc, url = _resolve(root)
     groups = detect_records(doc, min_records=min_records, max_groups=1)
-    if not groups or groups[0].score < _MIN_AUTO_SCORE or not groups[0].fields:
+    if not groups or not groups[0].convincing or not groups[0].fields:
         return []
     return groups[0].extract(base_url or url)
 

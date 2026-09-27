@@ -675,7 +675,8 @@ class DataSources:
 
     Attributes:
         url: The page.
-        html: Its repeated records in the HTML, the most convincing first.
+        html: Its repeated records in the HTML (the groups :func:`~wintergrab.auto_extract` would trust: not
+            its menus, breadcrumbs or pagers), the most convincing first.
         tables: Its ``<table>`` elements: rows and column names.
         json_ld: JSON-LD objects by ``@type``, and how many.
         microdata: Microdata items by type, and how many.
@@ -869,9 +870,11 @@ def data_sources(response: Any, *, recorded: bool | None = None) -> DataSources:
     meta = [f"og:{k}" for k in structured.get("opengraph") or {}]
     meta += [f"twitter:{k}" for k in structured.get("twitter") or {}]
     meta += [str(k) for k in structured.get("meta") or {}]
-    html = []
-    for group in response.detect_records()[:3]:
-        html.append(HtmlRecords(group.container_selector, len(group.elements), list(group.fields)))
+    html = [  # the groups that look like records: a page's menus, breadcrumbs and pagers repeat elements too
+        HtmlRecords(group.container_selector, len(group.elements), list(group.fields))
+        for group in response.detect_records()
+        if group.convincing
+    ][:3]
     tables = [
         {"rows": len(table.get("rows") or []), "columns": [str(c) for c in table.get("headers") or []]}
         for table in response.tables()
