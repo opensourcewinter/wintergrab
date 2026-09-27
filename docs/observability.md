@@ -78,7 +78,8 @@ give the spider [`webhooks`](projects.md#webhooks).
   "domains": [
     {"domain": "shop.example", "mode": "backing off", "active": 1, "concurrency": 1, "max_concurrency": 4,
      "delay": 8.0, "target_delay": 0.05, "avg_latency": 0.2, "allowed_rate": 0.125, "current_rate": 0.12,
-     "paused_for": 0.0, "backoffs": 3, "requests": 402},
+     "paused_for": 0.0, "backoffs": 3, "requests": 402, "error_rate": 0.05,
+     "rate_limit": {"remaining": 40, "reset": 12.0, "pauses": 1}},
     ...
   ],
   "budget": {"max_requests": {"used": 1251, "limit": 5000, "fraction": 0.25}},
@@ -91,7 +92,9 @@ seconds), `recovering` (still slower than its target after a push-back) or
 `paused` (honouring a `Retry-After`). `delay` is the current spacing between
 requests and `target_delay` where healthy responses pull it
 (`latency / target concurrency`); `allowed_rate` is the request rate the
-current settings allow and `current_rate` the measured one.
+current settings allow and `current_rate` the measured one. `error_rate` is
+the share of the domain's last 20 responses that failed, and `rate_limit`
+what its last `RateLimit` headers said, with how often they paused it.
 
 Rates are measured over the last 30 seconds; latency percentiles over the
 last 2,048 responses (cache hits excluded). `coverage` is the share of the

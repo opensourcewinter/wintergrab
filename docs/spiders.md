@@ -214,8 +214,25 @@ between requests. AutoThrottle adjusts both from what the site tells it:
 - **Push-back** (429, 503, a detected block page): concurrency halves and the
   delay doubles (at least 1 s). A `Retry-After` header pauses the domain for
   that long.
-- **Timeouts and connection errors**: the delay grows by 50%.
+- **`RateLimit` headers** (the IETF `RateLimit: limit=, remaining=, reset=`
+  and `RateLimit-*` fields, or `X-RateLimit-*`) are the site's own limit: a
+  used-up window pauses the domain until it resets
+  (`stats["rate_limited"]`, a `throttle_backoff` event), and a low remainder
+  spaces requests so that the window lasts. Honoured with `autothrottle =
+  False` too, like `Retry-After`.
+- **Timeouts and connection errors**: the delay grows by 50%; when at least
+  half of a domain's last responses failed (ten or more seen), its
+  concurrency halves too (`AutoThrottle(error_rate_backoff=0.5)`).
 - A robots.txt `Crawl-delay` becomes a floor for the delay.
+
+Three more settings hold new requests, for the whole crawl, while others
+are in flight (those will free what is short; a crawl with nothing in
+flight always starts one): `max_bytes_per_second` when the download rate
+over the last three seconds is above it, `hold_at_memory` (bytes) while the
+process's resident memory is at least that, `hold_at_cpu` (a share of one
+core, e.g. `0.9`) while the process used at least that over the last three
+seconds. `stats["held/bandwidth"]`, `held/memory` and `held/cpu` count the
+holds. For stopping outright, see [budgets](#budgets).
 
 ```python
 class Gentle(Spider):
@@ -557,6 +574,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `max_pages` / `max_items` / `max_depth` | `None` | Stop after this many pages / items; don't follow deeper than this. With `max_pages`, retries of pages already started still finish. |
 | `max_requests`, `max_bytes`, `max_runtime`, `max_browser_pages`, `max_errors`, `max_error_rate`, `max_memory`, `max_cpu_seconds`, `max_output_bytes` | `None` | [Budgets](#budgets). |
 | `budget_soft_limit` / `budget_soft_priority` | `None` / `1` | Past this fraction of a budget, only start requests with at least this priority. |
+| `max_bytes_per_second`, `hold_at_memory`, `hold_at_cpu` | `None` | Hold new requests while the download rate, the resident memory or the CPU share is above this ([speed control](#speed-control-autothrottle)). |
 | `crawl_order` | `"bfs"` | `"bfs"` or `"dfs"` among equal priorities. |
 | `priority_fn` | `None` | `request -> int` priority for every queued request. |
 | `run_registry` / `record` | `None` / `False` | Keep a record of each run in a workspace (`True`: `.wintergrab`), and with `record` its pages and items too, to [replay](runs.md) it without the network. `result.run_id` names it. |

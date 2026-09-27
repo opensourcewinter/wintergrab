@@ -27,13 +27,15 @@ checks that it is up to date.
   - `post(self, url: str, **kwargs: Any) -> Response`
   - `put(self, url: str, **kwargs: Any) -> Response`
   - `request(self, method: str, url: str, *, params: Mapping[str, Any] | None = None, headers: Mapping[str, str] | None = None, cookies: Mapping[str, str] | None = None, data: Any = None, json: Any = None, proxy: str | None = None, timeout: float | None = None, retries: int | None = None, allow_redirects: bool | None = None, request: Request | None = None, **extra: Any) -> Response`: Async version of :meth:`Fetcher.request`.
-- **`AutoThrottle(*, enabled: bool = True, base_delay: float = 0.0, max_delay: float = 60.0, max_concurrency: int = 4, target_concurrency: float | None = None, backoff_factor: float = 2.0, min_backoff_delay: float = 1.0, recovery: float = 0.85, increase_every: int = 10, randomize: bool = True)`** (class). Adaptive, per-domain request pacing (AIMD - like TCP congestion control).
+- **`AutoThrottle(*, enabled: bool = True, base_delay: float = 0.0, max_delay: float = 60.0, max_concurrency: int = 4, target_concurrency: float | None = None, backoff_factor: float = 2.0, min_backoff_delay: float = 1.0, recovery: float = 0.85, increase_every: int = 10, randomize: bool = True, error_rate_backoff: float = 0.5)`** (class). Adaptive, per-domain request pacing (AIMD - like TCP congestion control).
   - `can_start(self, slot: DomainSlot, now: float) -> bool`
   - `describe(self, domain: str) -> str`: One line for reports, e.g.
+  - `error_rate(slot: DomainSlot) -> float | None`: The share of the last responses (at most 20) that failed; ``None`` before any.
   - `mode(self, slot: DomainSlot, now: float | None = None) -> str`: ``"paused"`` (honouring Retry-After), ``"backing off"`` (push-back in the last 30 s), ``"recovering"`` (slower than the target after a push-back) or ``"normal"``.
-  - `on_error(self, domain: str)`: A timeout or connection error: back off gently.
+  - `on_error(self, domain: str)`: A timeout or connection error: back off gently; errors that keep coming halve concurrency too.
   - `on_finish(self, slot: DomainSlot)`
   - `on_pushback(self, domain: str, retry_after: float | None = None)`: The site said "slow down" (429/503/block page).
+  - `on_rate_limit(self, domain: str, remaining: int | None, reset: float | None) -> bool`: The site's ``RateLimit`` headers: ``remaining`` requests in the window that ends in ``reset`` seconds.
   - `on_start(self, slot: DomainSlot, now: float)`
   - `on_success(self, domain: str, latency: float)`
   - `restore(self, data: dict[str, dict[str, Any]])`

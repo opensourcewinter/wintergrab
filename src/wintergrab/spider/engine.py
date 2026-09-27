@@ -40,7 +40,15 @@ from ..redact import redact_url
 from ..request import Request
 from ..runs import RunRecorder, RunRegistry
 from ..urls import URLNormalizer, URLRules
-from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
+from ..utils import (
+    configure_logging,
+    domain_matches,
+    ensure_scheme,
+    host_of,
+    maybe_await,
+    parse_rate_limit,
+    parse_retry_after,
+)
 from ..webhooks import Webhook
 from .budget import BudgetMonitor, BudgetStatus
 from .checkpoint import Checkpoint
@@ -48,7 +56,7 @@ from .deadletters import DeadLetterQueue
 from .exporters import Exporter, open_exporter, to_dict
 from .failures import FailureTracker
 from .frontier import DiskScheduler
-from .metrics import CrawlMetrics
+from .metrics import CrawlMetrics, current_rss
 from .middleware import DropItem, IgnoreRequest
 from .optimizer import CrawlOptimizer
 from .progress import ProgressDisplay
@@ -404,10 +412,33 @@ class Engine:
                     timer.cancel()
             self._wakeup.clear()
 
+    def _pressure(self) -> str | None:
+        """What holds new requests for the moment: ``"bandwidth"``, ``"memory"`` or ``"cpu"`` over the spider's
+        limit, else ``None``. Only while requests are in flight, which will free what is held."""
+        spider = self.spider
+        if not self._inflight:
+            return None
+        if spider.hold_at_memory is not None:
+            rss = current_rss()
+            if rss is not None and rss >= spider.hold_at_memory:
+                return "memory"
+        if spider.max_bytes_per_second is not None or spider.hold_at_cpu is not None:
+            recent = self.metrics.recent()
+            rate, cpu = recent["bytes_per_second"], recent["cpu_fraction"]
+            if spider.max_bytes_per_second is not None and rate is not None and rate > spider.max_bytes_per_second:
+                return "bandwidth"
+            if spider.hold_at_cpu is not None and cpu is not None and cpu >= spider.hold_at_cpu:
+                return "cpu"
+        return None
+
     def _dispatch(self) -> float | None:
         spider = self.spider
         now = time.monotonic()
         wait: float | None = None
+        held = self._pressure()
+        if held is not None:
+            self.stats.inc(f"held/{held}")
+            return 0.25
         while len(self._inflight) < spider.concurrency:
             if self.budget.active and self._counter_budget_hit():
                 break
@@ -1221,6 +1252,14 @@ class Engine:
             if (blocked or response.status in spider.retry_statuses) and response.cache_status is not None:
                 self._uncache(fetcher, request)  # never replay a block page or an error from the cache
             retry_after = parse_retry_after(response.headers.get("retry-after"), cap=600)
+            _limit, remaining, reset = parse_rate_limit(response.headers, cap=600)
+            if (remaining is not None or reset is not None) and self.throttle.on_rate_limit(domain, remaining, reset):
+                self.stats.inc("rate_limited")
+                log.info("%s: its rate limit is used up (RateLimit headers); waiting %.0fs", domain, reset or 0)
+                self.events.emit(
+                    "throttle_backoff", domain=domain, delay=round(slot.delay, 3), concurrency=slot.concurrency,
+                    retry_after=reset,
+                )  # fmt: skip
             if blocked or response.status in PUSHBACK_STATUSES:
                 self.throttle.on_pushback(domain, retry_after)
                 self.stats.inc("backoffs")

@@ -205,6 +205,12 @@ class Spider:
     #: start requests with a priority of at least ``budget_soft_priority``.
     budget_soft_limit: float | None = None
     budget_soft_priority: int = 1
+    #: Pressure that holds new requests while others are in flight (``stats["held/bandwidth"]``,
+    #: ``held/memory``, ``held/cpu``): bytes downloaded per second over the last three seconds, the process's
+    #: resident memory (bytes), and the share of one core it used over the last three seconds.
+    max_bytes_per_second: float | None = None
+    hold_at_memory: int | None = None
+    hold_at_cpu: float | None = None
 
     # -- queue order -------------------------------------------------------- #
     #: ``"bfs"`` (breadth-first: oldest first among equal priorities) or ``"dfs"`` (depth-first).

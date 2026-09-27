@@ -92,7 +92,8 @@ class CrawlMetrics:
         self.latencies: deque[float] = deque(maxlen=latency_samples)
         #: The extraction confidence (``_confidence``) of the most recent records that had one.
         self.confidences: deque[float] = deque(maxlen=confidence_samples)
-        self._samples: deque[tuple[float, float, float, float, float]] = deque()  # t, pages, items, bytes, requests
+        # t, pages, items, bytes, requests, cpu seconds
+        self._samples: deque[tuple[float, float, float, float, float, float]] = deque()
         self._domains: dict[str, deque[tuple[float, int]]] = {}
 
     def observe_latency(self, seconds: float) -> None:
@@ -105,7 +106,13 @@ class CrawlMetrics:
         """The mean extraction confidence of the most recent records (``None`` before any record had one)."""
         return round(sum(self.confidences) / len(self.confidences), 4) if self.confidences else None
 
-    def sample(self, stats: Mapping[str, Any], throttle: AutoThrottle | None, now: float | None = None) -> None:
+    def sample(
+        self,
+        stats: Mapping[str, Any],
+        throttle: AutoThrottle | None,
+        now: float | None = None,
+        cpu: float | None = None,
+    ) -> None:
         """Record counters for rate computations (the engine calls this about once a second)."""
         now = time.monotonic() if now is None else now
         self._samples.append(
@@ -115,6 +122,7 @@ class CrawlMetrics:
                 float(stats.get("items", 0)),
                 float(stats.get("bytes", 0)),
                 float(stats.get("requests", 0)),
+                time.process_time() if cpu is None else cpu,
             )
         )
         while len(self._samples) > 2 and now - self._samples[0][0] > self.window:
@@ -144,6 +152,23 @@ class CrawlMetrics:
             "items_per_second": round((last[2] - first[2]) / span, 3),
             "bytes_per_second": round((last[3] - first[3]) / span, 1),
             "requests_per_second": round((last[4] - first[4]) / span, 3),
+        }
+
+    def recent(self, seconds: float = 3.0) -> dict[str, float | None]:
+        """Over the last ``seconds`` of samples: bytes downloaded per second, and the share of one core the
+        process used (``cpu_fraction``); ``None`` with fewer than two samples in that time."""
+        if len(self._samples) < 2:
+            return {"bytes_per_second": None, "cpu_fraction": None}
+        last = self._samples[-1]
+        first = next((s for s in self._samples if last[0] - s[0] <= seconds), None)
+        if first is None or first is last:
+            first = self._samples[-2]
+        span = last[0] - first[0]
+        if span <= 0:
+            return {"bytes_per_second": None, "cpu_fraction": None}
+        return {
+            "bytes_per_second": round((last[3] - first[3]) / span, 1),
+            "cpu_fraction": round((last[5] - first[5]) / span, 3),
         }
 
     def domain_rate(self, domain: str) -> float:

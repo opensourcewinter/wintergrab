@@ -203,6 +203,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/slow":
             time.sleep(float(q("delay", "0.5")))
             return self.send(200, layout("slow", "<p>finally</p>"))
+        if path == "/ratelimit":  # a page with the site's rate-limit headers (style: ietf, x or combined)
+            remaining, reset, style = q("remaining", "5"), q("reset", "10"), q("style", "ietf")
+            if style == "combined":
+                headers = {"RateLimit": f"limit=10, remaining={remaining}, reset={reset}"}
+            else:
+                prefix = "X-RateLimit-" if style == "x" else "RateLimit-"
+                headers = {prefix + "Limit": "10", prefix + "Remaining": remaining, prefix + "Reset": reset}
+            return self.send(200, layout("limited", f"<p>{remaining} left</p>"), headers=headers)
         if path == "/redirect":
             return self.send(int(q("code", "302")), "", headers={"Location": q("to", "/")})
         if path == "/attachment.csv":  # a file a browser downloads rather than shows

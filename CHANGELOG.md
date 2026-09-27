@@ -55,6 +55,18 @@ an error that says so, not a setting silently ignored
   `Response.blocked_resources` reports what was blocked.
 - Spider settings can now hold callable values (a URL normalizer, a
   priority function); only methods are rejected as overrides.
+- **More inputs to the throttle** (§13). `RateLimit` headers (the IETF
+  `RateLimit: limit=, remaining=, reset=` and `RateLimit-*` fields, or
+  `X-RateLimit-*`; `wintergrab.utils.parse_rate_limit`) are honoured: a
+  used-up window pauses the domain until it resets (`stats["rate_limited"]`,
+  a `throttle_backoff` event), a low remainder spaces requests so the window
+  lasts. A domain whose last responses mostly failed (at least
+  `error_rate_backoff`, 0.5, of ten or more) has its concurrency halved.
+  `max_bytes_per_second`, `hold_at_memory` and `hold_at_cpu` hold new
+  requests while others are in flight when the download rate, the resident
+  memory or the CPU share is above them (`stats["held/..."]`). The domain
+  state has `error_rate` and `rate_limit`; `metrics.recent()` gives the
+  last seconds' download rate and CPU share.
 - **Live coverage and confidence.** `spider.metrics()` (and the run's
   `metrics.json`, the dashboard's tiles) has `coverage`, the share of the
   URLs known so far that were fetched, and `confidence`, the mean

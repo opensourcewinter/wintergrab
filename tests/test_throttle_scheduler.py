@@ -61,6 +61,52 @@ def test_crawl_delay_floor_and_snapshot() -> None:
     assert other.slot("a.test").delay == 2.0
 
 
+def test_rate_limit_headers_pause_or_pace_the_domain() -> None:
+    from wintergrab.utils import parse_rate_limit
+
+    assert parse_rate_limit({"ratelimit": "limit=100, remaining=5, reset=30"}) == (100, 5, 30.0)
+    assert parse_rate_limit({"ratelimit-remaining": "0", "ratelimit-reset": "12"}) == (None, 0, 12.0)
+    assert parse_rate_limit({"x-ratelimit-limit": "60", "x-ratelimit-remaining": "7", "x-ratelimit-reset": "9"}) == (
+        60,
+        7,
+        9.0,
+    )
+    limit, remaining, reset = parse_rate_limit(
+        {"x-ratelimit-remaining": "3", "x-ratelimit-reset": str(int(time.time()) + 20)}
+    )
+    assert (limit, remaining) == (None, 3) and reset is not None and 18 <= reset <= 20  # (a Unix time)
+    assert parse_rate_limit({"x-ratelimit-reset": "99999"}, cap=600) == (None, None, 600.0)
+    assert parse_rate_limit({"content-type": "text/html"}) == (None, None, None)
+    assert parse_rate_limit({"ratelimit-remaining": "lots"}) == (None, None, None)
+
+    throttle = AutoThrottle(randomize=False)
+    assert throttle.on_rate_limit("a.test", 0, 5.0)  # used up: paused until the window resets
+    slot = throttle.slot("a.test")
+    assert not throttle.can_start(slot, time.monotonic()) and throttle.can_start(slot, time.monotonic() + 5.1)
+    assert throttle.state("a.test")["rate_limit"] == {"remaining": 0, "reset": 5.0, "pauses": 1}
+    assert not throttle.on_rate_limit("b.test", 4, 8.0)  # four left for eight seconds: one every two
+    assert throttle.slot("b.test").delay == 2.0
+    assert not throttle.on_rate_limit("b.test", 40, 8.0) and throttle.slot("b.test").delay == 2.0  # (never faster)
+    fixed = AutoThrottle(enabled=False)
+    assert fixed.on_rate_limit("c.test", 0, 3.0) and fixed.slot("c.test").delay == 0.0  # the site's word holds
+
+
+def test_errors_that_keep_coming_halve_concurrency() -> None:
+    throttle = AutoThrottle(max_concurrency=8, randomize=False)
+    slot = throttle.slot("a.test")
+    for _ in range(4):
+        throttle.on_error("a.test")
+    assert slot.concurrency == 8 and throttle.state("a.test")["error_rate"] == 1.0  # too few seen to judge
+    for _ in range(5):
+        throttle.on_success("a.test", 0.1)
+    throttle.on_error("a.test")  # 5 of 10 failed
+    assert slot.concurrency == 4 and throttle.error_rate(slot) is None  # (judged again on the next ten)
+    for _ in range(9):
+        throttle.on_success("a.test", 0.1)
+    throttle.on_error("a.test")  # one of ten: no
+    assert slot.concurrency == 4
+
+
 def test_scheduler_priority_dedupe_and_domains() -> None:
     sched = Scheduler()
     throttle = AutoThrottle(max_concurrency=1, randomize=False)

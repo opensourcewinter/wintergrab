@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,6 +25,9 @@ class DomainSlot:
     latencies: list[float] = field(default_factory=list)
     requests: int = 0  # requests started (for rate measurements)
     last_pushback: float = 0.0  # monotonic time of the last push-back
+    outcomes: deque[bool] = field(default_factory=lambda: deque(maxlen=20))  # the last responses: ok, or failed
+    rate_limit: tuple[int | None, float | None] | None = None  # the site's last RateLimit headers: remaining, reset
+    rate_limited: int = 0  # pauses because the site's rate limit was used up
 
     def ready_at(self) -> float:
         return max(self.next_start, self.paused_until)
@@ -44,6 +48,13 @@ class AutoThrottle:
     * On push-back (HTTP 429/503, a detected block page, timeouts) the delay
       is multiplied by ``backoff_factor`` and concurrency is halved. A
       ``Retry-After`` header pauses the domain for that long.
+    * ``RateLimit`` headers (and ``X-RateLimit-``) are the site's own limit: a
+      used-up window pauses the domain until it resets, a low remainder spaces
+      requests so that the window lasts. They are honoured with ``enabled=False``
+      too, like ``Retry-After``.
+    * Errors that keep coming (timeouts, connection errors: at least
+      ``error_rate_backoff`` of the last responses, ten or more seen) halve
+      concurrency too, so a site in trouble is not hit in parallel.
 
     Args:
         enabled: With ``False`` the delay/concurrency stay fixed (``Retry-After``
@@ -59,6 +70,7 @@ class AutoThrottle:
         recovery: Factor applied to an inflated delay on each success.
         increase_every: Successes needed before concurrency grows by one.
         randomize: Jitter each delay by +/-50% so traffic looks less robotic.
+        error_rate_backoff: The share of failed responses among the last ones from which concurrency halves.
     """
 
     def __init__(
@@ -74,6 +86,7 @@ class AutoThrottle:
         recovery: float = 0.85,
         increase_every: int = 10,
         randomize: bool = True,
+        error_rate_backoff: float = 0.5,
     ) -> None:
         self.enabled = enabled
         self.base_delay = max(0.0, base_delay)
@@ -85,6 +98,7 @@ class AutoThrottle:
         self.recovery = min(max(recovery, 0.1), 1.0)
         self.increase_every = max(1, increase_every)
         self.randomize = randomize
+        self.error_rate_backoff = min(max(error_rate_backoff, 0.05), 1.0)
         self.slots: dict[str, DomainSlot] = {}
 
     def slot(self, domain: str) -> DomainSlot:
@@ -112,6 +126,7 @@ class AutoThrottle:
     def on_success(self, domain: str, latency: float) -> None:
         slot = self.slot(domain)
         slot.latencies = [*slot.latencies[-19:], latency]
+        slot.outcomes.append(True)
         if not self.enabled:
             return
         floor = max(self.base_delay, slot.min_delay)
@@ -144,12 +159,41 @@ class AutoThrottle:
         slot.next_start = max(slot.next_start, time.monotonic() + slot.delay)
 
     def on_error(self, domain: str) -> None:
-        """A timeout or connection error: back off gently."""
+        """A timeout or connection error: back off gently; errors that keep coming halve concurrency too."""
+        slot = self.slot(domain)
+        slot.outcomes.append(False)
         if not self.enabled:
             return
-        slot = self.slot(domain)
         slot.successes = 0
         slot.delay = min(self.max_delay, max(slot.delay * 1.5, self.min_backoff_delay / 2))
+        rate = self.error_rate(slot)
+        if rate is not None and rate >= self.error_rate_backoff and len(slot.outcomes) >= 10 and slot.concurrency > 1:
+            slot.concurrency = max(1, slot.concurrency // 2)
+            slot.outcomes.clear()  # (judged again on the next ten)
+
+    def on_rate_limit(self, domain: str, remaining: int | None, reset: float | None) -> bool:
+        """The site's ``RateLimit`` headers: ``remaining`` requests in the window that ends in ``reset`` seconds.
+        Used up, the domain pauses until then (``True``); low, requests are spaced so that the window lasts."""
+        slot = self.slot(domain)
+        slot.rate_limit = (remaining, reset)
+        if remaining is None or not reset:
+            return False
+        now = time.monotonic()
+        if remaining <= 0:
+            slot.rate_limited += 1
+            slot.paused_until = max(slot.paused_until, now + reset)
+            return True
+        spacing = reset / remaining
+        if spacing > slot.delay:
+            slot.delay = min(self.max_delay, spacing)
+            slot.next_start = max(slot.next_start, now + slot.delay)
+        return False
+
+    @staticmethod
+    def error_rate(slot: DomainSlot) -> float | None:
+        """The share of the last responses (at most 20) that failed; ``None`` before any."""
+        outcomes = slot.outcomes
+        return round(sum(1 for ok in outcomes if not ok) / len(outcomes), 3) if outcomes else None
 
     def set_min_delay(self, domain: str, delay: float) -> None:
         """Enforce a floor (e.g. a robots.txt ``Crawl-delay``)."""
@@ -207,6 +251,12 @@ class AutoThrottle:
             "paused_for": round(max(0.0, slot.paused_until - now), 2),
             "backoffs": slot.backoffs,
             "requests": slot.requests,
+            "error_rate": self.error_rate(slot),
+            "rate_limit": (
+                {"remaining": slot.rate_limit[0], "reset": slot.rate_limit[1], "pauses": slot.rate_limited}
+                if slot.rate_limit is not None
+                else None
+            ),
         }
 
     def describe(self, domain: str) -> str:

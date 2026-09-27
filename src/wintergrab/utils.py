@@ -130,6 +130,43 @@ def domain_matches(host: str, domains: Iterable[str]) -> bool:
     return False
 
 
+def parse_rate_limit(headers: Mapping[str, str], *, cap: float = 3600.0) -> tuple[int | None, int | None, float | None]:
+    """``(limit, remaining, reset seconds)`` from a site's rate-limit headers, each ``None`` when absent: the IETF
+    ``RateLimit`` header (``limit=100, remaining=5, reset=30``) and the ``RateLimit-Limit``, ``-Remaining`` and
+    ``-Reset`` fields, or their ``X-RateLimit-`` forms, whose reset may be seconds, a Unix time or an HTTP date."""
+    fields: dict[str, str] = {}
+    combined: str | None = headers.get("ratelimit") or headers.get("RateLimit")
+    if combined:
+        for part in combined.split(","):
+            key, _, value = part.strip().partition("=")
+            if value:
+                fields[key.strip().lower()] = value.strip().strip('"')
+    for name in ("limit", "remaining", "reset"):
+        for header in (f"ratelimit-{name}", f"x-ratelimit-{name}"):
+            given: str | None = headers.get(header)
+            if given is not None and name not in fields:
+                fields[name] = given.strip()
+
+    def count(value: str | None) -> int | None:
+        try:
+            return max(0, int(float(value))) if value is not None else None
+        except ValueError:
+            return None
+
+    reset: float | None = None
+    raw = fields.get("reset")
+    if raw:
+        try:
+            seconds = float(raw)
+        except ValueError:
+            reset = parse_retry_after(raw, cap=cap)  # an HTTP date
+        else:
+            if seconds > 10**9:  # a Unix time, not seconds from now
+                seconds -= time.time()
+            reset = max(0.0, min(seconds, cap))
+    return count(fields.get("limit")), count(fields.get("remaining")), reset
+
+
 def parse_retry_after(value: str | None, *, cap: float = 3600.0) -> float | None:
     """Seconds to wait from a ``Retry-After`` header (seconds or HTTP date)."""
     if not value:
