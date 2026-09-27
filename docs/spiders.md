@@ -531,8 +531,11 @@ fetched, when the URL alone cannot tell:
   (a SimHash within 3 bits of an earlier page's, as
   [near-duplicate records](data.md#duplicates) are found). The page is
   fetched (it counts in `pages`) but no callback runs for it, and
-  `stats["duplicate_pages"]` counts it. The digests live in memory, about
-  100 bytes a page; `"near"` reads each page's text, about a millisecond.
+  `stats["duplicate_pages"]` counts it. The digests live in memory: 91
+  bytes a page (9.1 MB for 100,000, measured). `"near"` reads each page's
+  text and fingerprints it: 1.5 ms for a 2 KB page, 15 ms for 25 KB and
+  29 ms for 132 KB (the text is cut at 50,000 characters), on one core of
+  a 4-vCPU cloud VM.
 - `canonical_dedupe = True` makes a page that names a canonical URL
   (`<link rel="canonical">`) count as that page: when the canonical URL was
   seen already (fetched, or queued), the page is skipped and

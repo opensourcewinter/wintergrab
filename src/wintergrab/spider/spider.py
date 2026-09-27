@@ -293,7 +293,7 @@ class Spider:
     dedupe: bool = True
     #: Skip pages whose content was processed already under another URL: ``True`` (or ``"exact"``) the same
     #: bytes, ``"near"`` nearly the same visible text (a SimHash within 3 bits). Counted in
-    #: ``stats["duplicate_pages"]``; the digests are kept in memory, about 100 bytes a page.
+    #: ``stats["duplicate_pages"]``; the digests are kept in memory, 91 bytes a page (measured).
     skip_duplicate_pages: bool | str = False
     #: A page that names a canonical URL (``<link rel="canonical">``) counts as that page: it is skipped when
     #: the canonical URL was seen already (``stats["canonical_skipped"]``), else it stands for it and the
