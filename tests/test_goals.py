@@ -220,6 +220,27 @@ def test_plans_run_and_replay(site, tmp_path) -> None:
     assert limited.run(log_level=None).counts["records"] == 2
 
 
+def test_the_survey_samples_every_url_pattern(site) -> None:
+    """The books index links its twelve categories before its books, as books.toscrape.com lists fifty. A sample
+    is not spent on the first pattern seen: a few pages of each pattern come before more of any, so the record
+    pages are among them, and the plan knows their pattern (found by the live tests: the scraper generator saw 15
+    category pages and no book)."""
+    from collections import Counter
+
+    from wintergrab import url_template
+    from wintergrab.goals.plan import survey_for
+
+    goal = read("books with title and price", sites=[site.url + "/books/"])
+    survey = survey_for(goal, site.url + "/books/", sample=8, log_level=None)
+    patterns = Counter(url_template(p.url, include_host=False) for p in survey.pages)
+    assert len(survey.pages) == 8
+    assert patterns["/books/catalogue/{slug}/index.html"] >= 2  # the books
+    assert patterns["/books/catalogue/category/books/{slug}/index.html"] >= 2  # and the categories
+    plan = plan_goal(goal, sample=8)
+    assert plan.sites[0].target == ["/books/catalogue/*/index.html"]
+    assert not any("looked like a product page" in w for w in plan.sites[0].warnings)
+
+
 def test_the_whole_loop_in_one_run(site, tmp_path, capsys) -> None:
     """provenance=True, heal=DIR: records say where each value came from, the plan's schema is read by a
     self-healing extractor kept in DIR (a fixture per site, questions in DIR/review.jsonl), and a redesign is

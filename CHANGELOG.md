@@ -1178,6 +1178,16 @@ an error that says so, not a setting silently ignored
   state and summary are saved, so a close that fails is in their counts too
   (before, a paused crawl resumed without it).
 
+- **The survey spreads its sample across URL patterns.** On
+  books.toscrape.com, whose pages list fifty categories before their books,
+  a 15-page sample was the home page and 14 category pages: the URL
+  classifier saw every URL there as a category, and the goal's word "books"
+  matched every URL through the host name. The scraper generator then found
+  no book page and gave up (found by the live tests). The survey now follows
+  a few links of each URL pattern before more of any one (`survey_site(...,
+  per_pattern=)`, a fifth of the sample by default), and the goal's words
+  are looked for in the path, not the host. The test site's books section
+  has a category sidebar now, as the real one does.
 - **A page's menus are not among its data sources.** `data_sources()`
   (`wg.sources()`, `wintergrab get --sources`) listed every repeated group
   `detect_records()` found as HTML records, and ranked them by records times

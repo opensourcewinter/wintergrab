@@ -502,8 +502,47 @@ def _book(i: int) -> dict[str, Any]:
     }
 
 
+BOOK_CATEGORIES = ("Travel", "Mystery", "Historical Fiction", "Sequential Art", "Classics", "Philosophy", "Romance",
+                   "Womens Fiction", "Fiction", "Childrens", "Religion", "Nonfiction")  # fmt: skip
+# Every page under /books/ a crawl that follows each link reaches: the listing and its index.html alias (the
+# breadcrumbs name it), the other listing pages, the books, and the categories, the root "Books" one included.
+BOOK_SECTION_PAGES = 2 + (BOOK_PAGES - 1) + BOOK_PAGES * BOOKS_PER_PAGE + len(BOOK_CATEGORIES) + 1
+
+
+def _book_pods(numbers: Any, prefix: str) -> str:
+    return "".join(
+        f"<li><article class='product_pod'><div class='image_container'><a href='{prefix}book-{i}/index.html'>"
+        f"<img src='media/{i}.jpg' alt='{b['title']}' class='thumbnail'></a></div>"
+        f"<p class='star-rating {b['rating']}'></p><h3><a href='{prefix}book-{i}/index.html' title='{b['title']}'>"
+        f"{b['title'][:10]}...</a></h3><div class='product_price'><p class='price_color'>{b['price']}</p>"
+        f"<p class='instock availability'><i class='icon-ok'></i> In stock</p></div></article></li>"
+        for i, b in ((i, _book(i)) for i in numbers)
+    )
+
+
+def _book_categories(prefix: str) -> str:
+    """The sidebar of categories that comes before the books on every page, as on books.toscrape.com."""
+    links = "".join(
+        f"<li><a href='{prefix}category/books/{name.lower().replace(' ', '-')}_{n}/index.html'>{name}</a></li>"
+        for n, name in enumerate(BOOK_CATEGORIES, 2)
+    )
+    return f"<div class='side_categories'><ul class='nav nav-list'><li><a href='{prefix}category/books_1/index.html'>Books</a><ul>{links}</ul></li></ul></div>"
+
+
 def _books_page(handler: Handler, path: str) -> None:
     """A miniature of books.toscrape.com (same markup, fewer books)."""
+    if path.startswith("/books/catalogue/category/books_1/"):  # "Books", the root category: the first page of all
+        body = (
+            _book_categories("../../")
+            + f"<h1>Books</h1><ol class='row'>{_book_pods(range(1, BOOKS_PER_PAGE + 1), '../../')}</ol>"
+        )
+        return handler.send(200, layout("Books | Books to Scrape", body))
+    if path.startswith("/books/catalogue/category/books/"):  # a category: two of the books, and the sidebar
+        n = int(path.rsplit("_", 1)[1].split("/")[0])
+        name = BOOK_CATEGORIES[(n - 2) % len(BOOK_CATEGORIES)]
+        books = [(n - 2) % (BOOK_PAGES * BOOKS_PER_PAGE) + 1, (n - 1) % (BOOK_PAGES * BOOKS_PER_PAGE) + 1]
+        body = _book_categories("../../../") + f"<h1>{name}</h1><ol class='row'>{_book_pods(books, '../../../')}</ol>"
+        return handler.send(200, layout(f"{name} | Books to Scrape", body))
     if path in ("/books/", "/books/index.html") or path.startswith("/books/catalogue/page-"):
         n = 1 if not path.startswith("/books/catalogue/page-") else int(path.rsplit("-", 1)[1].split(".")[0])
         prefix = "catalogue/" if not path.startswith("/books/catalogue/") else ""
@@ -516,9 +555,8 @@ def _books_page(handler: Handler, path: str) -> None:
             for i, b in ((i, _book(i)) for i in range((n - 1) * BOOKS_PER_PAGE + 1, n * BOOKS_PER_PAGE + 1))
         )
         nxt = f"<li class='next'><a href='{prefix}page-{n + 1}.html'>next</a></li>" if n < BOOK_PAGES else ""
-        return handler.send(
-            200, layout("All products | Books to Scrape", f"<ol class='row'>{pods}</ol><ul class='pager'>{nxt}</ul>")
-        )
+        body = _book_categories(prefix) + f"<ol class='row'>{pods}</ol><ul class='pager'>{nxt}</ul>"
+        return handler.send(200, layout("All products | Books to Scrape", body))
     if path.startswith("/books/catalogue/book-"):
         i = int(path.split("book-")[1].split("/")[0])
         b = _book(i)

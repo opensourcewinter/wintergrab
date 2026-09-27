@@ -10,12 +10,15 @@
 ``wintergrab inspect`` prints a survey's profile; the goal planner
 (:mod:`wintergrab.goals`) starts from one. The sample is the start page, pages
 spread across the sitemaps (the ones ``prefer`` likes first) and the pages they
-link to, fetched politely: robots.txt is obeyed unless told otherwise.
+link to, a few of each URL pattern before more of any one pattern, so that a
+site's record pages are sampled however many category or tag links come first
+on its pages. Fetched politely: robots.txt is obeyed unless told otherwise.
 """
 
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,6 +29,7 @@ from ..fetchers.response import Response
 from ..request import Request
 from ..sitemaps import SitemapEntry, parse_sitemap, robots_sitemaps
 from ..spider import Spider
+from ..urls import url_template
 from ..utils import ensure_scheme, host_of
 from .profile import SiteProfile, SiteProfiler
 
@@ -140,22 +144,34 @@ class _SurveySpider(Spider):
     url_rules = True  # skip media, archives and crawler traps
     #: ``prefer(url) -> score``: links worth more are followed first.
     prefer: Any = None
+    #: Links of one URL pattern (:func:`~wintergrab.url_template`) followed before the other patterns get their
+    #: turn: the sample is spread across the patterns a site has, so its record pages are among the pages sampled
+    #: however many category or tag links come first on a page. ``0``: page order alone.
+    per_pattern: int = 3
 
     def __init__(self, **settings: Any) -> None:
         super().__init__(**settings)
         self.kept: list[Response] = []
+        self._patterns: Counter[str] = Counter()  # URLs queued so far, by pattern
+        self._queued: set[str] = set()
 
-    def _request(self, url: str) -> Request:
+    def _request(self, url: str, *, spread: bool = True) -> Request:
         request = Request(url, dont_filter=False)
         if self.capture_api:
             request.options["capture"] = True
-        if self.prefer is not None:
-            request.priority = int(10 * float(self.prefer(url)))
+        priority = int(10 * float(self.prefer(url))) if self.prefer is not None else 0
+        if self.per_pattern and url not in self._queued:
+            self._queued.add(url)
+            pattern = url_template(url)
+            if spread:  # the n-th link of a pattern waits for the first of every other: a tier lower each time
+                priority -= 100 * (self._patterns[pattern] // self.per_pattern)
+            self._patterns[pattern] += 1
+        request.priority = priority
         return request
 
     def start_requests(self) -> Any:
-        for url in self.start_urls:
-            yield self._request(str(url))
+        for url in self.start_urls:  # (the start page and the sitemaps' spread: sampled as given)
+            yield self._request(str(url), spread=False)
 
     def parse(self, response: Response) -> Any:
         if self.keep_pages and response.is_html:
@@ -188,6 +204,7 @@ def survey_site(
     keep_pages: bool = False,
     prefer: Callable[[str], bool | float] | None = None,
     extra_urls: Iterable[str] = (),
+    per_pattern: int | None = None,
     log_level: str | None = "WARNING",
     **spider_settings: Any,
 ) -> SiteSurvey:
@@ -202,6 +219,9 @@ def survey_site(
         prefer: How much a page is worth sampling (``prefer(url) -> score``, ``True``/``False`` too):
             the sitemaps' pages are sampled best first, and links are followed best first.
         extra_urls: Pages to visit besides the start page and the sitemap sample.
+        per_pattern: Links of one URL pattern followed before the other patterns get their turn (by default a
+            fifth of ``pages``, two at least), so the sample is spread across the site's patterns; ``0``: page
+            order alone.
     """
     from ..fetchers import Fetcher
 
@@ -249,6 +269,7 @@ def survey_site(
         capture_api=browser,
         keep_pages=keep_pages,
         prefer=prefer,
+        per_pattern=max(2, pages // 5) if per_pattern is None else per_pattern,
         timeout=timeout,
         output=None,
         keep_items=False,

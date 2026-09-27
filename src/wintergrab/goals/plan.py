@@ -465,7 +465,9 @@ def survey_for(
         score = 2 if section and (path == section or path.startswith(section + "/")) else 0
         seen_as = classify_url(url).type
         score += 2 if seen_as in kind.page_types else 1 if seen_as in kind.listing_types else 0
-        return score + (1 if any(w in url.lower() for w in words) else 0)
+        where = urlsplit(url)
+        text = f"{where.path}?{where.query}".lower()  # (not the host: books.example names every page "books")
+        return score + (1 if any(w in text for w in words) else 0)
 
     return survey_site(
         site,

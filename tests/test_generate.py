@@ -88,9 +88,11 @@ def test_a_scraper_generated_tested_and_accepted(site, tmp_path) -> None:
                               sites=[site.url + "/books/"], sample=15, on_stage=seen.append)  # fmt: skip
     assert result.accepted, result.describe()
     assert [s.name for s in seen] == ["plan", "generate", "lint", "test", "sample", "validate", "benchmark"]
-    assert result.stage("test").summary.startswith("5/5 pages give the expected values")
+    trained = min(5, result.stage("plan").details["record_pages"])  # generated from the sampled books, 5 at most
+    assert trained >= 3  # (the sample is spread over the site's URL patterns: category pages are in it too)
+    assert result.stage("test").summary.startswith(f"{trained}/{trained} pages give the expected values")
     sample = result.stage("sample").details
-    assert sample["unseen"] == 7 and sample["record_pages"] == 12  # the 12 books, 5 of them the samples
+    assert sample["record_pages"] == 12 and sample["unseen"] == 12 - trained  # all 12 books, less the samples
     validate = result.stage("validate")
     assert validate.details["agreed"] == validate.details["compared"] > 0
     benchmark = result.stage("benchmark").details
@@ -110,7 +112,7 @@ def test_a_scraper_generated_tested_and_accepted(site, tmp_path) -> None:
     assert FixtureSuite(directory / "fixtures").run().ok
     # again in the same directory: its own files replaced, the tests too
     again = generate_scraper("books with title and price", directory, sites=[site.url + "/books/"], sample=15)
-    assert again.accepted and len(FixtureSuite(directory / "fixtures").fixtures()) == 5
+    assert again.accepted and len(FixtureSuite(directory / "fixtures").fixtures()) == trained
 
 
 def test_a_model_while_generating_and_none_after(site, tmp_path) -> None:

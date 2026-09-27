@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from testsite import BOOK_SECTION_PAGES
 from wintergrab import Spider
 from wintergrab.errors import ConfigurationError
 from wintergrab.fetchers.cache import HTTPCache
@@ -49,11 +50,12 @@ def test_a_recorded_crawl_replays_without_the_network(fresh_site, tmp_path) -> N
         str(tmp_path / "books.jsonl"),
     )
     assert run.recipe == {"spider": "test_runs:Books"} and run.settings["start_urls"] == [fresh_site.url + "/books/"]
-    assert len(list(run.items())) == 12 and run.stats["pages"] == 16
+    assert len(list(run.items())) == 12 and run.stats["pages"] == BOOK_SECTION_PAGES
     kinds = [e["event"] for e in run.events()]
-    assert kinds[0] == "crawl_started" and kinds[-1] == "crawl_finished" and kinds.count("response") == 16
+    assert kinds[0] == "crawl_started" and kinds[-1] == "crawl_finished"
+    assert kinds.count("response") == BOOK_SECTION_PAGES
     assert all("latency" in e for e in run.events("response"))  # the timings
-    assert len(HTTPCache(run.archive, mode="offline")) == 17  # every page, and robots.txt
+    assert len(HTTPCache(run.archive, mode="offline")) == BOOK_SECTION_PAGES + 1  # every page, and robots.txt
 
     before = sum(fresh_site.site.hits.values())
     again = replay("run-1", Books, registry=workspace)
