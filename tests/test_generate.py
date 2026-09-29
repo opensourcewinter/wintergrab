@@ -115,7 +115,9 @@ def test_a_scraper_generated_tested_and_accepted(site, tmp_path) -> None:
     assert FixtureSuite(directory / "fixtures").run().ok
     # again in the same directory: its own files replaced, the tests too
     again = generate_scraper("books with title and price", directory, sites=[site.url + "/books/"], sample=15)
-    assert again.accepted and len(FixtureSuite(directory / "fixtures").fixtures()) == trained
+    trained_again = min(5, again.stage("plan").details["record_pages"])  # (its own survey: fetched concurrently,
+    assert again.accepted and len(FixtureSuite(directory / "fixtures").fixtures()) == trained_again  # its sample
+    assert trained_again >= 3  # can hold a book more or less than the first one's)
 
 
 def test_a_model_while_generating_and_none_after(site, tmp_path) -> None:
