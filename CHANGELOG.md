@@ -1214,11 +1214,12 @@ an error that says so, not a setting silently ignored
   carry the cards and the information table the real ones have.
 - **The survey samples more of the pages the goal wants.** The links of a
   page's record cards (what a listing lists) and, once a sampled page is one
-  of the goal's record pages, the links of its URL pattern are followed in
-  preference order alone, before the other patterns' next turn
-  (`survey_site(wanted=)`); a page the classifier is unsure about says
-  nothing about its pattern. A 15-page sample of books.toscrape.com holds
-  ten book pages instead of one, and the plan's estimates rest on them.
+  of the goal's record pages, the links of its URL pattern are followed
+  before the other patterns' next turn, ranked with the best of the listings
+  (`survey_site(wanted=)`), so a category's own pagination found later does
+  not take their place; a page the classifier is unsure about says nothing
+  about its pattern. A 15-page sample of books.toscrape.com holds ten book
+  pages instead of one, and the plan's estimates rest on them.
 - **A plan starts from a page that exists.** The section a goal is about may
   have no page of its own (`/catalogue/category/books` on books.toscrape.com
   answers 403, its categories live below it): the crawl starts from a

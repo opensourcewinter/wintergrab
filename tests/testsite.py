@@ -505,8 +505,9 @@ def _book(i: int) -> dict[str, Any]:
 BOOK_CATEGORIES = ("Travel", "Mystery", "Historical Fiction", "Sequential Art", "Classics", "Philosophy", "Romance",
                    "Womens Fiction", "Fiction", "Childrens", "Religion", "Nonfiction")  # fmt: skip
 # Every page under /books/ a crawl that follows each link reaches: the listing and its index.html alias (the
-# breadcrumbs name it), the other listing pages, the books, and the categories, the root "Books" one included.
-BOOK_SECTION_PAGES = 2 + (BOOK_PAGES - 1) + BOOK_PAGES * BOOKS_PER_PAGE + len(BOOK_CATEGORIES) + 1
+# breadcrumbs name it), the other listing pages, the books, the categories (two pages each), and the root "Books"
+# category with its own other pages.
+BOOK_SECTION_PAGES = 2 + (BOOK_PAGES - 1) + BOOK_PAGES * BOOKS_PER_PAGE + 2 * len(BOOK_CATEGORIES) + BOOK_PAGES
 
 
 def _book_pods(numbers: Any, prefix: str) -> str:
@@ -531,17 +532,25 @@ def _book_categories(prefix: str) -> str:
 
 def _books_page(handler: Handler, path: str) -> None:
     """A miniature of books.toscrape.com (same markup, fewer books)."""
-    if path.startswith("/books/catalogue/category/books_1/"):  # "Books", the root category: the first page of all
+    if path.startswith("/books/catalogue/category/books_1/"):  # "Books", the root category: every book, paginated
+        n = int(path.rsplit("-", 1)[1].split(".")[0]) if "/page-" in path else 1  # (its own page-N.html, as the
+        nxt = f"<ul class='pager'><li class='next'><a href='page-{n + 1}.html'>next</a></li></ul>"  # real one)
         body = (
             _book_categories("../../")
-            + f"<h1>Books</h1><ol class='row'>{_book_pods(range(1, BOOKS_PER_PAGE + 1), '../../')}</ol>"
+            + f"<h1>Books</h1><ol class='row'>{_book_pods(range((n - 1) * BOOKS_PER_PAGE + 1, n * BOOKS_PER_PAGE + 1), '../../')}</ol>"
+            + (nxt if n < BOOK_PAGES else "")
         )
         return handler.send(200, layout("Books | Books to Scrape", body))
-    if path.startswith("/books/catalogue/category/books/"):  # a category: two of the books, and the sidebar
+    if path.startswith("/books/catalogue/category/books/"):  # a category: two books a page, two pages, the sidebar
         n = int(path.rsplit("_", 1)[1].split("/")[0])
+        page = int(path.rsplit("-", 1)[1].split(".")[0]) if "/page-" in path else 1  # (its own page-2.html)
         name = BOOK_CATEGORIES[(n - 2) % len(BOOK_CATEGORIES)]
-        books = [(n - 2) % (BOOK_PAGES * BOOKS_PER_PAGE) + 1, (n - 1) % (BOOK_PAGES * BOOKS_PER_PAGE) + 1]
-        body = _book_categories("../../../") + f"<h1>{name}</h1><ol class='row'>{_book_pods(books, '../../../')}</ol>"
+        first = n - 2 + 2 * (page - 1)
+        books = [first % (BOOK_PAGES * BOOKS_PER_PAGE) + 1, (first + 1) % (BOOK_PAGES * BOOKS_PER_PAGE) + 1]
+        nxt = "<ul class='pager'><li class='next'><a href='page-2.html'>next</a></li></ul>" if page == 1 else ""
+        body = (
+            _book_categories("../../../") + f"<h1>{name}</h1><ol class='row'>{_book_pods(books, '../../../')}</ol>{nxt}"
+        )
         return handler.send(200, layout(f"{name} | Books to Scrape", body))
     if path in ("/books/", "/books/index.html") or path.startswith("/books/catalogue/page-"):
         n = 1 if not path.startswith("/books/catalogue/page-") else int(path.rsplit("-", 1)[1].split(".")[0])

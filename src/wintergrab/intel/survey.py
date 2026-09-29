@@ -150,9 +150,10 @@ class _SurveySpider(Spider):
     #: however many category or tag links come first on a page. ``0``: page order alone.
     per_pattern: int = 3
     #: ``wanted(response) -> bool | None``: ``True``, a sampled page that is what the survey looks for; ``False``,
-    #: one that is surely not; ``None``, unsure (nothing learned). Links of a wanted page's URL pattern are
-    #: followed in ``prefer`` order alone from then on, before the other patterns' next turn; so are the links of
-    #: a page's record cards (what a listing lists), until a page of their pattern is surely not wanted.
+    #: one that is surely not; ``None``, unsure (nothing learned). Links of a wanted page's URL pattern are free
+    #: from then on: followed before the other patterns' next turn, ranked with the best of the listings; so are
+    #: the links of a page's record cards (what a listing lists), until a page of their pattern is surely not
+    #: wanted.
     wanted: Any = None
 
     def __init__(self, **settings: Any) -> None:
@@ -162,6 +163,7 @@ class _SurveySpider(Spider):
         self._queued: set[str] = set()
         self._wanted_patterns: set[str] = set()
         self._unwanted_patterns: set[str] = set()
+        self._top = 0  # the best ``prefer`` priority of the links that take turns: what a free link is worth
 
     def _request(self, url: str, *, spread: bool = True, listed: bool = False) -> Request:
         request = Request(url, dont_filter=False)
@@ -174,7 +176,12 @@ class _SurveySpider(Spider):
             free = pattern in self._wanted_patterns or (listed and pattern not in self._unwanted_patterns)
             if spread and not free:
                 # the n-th link of a pattern waits for the first of every other: a tier lower each time
+                self._top = max(self._top, priority)
                 priority -= 100 * (self._patterns[pattern] // self.per_pattern)
+            elif spread:
+                # a free link is worth the best listing queued so far: before any pattern's next turn, and before
+                # the first turn of a listing found later (a category's own pagination) that prefer ranks higher
+                priority = max(priority, self._top)
             self._patterns[pattern] += 1
         request.priority = priority
         return request
@@ -250,10 +257,11 @@ def survey_site(
             fifth of ``pages``, two at least), so the sample is spread across the site's patterns; ``0``: page
             order alone.
         wanted: ``wanted(page) -> bool | None``: whether a sampled page is what the survey looks for (a goal's
-            record page), ``None`` when unsure. Links of a wanted page's URL pattern are then followed in
-            ``prefer`` order alone, before the other patterns' next turn, and so are the links of a page's
-            record cards (what a listing lists) until a page of their pattern is surely not wanted: a site's
-            fifty categories no longer crowd its record pages out of the sample.
+            record page), ``None`` when unsure. Links of a wanted page's URL pattern are then free: followed
+            before the other patterns' next turn, ranked with the best of the listings; and so are the links of
+            a page's record cards (what a listing lists) until a page of their pattern is surely not wanted. A
+            site's fifty categories, and their own pagination, no longer crowd its record pages out of the
+            sample.
     """
     from ..fetchers import Fetcher
 
