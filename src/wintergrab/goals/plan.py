@@ -56,6 +56,7 @@ from .api import ApiSource, find_api
 from .goal import Goal
 
 if TYPE_CHECKING:
+    from ..fetchers.response import Response
     from ..intel.survey import SiteSurvey
     from .run import GoalResult
 
@@ -469,6 +470,13 @@ def survey_for(
         text = f"{where.path}?{where.query}".lower()  # (not the host: books.example names every page "books")
         return score + (1 if any(w in text for w in words) else 0)
 
+    def wanted(page: Response) -> bool:
+        """A sampled page that is one of the goal's record pages (as :func:`plan_goal` will see it): the URLs
+        of its pattern can look like anything (``/catalogue/{slug}_{id}/index.html`` reads as a category), so
+        more of them are sampled before the other patterns get their next turn."""
+        classified = classify_page(PageContext(page))
+        return classified.confidence >= _SURE and classified.type in kind.page_types
+
     return survey_site(
         site,
         pages=sample,
@@ -477,6 +485,7 @@ def survey_for(
         timeout=timeout,
         keep_pages=True,
         prefer=prefer,
+        wanted=wanted,
         log_level=log_level,
         **dict(settings or {}),
     )

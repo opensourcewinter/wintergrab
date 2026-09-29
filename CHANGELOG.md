@@ -1209,6 +1209,12 @@ an error that says so, not a setting silently ignored
   the cards below it show (before, "many prices" made it a category, and the
   planner then saw one product page in fifteen sampled). The test site's book
   pages carry the cards and the "Add to basket" button the real ones have.
+- **The survey samples more of the pages the goal wants.** The links of a
+  page's record cards (what a listing lists) and, once a sampled page is one
+  of the goal's record pages, the links of its URL pattern are followed in
+  preference order alone, before the other patterns' next turn
+  (`survey_site(wanted=)`): a 15-page sample of books.toscrape.com holds
+  ten book pages instead of one, and the plan's estimates rest on them.
 - **A page's menus are not among its data sources.** `data_sources()`
   (`wg.sources()`, `wintergrab get --sources`) listed every repeated group
   `detect_records()` found as HTML records, and ranked them by records times

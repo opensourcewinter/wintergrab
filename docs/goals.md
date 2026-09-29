@@ -98,7 +98,9 @@ pages their links lead to. Pages in the part of the site the goal names come
 first, then pages that look like the goal's records, then their listings;
 and a few pages of each URL pattern come before more of any one pattern, so
 a site that lists fifty categories before its products still has product
-pages in the sample. It learns from the sample:
+pages in the sample; the records a listing lists, and more pages of a
+pattern once a sampled page of it holds one of the goal's records, come
+before the other patterns' next turn. It learns from the sample:
 
 - which pages hold the records: classified as the kind's pages (product,
   article, job...), or, for pages that list nothing, giving a record with its

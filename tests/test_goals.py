@@ -241,6 +241,25 @@ def test_the_survey_samples_every_url_pattern(site) -> None:
     assert not any("looked like a product page" in w for w in plan.sites[0].warnings)
 
 
+def test_the_survey_samples_more_of_the_pages_the_goal_wants(site) -> None:
+    """Once a sampled page is one of the goal's record pages, more links of its URL pattern are followed before
+    the other patterns' next turn, so a site's many categories do not crowd its record pages out of the sample
+    (on books.toscrape.com a 15-page sample held one book page; the plan's estimates rested on it)."""
+    from collections import Counter
+
+    from wintergrab import url_template
+    from wintergrab.goals.plan import survey_for
+
+    goal = read("Find all books rated 4 stars or more with title, price and rating", sites=[site.url + "/books/"])
+    survey = survey_for(goal, site.url + "/books/", sample=15, log_level=None)
+    patterns = Counter(url_template(p.url, include_host=False) for p in survey.pages)
+    assert len(survey.pages) == 15
+    assert patterns["/books/catalogue/{slug}/index.html"] >= 6  # the books: more than a pattern's share
+    assert patterns["/books/catalogue/category/books/{slug}/index.html"] == 3  # the categories: their share
+    plan = plan_goal(goal, surveys={site.url + "/books/": survey})
+    assert plan.sites[0].sample["record_pages"] >= 6
+
+
 def test_the_whole_loop_in_one_run(site, tmp_path, capsys) -> None:
     """provenance=True, heal=DIR: records say where each value came from, the plan's schema is read by a
     self-healing extractor kept in DIR (a fixture per site, questions in DIR/review.jsonl), and a redesign is

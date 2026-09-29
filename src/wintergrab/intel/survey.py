@@ -12,7 +12,8 @@
 spread across the sitemaps (the ones ``prefer`` likes first) and the pages they
 link to, a few of each URL pattern before more of any one pattern, so that a
 site's record pages are sampled however many category or tag links come first
-on its pages. Fetched politely: robots.txt is obeyed unless told otherwise.
+on its pages; and once a sampled page is what the survey looks for (``wanted``),
+more of its pattern. Fetched politely: robots.txt is obeyed unless told otherwise.
 """
 
 from __future__ import annotations
@@ -148,14 +149,20 @@ class _SurveySpider(Spider):
     #: turn: the sample is spread across the patterns a site has, so its record pages are among the pages sampled
     #: however many category or tag links come first on a page. ``0``: page order alone.
     per_pattern: int = 3
+    #: ``wanted(response) -> bool``: a sampled page that is what the survey looks for. Links of its URL pattern
+    #: are followed in ``prefer`` order alone from then on, before the other patterns' next turn; so are the
+    #: links of a page's record cards (what a listing lists), until a page of their pattern is not wanted.
+    wanted: Any = None
 
     def __init__(self, **settings: Any) -> None:
         super().__init__(**settings)
         self.kept: list[Response] = []
         self._patterns: Counter[str] = Counter()  # URLs queued so far, by pattern
         self._queued: set[str] = set()
+        self._wanted_patterns: set[str] = set()
+        self._unwanted_patterns: set[str] = set()
 
-    def _request(self, url: str, *, spread: bool = True) -> Request:
+    def _request(self, url: str, *, spread: bool = True, listed: bool = False) -> Request:
         request = Request(url, dont_filter=False)
         if self.capture_api:
             request.options["capture"] = True
@@ -163,7 +170,9 @@ class _SurveySpider(Spider):
         if self.per_pattern and url not in self._queued:
             self._queued.add(url)
             pattern = url_template(url)
-            if spread:  # the n-th link of a pattern waits for the first of every other: a tier lower each time
+            free = pattern in self._wanted_patterns or (listed and pattern not in self._unwanted_patterns)
+            if spread and not free:
+                # the n-th link of a pattern waits for the first of every other: a tier lower each time
                 priority -= 100 * (self._patterns[pattern] // self.per_pattern)
             self._patterns[pattern] += 1
         request.priority = priority
@@ -178,11 +187,26 @@ class _SurveySpider(Spider):
             self.kept.append(response)
         if not response.is_html:
             return
+        listed: set[str] = set()
+        if self.wanted is not None:
+            pattern = url_template(response.url)
+            (self._wanted_patterns if self.wanted(response) else self._unwanted_patterns).add(pattern)
+            listed = _listed(response)
         for link in response.links(same_domain=True):
-            yield self._request(link)
+            yield self._request(link, listed=link in listed)
         next_url = response.next_page()
         if next_url:
             yield self._request(next_url)
+
+
+def _listed(response: Response) -> set[str]:
+    """The links of the page's lists of records (its cards' own links): what a listing lists, before it is
+    known what kind of page they lead to."""
+    found: set[str] = set()
+    for group in response.detect_records():
+        if group.convincing and "url" in group.fields:
+            found.update(url for record in group.extract(response.url) if isinstance(url := record.get("url"), str))
+    return found
 
 
 def _spread(urls: list[str], count: int) -> list[str]:
@@ -205,6 +229,7 @@ def survey_site(
     prefer: Callable[[str], bool | float] | None = None,
     extra_urls: Iterable[str] = (),
     per_pattern: int | None = None,
+    wanted: Callable[[Response], bool] | None = None,
     log_level: str | None = "WARNING",
     **spider_settings: Any,
 ) -> SiteSurvey:
@@ -222,6 +247,11 @@ def survey_site(
         per_pattern: Links of one URL pattern followed before the other patterns get their turn (by default a
             fifth of ``pages``, two at least), so the sample is spread across the site's patterns; ``0``: page
             order alone.
+        wanted: ``wanted(page) -> bool``: a sampled page that is what the survey looks for (a goal's record
+            page). Links of its URL pattern are then followed in ``prefer`` order alone, before the other
+            patterns' next turn, and so are the links of a page's record cards (what a listing lists) until a
+            page of their pattern is not wanted: a site's fifty categories no longer crowd its record pages out
+            of the sample.
     """
     from ..fetchers import Fetcher
 
@@ -270,6 +300,7 @@ def survey_site(
         keep_pages=keep_pages,
         prefer=prefer,
         per_pattern=max(2, pages // 5) if per_pattern is None else per_pattern,
+        wanted=wanted,
         timeout=timeout,
         output=None,
         keep_items=False,
