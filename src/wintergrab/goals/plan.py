@@ -470,12 +470,15 @@ def survey_for(
         text = f"{where.path}?{where.query}".lower()  # (not the host: books.example names every page "books")
         return score + (1 if any(w in text for w in words) else 0)
 
-    def wanted(page: Response) -> bool:
-        """A sampled page that is one of the goal's record pages (as :func:`plan_goal` will see it): the URLs
-        of its pattern can look like anything (``/catalogue/{slug}_{id}/index.html`` reads as a category), so
-        more of them are sampled before the other patterns get their next turn."""
+    def wanted(page: Response) -> bool | None:
+        """Whether a sampled page is one of the goal's record pages (as :func:`plan_goal` will see it), or
+        ``None`` when the classifier is unsure: the URLs of its pattern can look like anything
+        (``/catalogue/{slug}_{id}/index.html`` reads as a category), so more of them are sampled before the
+        other patterns get their next turn."""
         classified = classify_page(PageContext(page))
-        return classified.confidence >= _SURE and classified.type in kind.page_types
+        if classified.confidence < _SURE:
+            return None
+        return classified.type in kind.page_types
 
     return survey_site(
         site,
@@ -533,11 +536,15 @@ def _plan_site(goal: Goal, survey: SiteSurvey, rendered: list[Any] | None = None
         ctx = PageContext(page)
         classified = classify_page(ctx)
         page_type = classified.type if classified.confidence >= _SURE else "unknown"  # a weak verdict decides nothing
-        # A list of records: classified as one, or a grid of cards (a strong repeating group; a
-        # breadcrumb or a small table repeats too, weakly). The classifier's record verdict wins.
+        # A list of records: classified as one, or a grid of record cards (a repeating group whose records link
+        # somewhere; a breadcrumb or a menu repeats too, weakly, and a table of properties links nowhere). The
+        # classifier's record verdict wins.
         lists = page_type in kind.listing_types or (
             page_type not in kind.page_types
-            and any(len(g.elements) >= 3 and g.score >= _GRID_SCORE for g in ctx.selector.detect_records())
+            and any(
+                len(g.elements) >= 3 and g.score >= _GRID_SCORE and "url" in g.fields
+                for g in ctx.selector.detect_records()
+            )
         )
         parse_seconds.append(time.perf_counter() - started)
         if page.source != "browser" and needs_javascript(page):

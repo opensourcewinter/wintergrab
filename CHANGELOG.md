@@ -1205,15 +1205,19 @@ an error that says so, not a setting silently ignored
   pages' information table had dragged the page's own price to 0.69, under
   the confidence a generated scraper learns from, so no price selector was
   learned. The page classifier reads such a page as a product too: one
-  price in the title's block says what the page is about, however many prices
-  the cards below it show (before, "many prices" made it a category, and the
-  planner then saw one product page in fifteen sampled). The test site's book
-  pages carry the cards and the "Add to basket" button the real ones have.
+  price in the title's block says what the page is about, and so does the
+  page's own availability line next to it, however many prices the cards
+  below show (before, "many prices" made it a category, and the planner then
+  saw one product page in fifteen sampled); a related card's cart button is
+  not the page's, and a section name in the URL (`/catalogue/`, `/shop/`) is
+  weaker evidence of a listing than `/category/`. The test site's book pages
+  carry the cards and the information table the real ones have.
 - **The survey samples more of the pages the goal wants.** The links of a
   page's record cards (what a listing lists) and, once a sampled page is one
   of the goal's record pages, the links of its URL pattern are followed in
   preference order alone, before the other patterns' next turn
-  (`survey_site(wanted=)`): a 15-page sample of books.toscrape.com holds
+  (`survey_site(wanted=)`); a page the classifier is unsure about says
+  nothing about its pattern. A 15-page sample of books.toscrape.com holds
   ten book pages instead of one, and the plan's estimates rest on them.
 - **A plan starts from a page that exists.** The section a goal is about may
   have no page of its own (`/catalogue/category/books` on books.toscrape.com

@@ -30,6 +30,7 @@ from functools import cached_property
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from ..data.normalize import normalize_availability
 from ..extraction.page import STRUCTURED_KINDS, PageContext, schema_types
 from ..parser.text import tag_name, text_content
 
@@ -64,7 +65,9 @@ _NAVIGATION = frozenset({"nav", "header", "footer", "aside"})
 
 _URL_RULES: list[tuple[str, float, re.Pattern[str]]] = [
     ("product", 2.0, re.compile(r"/(?:products?|p|dp|item|items|sku|pd|gp/product)/(?!page(?:/|$))[^/]+|[-_/]p[-_]?\d{3,}(?:\.html?)?$|/\d{5,}\.html?$")),
-    ("category", 2.0, re.compile(r"/(?:category|categories|c|collections?|shop|department|departments|catalog|catalogue|browse)(?:/|$)")),
+    ("category", 2.0, re.compile(r"/(?:category|categories|c)(?:/|$)")),
+    # a section that holds the products too (shop.example/catalogue/blue-widget_123): weaker evidence
+    ("category", 1.0, re.compile(r"/(?:collections?|shop|departments?|catalog|catalogue|browse)(?:/|$)")),
     ("news", 2.0, re.compile(r"/(?:news|press|press-releases?|newsroom)(?:/|$)")),
     ("article", 2.0, re.compile(r"/(?:blog|article|articles|post|posts|stories|story|insights|magazine)/[^/]+|/\d{4}/\d{2}/(?:\d{2}/)?[^/]+")),
     ("job", 3.0, re.compile(r"/(?:jobs?|careers?|vacanc(?:y|ies)|positions?|openings?)(?:/|$)")),
@@ -225,20 +228,43 @@ class PageFeatures:
         return len(set(_MONEY.findall(self.text)))
 
     @cached_property
-    def title_prices(self) -> int:
-        """Distinct prices in the title's block: the smallest element around the page's one ``<h1>`` that holds a
-        price. One: the page is about one priced thing, whatever the related items or "recently viewed" cards
-        below it list. A listing's title stands above its cards, so its block holds all their prices."""
+    def title_block(self) -> Any:
+        """The title's block: the smallest element (lxml) around the page's one ``<h1>`` that holds a price, or
+        ``None``. A page about one priced thing has its price there; a listing's title stands above its cards,
+        so its block holds all their prices."""
         headings = self.page.root.css("h1")
         if len(headings) != 1 or headings[0].root is None:
-            return 0
+            return None
         for ancestor in headings[0].root.iterancestors():
-            found = set(_MONEY.findall(text_content(ancestor)))
-            if found:
-                return len(found)
+            if _MONEY.search(text_content(ancestor)):
+                return ancestor
             if tag_name(ancestor) == "body":
                 break
-        return 0
+        return None
+
+    @cached_property
+    def title_text(self) -> str:
+        """The title's block's text, the cards of the page's other records left out (a listing's two cards, a
+        product's "recently viewed" strip: their prices and stock lines are not the page's own)."""
+        block = self.title_block
+        return text_content(block, skip_nodes=self.page.other_records) if block is not None else ""
+
+    @cached_property
+    def title_prices(self) -> int:
+        """Prices written in the title's block, its other records' cards aside (mentions, not distinct values: a
+        listing of same-priced items writes the price once per card)."""
+        return len(_MONEY.findall(self.title_text))
+
+    @cached_property
+    def own_price(self) -> bool:
+        """Whether the title's block holds one price of the page's own (or two: an old price beside the new one):
+        the page is about one priced thing, whatever the cards below it list."""
+        return 1 <= self.title_prices <= 2
+
+    @cached_property
+    def title_availability(self) -> bool:
+        """Whether the title's block says if the thing is in stock: a product page's own line, not a card's."""
+        return normalize_availability(self.title_text) is not None
 
     @cached_property
     def password_inputs(self) -> int:
@@ -250,7 +276,12 @@ class PageFeatures:
 
     @cached_property
     def cart_button(self) -> bool:
+        """An add-to-cart button of the page's own (a related product's card has one too, and says nothing)."""
+        others = self.page.other_records
         for el in self.page.root.css("button, input[type=submit], a[class*=cart], a[class*=button], a[class*=btn]"):
+            node = el.root
+            if others and node is not None and (node in others or any(a in others for a in node.iterancestors())):
+                continue
             label = el.text or el.attr("value") or el.attr("aria-label") or ""
             if label and _CART.search(label):
                 return True
@@ -361,12 +392,13 @@ def _default_rules() -> list[tuple[str, str, Rule]]:
     add("product", "add-to-cart button", lambda f: 3.0 if f.cart_button else None)
     # One price in the title's block: a page about one priced thing; the prices of the related products
     # or "recently viewed" cards below it are not the page's own.
-    add("product", "one price near the title", lambda f: 2.5 if f.title_prices == 1 else None)
-    add("category", "many prices", lambda f: 3.0 if f.prices >= 5 and f.repeated >= 5 and f.title_prices != 1 else None)
+    add("product", "one price near the title", lambda f: 2.5 if f.own_price else None)
+    add("product", "availability near the title", lambda f: 1.5 if f.own_price and f.title_availability else None)
+    add("category", "many prices", lambda f: 3.0 if f.prices >= 5 and f.repeated >= 5 and not f.own_price else None)
     add(
         "category",
         "repeated cards with prices",
-        lambda f: 2.0 if f.repeated >= 8 and f.prices >= 3 and f.title_prices != 1 else None,
+        lambda f: 2.0 if f.repeated >= 8 and f.prices >= 3 and not f.own_price else None,
     )
     add("listing", "repeated cards", lambda f: 3.0 if f.repeated >= 8 and f.prices < 3 else None)
     add("listing", "pagination", lambda f: 1.0 if f.pagination and f.repeated >= 5 else None)

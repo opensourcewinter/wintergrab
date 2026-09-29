@@ -251,13 +251,40 @@ def test_the_survey_samples_more_of_the_pages_the_goal_wants(site) -> None:
     from wintergrab.goals.plan import survey_for
 
     goal = read("Find all books rated 4 stars or more with title, price and rating", sites=[site.url + "/books/"])
-    survey = survey_for(goal, site.url + "/books/", sample=15, log_level=None)
+    # (without the site's sitemap: a third of the sample would come from it, other sections included)
+    survey = survey_for(goal, site.url + "/books/", sample=15, log_level=None, settings={"sitemaps": False})
     patterns = Counter(url_template(p.url, include_host=False) for p in survey.pages)
-    assert len(survey.pages) == 15
+    assert len(survey.pages) == 15, patterns
     assert patterns["/books/catalogue/{slug}/index.html"] >= 6  # the books: more than a pattern's share
     assert patterns["/books/catalogue/category/books/{slug}/index.html"] == 3  # the categories: their share
     plan = plan_goal(goal, surveys={site.url + "/books/": survey})
     assert plan.sites[0].sample["record_pages"] >= 6
+
+
+def test_the_survey_learns_nothing_from_an_unsure_page(site) -> None:
+    """A page the classifier is unsure about says nothing about its URL pattern: what the listings list stays
+    followed freely. Only a page surely not wanted puts its pattern back into the queue's turns (on
+    books.toscrape.com the first book page sampled was unsure, and a 15-page sample fell back to three books)."""
+    from collections import Counter
+
+    from wintergrab import url_template
+    from wintergrab.intel.survey import _SurveySpider, survey_site
+
+    def categories_first(url: str) -> int:  # the goal's order: the listings rank, the site's other pages last
+        return 2 if "/category/" in url else 1 if "/books/" in url else 0
+
+    survey = survey_site(site.url + "/books/", pages=15, sitemaps=False, keep_pages=True, prefer=categories_first,
+                         wanted=lambda page: None, log_level=None)  # fmt: skip
+    patterns = Counter(url_template(p.url, include_host=False) for p in survey.pages)
+    assert patterns["/books/catalogue/{slug}/index.html"] >= 6, patterns
+    spider = _SurveySpider(start_urls=["https://s.example/"], per_pattern=2, wanted=lambda page: None)
+    assert [spider._request(f"https://s.example/p/{i}", listed=True).priority for i in range(3)] == [0, 0, 0]
+    spider._unwanted_patterns.add(url_template("https://s.example/p/9"))  # surely not wanted: turns again
+    assert [spider._request(f"https://s.example/p/{i}", listed=True).priority for i in range(3, 6)] == [
+        -100,
+        -200,
+        -200,
+    ]
 
 
 def test_a_plan_starts_from_a_page_that_exists(site) -> None:

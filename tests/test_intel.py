@@ -136,6 +136,32 @@ def test_a_product_page_that_shows_other_products_is_a_product() -> None:
     assert result.type == "category" and "many prices" in result.evidence, result.scores
 
 
+def test_a_product_page_without_a_cart_button_of_its_own() -> None:
+    """books.toscrape.com's product pages have no "Add to basket" of their own, and the first one sampled had no
+    related cards either: the classifier was unsure (2.5 for the price near the title against 2.0 for the URL's
+    "catalogue"), so the survey learned nothing from it. A product page's own availability line next to its one
+    price is product evidence; a section name in the URL ("catalogue", "shop") is weaker evidence of a listing
+    than "category"; and a related card's cart button is not the page's."""
+    own = (
+        '<div class="main"><h1>A Light in the Attic</h1><p class="price">£51.77</p>'
+        '<p class="instock">In stock (22 available)</p></div>'
+        "<table><tr><th>UPC</th><td>a897fe39b1053632</td></tr><tr><th>Tax</th><td>£0.00</td></tr></table>"
+    )
+    url = "https://shop.example/catalogue/a-light-in-the-attic_1000/index.html"
+    result = classify_page(page(own, url=url))
+    assert result.type == "product" and result.confidence >= 0.25, result.scores
+    assert "availability near the title" in result.evidence and "add-to-cart button" not in result.evidence
+    cards = "".join(
+        f'<li><article class="card"><h3><a href="/catalogue/b-{i}_{i}/index.html">B {i}</a></h3>'
+        f'<p class="price">£{i}.50</p><button>Add to basket</button></article></li>'
+        for i in range(3)
+    )
+    result = classify_page(page(own + f"<section><h2>Recently viewed</h2><ul>{cards}</ul></section>", url=url))
+    assert result.type == "product" and "add-to-cart button" not in result.evidence, result.scores
+    assert classify_url("https://shop.example/category/phones").type == "category"
+    assert classify_url("https://shop.example/catalogue/blue-widget_123/index.html").type == "unknown"  # a section
+
+
 def test_related_types_do_not_compete() -> None:
     # A news page is also an article: "article" scoring high must not make "news" unsure.
     result = classify_page(news_page())

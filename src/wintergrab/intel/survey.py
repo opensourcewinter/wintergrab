@@ -149,9 +149,10 @@ class _SurveySpider(Spider):
     #: turn: the sample is spread across the patterns a site has, so its record pages are among the pages sampled
     #: however many category or tag links come first on a page. ``0``: page order alone.
     per_pattern: int = 3
-    #: ``wanted(response) -> bool``: a sampled page that is what the survey looks for. Links of its URL pattern
-    #: are followed in ``prefer`` order alone from then on, before the other patterns' next turn; so are the
-    #: links of a page's record cards (what a listing lists), until a page of their pattern is not wanted.
+    #: ``wanted(response) -> bool | None``: ``True``, a sampled page that is what the survey looks for; ``False``,
+    #: one that is surely not; ``None``, unsure (nothing learned). Links of a wanted page's URL pattern are
+    #: followed in ``prefer`` order alone from then on, before the other patterns' next turn; so are the links of
+    #: a page's record cards (what a listing lists), until a page of their pattern is surely not wanted.
     wanted: Any = None
 
     def __init__(self, **settings: Any) -> None:
@@ -189,8 +190,9 @@ class _SurveySpider(Spider):
             return
         listed: set[str] = set()
         if self.wanted is not None:
-            pattern = url_template(response.url)
-            (self._wanted_patterns if self.wanted(response) else self._unwanted_patterns).add(pattern)
+            verdict = self.wanted(response)
+            if verdict is not None:  # (unsure: nothing learned about the pattern)
+                (self._wanted_patterns if verdict else self._unwanted_patterns).add(url_template(response.url))
             listed = _listed(response)
         for link in response.links(same_domain=True):
             yield self._request(link, listed=link in listed)
@@ -203,7 +205,7 @@ def _listed(response: Response) -> set[str]:
     """The links of the page's lists of records (its cards' own links): what a listing lists, before it is
     known what kind of page they lead to."""
     found: set[str] = set()
-    for group in response.detect_records():
+    for group in response.detect_records(min_records=2):  # (a small category lists two)
         if group.convincing and "url" in group.fields:
             found.update(url for record in group.extract(response.url) if isinstance(url := record.get("url"), str))
     return found
@@ -229,7 +231,7 @@ def survey_site(
     prefer: Callable[[str], bool | float] | None = None,
     extra_urls: Iterable[str] = (),
     per_pattern: int | None = None,
-    wanted: Callable[[Response], bool] | None = None,
+    wanted: Callable[[Response], bool | None] | None = None,
     log_level: str | None = "WARNING",
     **spider_settings: Any,
 ) -> SiteSurvey:
@@ -247,11 +249,11 @@ def survey_site(
         per_pattern: Links of one URL pattern followed before the other patterns get their turn (by default a
             fifth of ``pages``, two at least), so the sample is spread across the site's patterns; ``0``: page
             order alone.
-        wanted: ``wanted(page) -> bool``: a sampled page that is what the survey looks for (a goal's record
-            page). Links of its URL pattern are then followed in ``prefer`` order alone, before the other
-            patterns' next turn, and so are the links of a page's record cards (what a listing lists) until a
-            page of their pattern is not wanted: a site's fifty categories no longer crowd its record pages out
-            of the sample.
+        wanted: ``wanted(page) -> bool | None``: whether a sampled page is what the survey looks for (a goal's
+            record page), ``None`` when unsure. Links of a wanted page's URL pattern are then followed in
+            ``prefer`` order alone, before the other patterns' next turn, and so are the links of a page's
+            record cards (what a listing lists) until a page of their pattern is surely not wanted: a site's
+            fifty categories no longer crowd its record pages out of the sample.
     """
     from ..fetchers import Fetcher
 

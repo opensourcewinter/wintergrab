@@ -566,8 +566,7 @@ def _books_page(handler: Handler, path: str) -> None:
             f"<article class='product_page'>"  # as on the real site: the page's content, the related books included
             f"<div class='col-sm-6 product_main'><h1>{b['title']}</h1><p class='price_color'>{b['price']}</p>"
             f"<p class='instock availability'><i class='icon-ok'></i> In stock ({b['stock']} available)</p>"
-            f"<p class='star-rating {b['rating']}'></p><form><button type='submit' class='btn btn-primary btn-lg'>"
-            f"Add to basket</button></form></div>"
+            f"<p class='star-rating {b['rating']}'></p></div>"  # (no cart button of its own, as on the real site)
             f"<table class='table table-striped'><tr><th>UPC</th><td>{b['upc']}</td></tr>"
             f"<tr><th>Product Type</th><td>Books</td></tr><tr><th>Price (excl. tax)</th><td>{b['price']}</td></tr>"
             f"<tr><th>Price (incl. tax)</th><td>{b['price']}</td></tr><tr><th>Tax</th><td>£0.00</td></tr>"
