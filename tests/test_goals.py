@@ -260,6 +260,23 @@ def test_the_survey_samples_more_of_the_pages_the_goal_wants(site) -> None:
     assert plan.sites[0].sample["record_pages"] >= 6
 
 
+def test_a_plan_starts_from_a_page_that_exists(site) -> None:
+    """The part of a site a goal is about may have no page of its own: on books.toscrape.com the categories
+    live under /catalogue/category/books/, and /catalogue/category/books answers 403. The crawl starts from a
+    page under the section then, never from a URL made up from the path."""
+    from wintergrab.goals.plan import _section_url
+    from wintergrab.intel.survey import survey_site
+
+    survey = survey_site(site.url + "/books/", pages=6, keep_pages=True, log_level=None)
+    start = _section_url(survey, "/books/catalogue/category/books")
+    assert start.startswith(site.url + "/books/catalogue/category/books/") and start.endswith("/index.html")
+    assert _section_url(survey, "/books/catalogue/category/books_1") == (
+        site.url + "/books/catalogue/category/books_1/index.html"
+    )
+    assert _section_url(survey, "/books") == site.url + "/books/"  # the start page itself
+    assert _section_url(survey, "/nowhere") == site.url + "/books/"  # not origin + path
+
+
 def test_the_whole_loop_in_one_run(site, tmp_path, capsys) -> None:
     """provenance=True, heal=DIR: records say where each value came from, the plan's schema is read by a
     self-healing extractor kept in DIR (a fixture per site, questions in DIR/review.jsonl), and a redesign is

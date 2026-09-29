@@ -725,16 +725,24 @@ def _api_estimate(goal: Goal, plan: SitePlan, source: ApiSource, survey: SiteSur
 
 
 def _section_url(survey: SiteSurvey, path: str) -> str:
-    """A real URL for a section path (``/books`` may only answer as ``/books/``): the start URL, or one
-    of the sampled pages or their links, when their path is the section's."""
+    """A URL that exists for a section path: the start URL, a sampled page or one of their links whose path is
+    the section's (``/books`` may only answer as ``/books/`` or ``/books/index.html``); else the first sampled
+    page under the section, or one of the links, from which the crawl follows the section's own links; else
+    the start URL. Never a URL made up from the path: a site whose products live under ``/catalogue/category/
+    books/`` has no page at ``/catalogue/category/books`` (a 403 the crawl would give up on)."""
+    section = path.rstrip("/") or "/"
     candidates = [survey.url, *(page.url for page in survey.pages)]
     for page in survey.pages:
         if page.is_html:
             candidates.extend(page.links(same_domain=True))
     for url in candidates:
-        if (urlsplit(url).path.rstrip("/") or "/") == path.rstrip("/"):
+        page_path = urlsplit(url).path.rstrip("/") or "/"
+        if page_path == section or page_path in (f"{section}/index.html", f"{section}/index.htm"):
             return url.split("#")[0]
-    return survey.origin + path
+    for url in candidates:
+        if _under(urlsplit(url).path, [section]):
+            return url.split("#")[0]
+    return survey.url
 
 
 def _holds(condition: Expression, record: dict[str, Any]) -> bool:

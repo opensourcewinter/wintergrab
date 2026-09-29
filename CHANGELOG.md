@@ -1215,6 +1215,10 @@ an error that says so, not a setting silently ignored
   preference order alone, before the other patterns' next turn
   (`survey_site(wanted=)`): a 15-page sample of books.toscrape.com holds
   ten book pages instead of one, and the plan's estimates rest on them.
+- **A plan starts from a page that exists.** The section a goal is about may
+  have no page of its own (`/catalogue/category/books` on books.toscrape.com
+  answers 403, its categories live below it): the crawl starts from a
+  sampled page under the section now, never from a URL made up from the path.
 - **A page's menus are not among its data sources.** `data_sources()`
   (`wg.sources()`, `wintergrab get --sources`) listed every repeated group
   `detect_records()` found as HTML records, and ranked them by records times
