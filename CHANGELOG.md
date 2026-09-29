@@ -1223,6 +1223,10 @@ an error that says so, not a setting silently ignored
   program has open is waited for a few seconds; on Windows the system's
   message for it ("being used by another process") was not read as a hold,
   so a crawl starting while a reader had the file open failed at once.
+- The disk frontier's volume test checks that the cost per request stays
+  flat over 200,000 requests, in place of a wall-clock bound a slow shared
+  CI runner cannot meet (the Windows job took 173 s for what takes 23 s on a
+  developer machine).
 - **A page's menus are not among its data sources.** `data_sources()`
   (`wg.sources()`, `wintergrab get --sources`) listed every repeated group
   `detect_records()` found as HTML records, and ranked them by records times
