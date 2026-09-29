@@ -1219,6 +1219,10 @@ an error that says so, not a setting silently ignored
   have no page of its own (`/catalogue/category/books` on books.toscrape.com
   answers 403, its categories live below it): the crawl starts from a
   sampled page under the section now, never from a URL made up from the path.
+- **The DuckDB output waits for a held file on Windows too.** A file another
+  program has open is waited for a few seconds; on Windows the system's
+  message for it ("being used by another process") was not read as a hold,
+  so a crawl starting while a reader had the file open failed at once.
 - **A page's menus are not among its data sources.** `data_sources()`
   (`wg.sources()`, `wintergrab get --sources`) listed every repeated group
   `detect_records()` found as HTML records, and ranked them by records times
