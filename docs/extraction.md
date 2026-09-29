@@ -109,7 +109,12 @@ names a structured-data path explicitly.
 The heuristics avoid the usual traps: a struck-through price is the old
 price (a field named `list_price`, `old_price` or `was_price` takes it, `price`
 does not), and prices inside related-product blocks, carts, headers and
-footers are ignored.
+footers are ignored. The cards of a page's lists of other records ("Products
+you recently viewed", "customers also bought": a list of repeated cards with
+links that does not hold the page's `<h1>`) are left out for every field,
+whatever the list is called: their prices, ratings and pictures are not the
+page's own, and a model is not shown them either. In the visible text, an
+amount of zero ("Tax £0.00", free shipping) is no price.
 
 ## Confidence
 

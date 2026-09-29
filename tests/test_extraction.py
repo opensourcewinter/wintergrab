@@ -399,6 +399,31 @@ def test_page_context_accepts_pages_and_rejects_others() -> None:
 # --------------------------------------------------------------------------- #
 # command line and crawls
 # --------------------------------------------------------------------------- #
+def test_other_records_cards_are_not_the_pages_own_values(site) -> None:
+    """A book page lists six other books with their prices and ratings ("Products you recently viewed", as on
+    books.toscrape.com). The book's own price and rating are read as surely as on a page without them, and the
+    other books' values are no alternatives (on the real site they were: prices at 0.35 confidence, a rating
+    dropped, six questions for the reviewer in fourteen records)."""
+    import wintergrab
+
+    page = wintergrab.get(site.url + "/books/catalogue/book-3/index.html")
+    extractor = Extractor("product", provenance=True)
+    record = extractor.extract(page).to_dict()
+    assert (record["name"], record["price"], record["rating"]) == ("Book number 3", 14.5, 4)
+    fields = record["_provenance"]["fields"]
+    assert fields["price"]["confidence"] >= 0.85 and "alternatives" not in fields["price"]
+    assert fields["rating"]["confidence"] >= 0.7 and "alternatives" not in fields["rating"]
+    candidates = extractor.candidates(page)
+    assert {c.raw for c in candidates["price"]} == {"£14.50"}  # the cards' prices are not even candidates
+    assert {c.raw for c in candidates["rating"]} == {"four"}
+    ctx = PageContext(page)  # a model is shown the page without them, and the product's own details
+    assert len(ctx.other_records) == 6
+    assert "UPC" in ctx.main_text and "Book number 3" in ctx.main_text and "Book number 4" not in ctx.main_text
+    # a listing page read record by record still reads each card
+    listing = wintergrab.get(site.url + "/books/")
+    assert len(Extractor("product").extract_all(listing)) == 4
+
+
 def test_cli_get_extract(site, tmp_path, capsys) -> None:
     schema = tmp_path / "product.json"
     schema.write_text(

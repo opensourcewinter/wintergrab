@@ -1188,6 +1188,27 @@ an error that says so, not a setting silently ignored
   per_pattern=)`, a fifth of the sample by default), and the goal's words
   are looked for in the path, not the host. The test site's books section
   has a category sidebar now, as the real one does.
+- **The cards of a page's other records are not its own values.** A book
+  page on books.toscrape.com lists six other books ("Products you recently
+  viewed") with their prices and ratings, and so do most shops ("customers
+  also bought"). The extractor took those as candidates for the page's own
+  price and rating: confidence fell to 0.35, a rating could be dropped, and
+  six of fourteen records raised questions for the reviewer (found by the
+  owner's sandbox run). The cards of a page's lists of repeated records (with
+  links, not holding the page's `<h1>`) are left out now, for every field
+  and whatever the list is called, by the DOM heuristics and the text
+  patterns alike; a model is not shown them (`PageContext.other_records`,
+  `Selector.markdown(skip=)`), the selector learner ranks matches inside them
+  last (a generated scraper read a related book's availability as the
+  page's), and a card is never taken for the page's main content. In the
+  visible text an amount of zero ("Tax £0.00") is no price: the real book
+  pages' information table had dragged the page's own price to 0.69, under
+  the confidence a generated scraper learns from, so no price selector was
+  learned. The page classifier reads such a page as a product too: one
+  price in the title's block says what the page is about, however many prices
+  the cards below it show (before, "many prices" made it a category, and the
+  planner then saw one product page in fifteen sampled). The test site's book
+  pages carry the cards and the "Add to basket" button the real ones have.
 - **A page's menus are not among its data sources.** `data_sources()`
   (`wg.sources()`, `wintergrab get --sources`) listed every repeated group
   `detect_records()` found as HTML records, and ranked them by records times

@@ -24,14 +24,15 @@ def test_selectors_learned_from_sample_pages(site) -> None:
     generated = generate_schema(_books(site, 1, 2, 3, 5), "product")
     fields = generated.fields
     assert fields["name"].selector == "h1" and fields["name"].found_by == "meta" and fields["name"].reproduced == 4
-    assert fields["price"].selector == "p.price_color"
-    assert fields["availability"].selector == "p.availability"  # not "p.instock": the class naming the field
-    assert fields["rating"].selector == "p.star-rating::attr(class)"  # "star-rating Three" reads as 3
+    assert fields["price"].selector == "div.product_main > p.price_color"  # the book's, not a related book's
+    assert fields["availability"].selector == "div.product_main > p.availability"  # not "p.instock": the class
+    assert fields["rating"].selector == "div.product_main > p.star-rating::attr(class)"  # naming the field; the
     assert fields["category"].selector == "ul.breadcrumb > li:nth-of-type(3) > a"
     assert fields["url"].status == "skipped" and fields["url"].note == "the page's own address"
     assert fields["currency"].status == "skipped" and fields["currency"].note == "read from price"
     assert fields["brand"].status == "not found"
-    assert generated.schema["price"].selectors == ["p.price_color"] and not generated.base["price"].selectors
+    assert generated.schema["price"].selectors == ["div.product_main > p.price_color"]  # class "Three" reads as 3
+    assert not generated.base["price"].selectors
     assert generated.values[0]["category"] == "Poetry" and generated.methods[0]["price"] == "dom"
     assert "selectors learned for 5 of 14 fields, from 4 pages" in generated.describe()
     # a page it was not generated from, read without anything else: the selectors agree with the page's
@@ -106,6 +107,8 @@ def test_a_scraper_generated_tested_and_accepted(site, tmp_path) -> None:
     # the plan names its schema, beside it; its records are read with it
     plan = GoalPlan.load(directory / "plan.json")
     assert plan.schema == "schema.json" and plan.extraction_schema()["name"].selectors == ["h1"]
+    rating = result.generated.fields["rating"].selector  # learned on books rated differently: the class they
+    assert rating.endswith("p.star-rating::attr(class)"), rating  # share, not one book's "Three"
     records = plan.run(max_pages=4, log_level=None).records
     assert records and all(r["_confidence"] > 0.9 for r in records)
     # the samples are extraction tests of the scraper

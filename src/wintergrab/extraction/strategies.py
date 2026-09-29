@@ -516,9 +516,20 @@ def _markers(page: PageContext) -> list[tuple[Selector, str]]:
 
 
 def _marked(page: PageContext, kind: str) -> list[Selector]:
-    """Elements whose class, id, itemprop, data-testid or rel mentions one of ``kind``'s words, in page order."""
+    """Elements whose class, id, itemprop, data-testid or rel mentions one of ``kind``'s words, in page order;
+    on a whole page, those outside its lists of other records (related products, "recently viewed")."""
     words = _DOM_WORDS[kind]
-    return [el for el, marker in _markers(page) if any(word in marker for word in words)]
+    found = [el for el, marker in _markers(page) if any(word in marker for word in words)]
+    if found and page.scope is None:
+        cards = _cards(page)
+        if cards:
+            found = [el for el in found if not _inside(el.root, cards)]
+    return found
+
+
+def _inside(node: Any, nodes: set[Any]) -> bool:
+    """Whether ``node`` is one of ``nodes`` or inside one."""
+    return node is not None and (node in nodes or any(a in nodes for a in node.iterancestors()))
 
 
 def _asides(page: PageContext) -> set[Any]:
@@ -537,8 +548,27 @@ def _asides(page: PageContext) -> set[Any]:
                 for header in root.iter("header")
                 if not any(tag_name(a) in ("main", "article") for a in header.iterancestors())
             )
+            found.update(_cards(page))
         cache[key] = found
     return cache[key]  # type: ignore[no-any-return]
+
+
+def _cards(page: PageContext) -> set[Any]:
+    """The cards of the page's lists of other records ("Products you recently viewed", "customers also bought":
+    :attr:`PageContext.other_records`): about other records than the page's own."""
+    return page.other_records
+
+
+def _text_outside_cards(page: PageContext) -> str:
+    """The page's visible text without its lists of other records (a record's element has none)."""
+    if page.scope is not None:
+        return page.text
+    cache = page.__dict__
+    if "_text_outside_cards" not in cache:
+        cards = _cards(page)
+        root = page.root.root
+        cache["_text_outside_cards"] = page.text if not cards or root is None else text_content(root, skip_nodes=cards)
+    return cache["_text_outside_cards"]  # type: ignore[no-any-return]
 
 
 _CART_BUTTON = re.compile(
@@ -675,8 +705,11 @@ class DomHeuristics(Strategy):
             "main img, article img",
             "img",
         )
+        cards = _cards(page) if page.scope is None else set()  # (related products' pictures are not this page's)
         for query in queries if page.scope is None else ("img",):
             for match in page.root.css(query):
+                if cards and _inside(match.root, cards):
+                    continue
                 value = _element_value(match, "image")
                 if value and not value.startswith("data:"):
                     out.append((value, f"dom:{query.split(',')[0]}"))
@@ -861,6 +894,9 @@ _AVAILABILITY_TEXT = re.compile(
 )
 
 
+_ZERO_AMOUNT = re.compile(r"^\D*0+(?:[.,]0+)?\D*$")
+
+
 class Patterns(Strategy):
     """Regular expressions over the visible text, for values with a recognisable shape.
 
@@ -874,13 +910,13 @@ class Patterns(Strategy):
 
     def candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]:
         kind = field_kind(f)
-        text = page.text
+        text = _text_outside_cards(page)  # (a related product's price is not this page's)
         if not text:
             return []
         found: list[str] = []
         label = kind
-        if kind == "price":
-            found = [m.group(0).strip() for m in _MONEY_TEXT.finditer(text)]
+        if kind == "price":  # (an amount of zero is a tax or a shipping line, not the record's price)
+            found = [m.group(0).strip() for m in _MONEY_TEXT.finditer(text) if not _ZERO_AMOUNT.match(m.group(0))]
         elif kind == "email":
             found = _EMAIL_TEXT.findall(text) if "@" in text else []
         elif kind == "phone":

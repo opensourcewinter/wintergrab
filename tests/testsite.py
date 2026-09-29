@@ -563,11 +563,20 @@ def _books_page(handler: Handler, path: str) -> None:
         body = (
             f"<ul class='breadcrumb'><li><a href='../../index.html'>Home</a></li><li><a href='#'>Books</a></li>"
             f"<li><a href='#'>{b['category']}</a></li><li class='active'>{b['title']}</li></ul>"
+            f"<article class='product_page'>"  # as on the real site: the page's content, the related books included
             f"<div class='col-sm-6 product_main'><h1>{b['title']}</h1><p class='price_color'>{b['price']}</p>"
             f"<p class='instock availability'><i class='icon-ok'></i> In stock ({b['stock']} available)</p>"
-            f"<p class='star-rating {b['rating']}'></p></div>"
+            f"<p class='star-rating {b['rating']}'></p><form><button type='submit' class='btn btn-primary btn-lg'>"
+            f"Add to basket</button></form></div>"
             f"<table class='table table-striped'><tr><th>UPC</th><td>{b['upc']}</td></tr>"
-            f"<tr><th>Product Type</th><td>Books</td></tr></table>"
+            f"<tr><th>Product Type</th><td>Books</td></tr><tr><th>Price (excl. tax)</th><td>{b['price']}</td></tr>"
+            f"<tr><th>Price (incl. tax)</th><td>{b['price']}</td></tr><tr><th>Tax</th><td>£0.00</td></tr>"
+            f"<tr><th>Availability</th><td>In stock ({b['stock']} available)</td></tr>"
+            f"<tr><th>Number of reviews</th><td>0</td></tr></table>"
+            # the real site's "Products you recently viewed": six other books' cards, prices and ratings included
+            f"<section><div class='sub-header'><h2>Products you recently viewed</h2></div>"
+            f"<ul class='row'>{_book_pods([(i + k) % (BOOK_PAGES * BOOKS_PER_PAGE) + 1 for k in range(6)], '../')}</ul>"
+            f"</section></article>"
         )
         return handler.send(200, layout(f"{b['title']} | Books to Scrape", body))
     return handler.send(404, layout("Not found", "<p>nope</p>"))

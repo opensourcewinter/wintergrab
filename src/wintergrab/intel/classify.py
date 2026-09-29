@@ -31,7 +31,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from ..extraction.page import STRUCTURED_KINDS, PageContext, schema_types
-from ..parser.text import tag_name
+from ..parser.text import tag_name, text_content
 
 __all__ = ["PAGE_TYPES", "PageClassifier", "PageFeatures", "PageType", "classify_page", "classify_url"]
 
@@ -225,6 +225,22 @@ class PageFeatures:
         return len(set(_MONEY.findall(self.text)))
 
     @cached_property
+    def title_prices(self) -> int:
+        """Distinct prices in the title's block: the smallest element around the page's one ``<h1>`` that holds a
+        price. One: the page is about one priced thing, whatever the related items or "recently viewed" cards
+        below it list. A listing's title stands above its cards, so its block holds all their prices."""
+        headings = self.page.root.css("h1")
+        if len(headings) != 1 or headings[0].root is None:
+            return 0
+        for ancestor in headings[0].root.iterancestors():
+            found = set(_MONEY.findall(text_content(ancestor)))
+            if found:
+                return len(found)
+            if tag_name(ancestor) == "body":
+                break
+        return 0
+
+    @cached_property
     def password_inputs(self) -> int:
         return len(self.page.root.css("input[type=password]"))
 
@@ -343,9 +359,15 @@ def _default_rules() -> list[tuple[str, str, Rule]]:
 
     # layout and wording
     add("product", "add-to-cart button", lambda f: 3.0 if f.cart_button else None)
-    add("product", "one price near the title", lambda f: 1.5 if 1 <= f.prices <= 3 and len(f.h1) == 1 else None)
-    add("category", "many prices", lambda f: 3.0 if f.prices >= 5 and f.repeated >= 5 else None)
-    add("category", "repeated cards with prices", lambda f: 2.0 if f.repeated >= 8 and f.prices >= 3 else None)
+    # One price in the title's block: a page about one priced thing; the prices of the related products
+    # or "recently viewed" cards below it are not the page's own.
+    add("product", "one price near the title", lambda f: 2.5 if f.title_prices == 1 else None)
+    add("category", "many prices", lambda f: 3.0 if f.prices >= 5 and f.repeated >= 5 and f.title_prices != 1 else None)
+    add(
+        "category",
+        "repeated cards with prices",
+        lambda f: 2.0 if f.repeated >= 8 and f.prices >= 3 and f.title_prices != 1 else None,
+    )
     add("listing", "repeated cards", lambda f: 3.0 if f.repeated >= 8 and f.prices < 3 else None)
     add("listing", "pagination", lambda f: 1.0 if f.pagination and f.repeated >= 5 else None)
     add(

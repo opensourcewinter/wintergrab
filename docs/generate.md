@@ -76,8 +76,8 @@ The directory holds:
      - the tag;
      - its place under an ancestor with a class;
      - its place on the page.
-   - An element in the page's content is preferred to one in a menu or a
-     breadcrumb.
+   - An element in the page's content is preferred to one in a menu, a
+     breadcrumb or a related product's card.
    - Each selector is tried on every sample page, through the same code the
      extractor reads selectors with. It is kept only when it reads the
      value found on **all** of them.

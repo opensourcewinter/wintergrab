@@ -160,12 +160,25 @@ class PageContext:
         return [line.strip() for line in self.root.get_text().splitlines() if line.strip()]
 
     @cached_property
+    def other_records(self) -> set[Any]:
+        """The cards of the page's lists of other records ("Products you recently viewed", "customers also
+        bought": see :func:`~wintergrab.parser.autoextract.other_records`), lxml elements. Their values are not
+        the page's own: the strategies, the model's text and the selector learner leave them out. Empty for a
+        record of a listing (its element holds nothing else)."""
+        if self.scope is not None or self.selector.root is None:
+            return set()
+        from ..parser.autoextract import other_records
+
+        return other_records(self.selector.root)
+
+    @cached_property
     def main_text(self) -> str:
-        """The main content as Markdown, trimmed for an extraction model."""
+        """The main content as Markdown, trimmed for an extraction model (the other records' cards left out)."""
         root = self.root
-        text = root.markdown(main_content=self.scope is None)
+        skip = self.other_records
+        text = root.markdown(main_content=self.scope is None, skip=skip)
         if len(text) < 200 and self.scope is None:  # the "main" element was a small part of the page
-            text = root.markdown()
+            text = root.markdown(skip=skip)
         return text[:_MAX_MODEL_TEXT]
 
     def __repr__(self) -> str:

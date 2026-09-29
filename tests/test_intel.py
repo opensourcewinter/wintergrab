@@ -110,6 +110,32 @@ def test_a_short_listing_with_a_pager() -> None:
     assert classify_page(one).type != "category"  # one price and a pager: no list
 
 
+def test_a_product_page_that_shows_other_products_is_a_product() -> None:
+    """A product page lists other products too ("Products you recently viewed" on books.toscrape.com, "customers
+    also bought"): their prices and cards are not the page's, whose title's block holds one price. Found on the
+    real site, where the planner then saw one product page in fifteen sampled."""
+    cards = "".join(
+        f'<li><article class="card"><h3><a href="/catalogue/book-{i}_{i}/index.html">Book {i}</a></h3>'
+        f'<p class="price">£{10 + i}.50</p><button>Add to basket</button></article></li>'
+        for i in range(6)
+    )
+    product = page(
+        '<div class="main"><h1>Sharp Objects</h1><p class="price">£47.82</p><button>Add to basket</button></div>'
+        f'<section><h2>Products you recently viewed</h2><ul class="row">{cards}</ul></section>',
+        url="https://shop.example/catalogue/sharp-objects_997/index.html",
+    )
+    result = classify_page(product)
+    assert result.type == "product" and "one price near the title" in result.evidence, result.scores
+    assert result.scores.get("category", 0) < result.scores["product"]  # "many prices" did not count
+    # the same cards under a listing's title: its block holds all their prices
+    listing = page(
+        f'<h1>Travel</h1><ul class="row">{cards}</ul>',
+        url="https://shop.example/catalogue/category/books/travel_2/index.html",
+    )
+    result = classify_page(listing)
+    assert result.type == "category" and "many prices" in result.evidence, result.scores
+
+
 def test_related_types_do_not_compete() -> None:
     # A news page is also an article: "article" scoring high must not make "news" unsure.
     result = classify_page(news_page())

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from re import Pattern
 from typing import Any, SupportsIndex, Union, overload
 from urllib.parse import urldefrag, urljoin, urlsplit
@@ -247,12 +247,13 @@ class Selector:
             return self._value or ""
         return _text.to_text(self._root)
 
-    def markdown(self, *, main_content: bool = False) -> str:
+    def markdown(self, *, main_content: bool = False, skip: Collection[Any] = ()) -> str:
         """Convert the element to Markdown (links and images made absolute).
 
         Args:
             main_content: Only convert the page's main content (``<main>``,
                 ``<article>``...) instead of the whole element.
+            skip: Elements (lxml) whose subtrees are left out.
         """
         if self._root is None:
             return self._value or ""
@@ -260,7 +261,7 @@ class Selector:
         if self._doc.type == "html" and _text.tag_name(el) == "html":
             body = el.find("body")
             el = body if body is not None else el
-        return _text.to_markdown(el, self._doc.base_url(self._top()))
+        return _text.to_markdown(el, self._doc.base_url(self._top()), skip=skip)
 
     # ------------------------------------------------------------------ #
     # regular expressions

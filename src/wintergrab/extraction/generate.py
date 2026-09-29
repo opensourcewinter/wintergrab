@@ -359,26 +359,32 @@ def _proposals(
     doc = root.getroottree().getroot()
     holders: list[tuple[etree._Element, str | None]] = []
     raw = fv.raw if isinstance(fv.raw, str) else None if fv.raw is None else str(fv.raw)
+    others = ctx.other_records  # the cards of related products: another record's values, not this page's
     if raw and len(raw) <= 300:  # where the page shows the value as it was found
-        holders += [(m.element, m.attr) for m in sorted(_locate(doc, raw, ctx.url), key=lambda m: m.rank)[:4]]
+        located = sorted(_locate(doc, raw, ctx.url, others), key=lambda m: m.rank)
+        holders += [(m.element, m.attr) for m in located[:4]]
     value = _plain(fv.value)
     if not holders or f.type in _WRITTEN_VARIOUSLY:  # where the page shows it written another way
         holders += [(el, None) for el in _holding(doc, value, lambda text: _read(schema, f.name, text))[:3]]
     if field_kind(f) == "rating":  # "star-rating Three": the rating is in the class
         for el in doc.iter(etree.Element):
             word = _class_rating(el.get("class") or "")
-            if word and _same(_read(schema, f.name, word), fv.value):
+            if word and _same(_read(schema, f.name, word), fv.value) and not _in(el, others):
                 holders.append((el, "class"))
                 break
     out: dict[str, tuple[int, int, int]] = {}
     for element, attr in holders:
         if tag_name(element) in ("html", "head", "body", "title"):
             continue  # the title is the meta tags' to read
-        aside = int(_context_penalty(element) < 1)  # in a menu, a breadcrumb, a footer...
+        aside = int(_context_penalty(element) < 1 or _in(element, others))  # a menu, a footer, another record
         suffix = f"::attr({attr})" if attr else ""
         for query, rank in _selectors_for(element, doc):
             out.setdefault(query + suffix, (aside, rank, len(out)))
     return list(out.items())
+
+
+def _in(element: etree._Element, nodes: set[Any]) -> bool:
+    return bool(nodes) and (element in nodes or any(a in nodes for a in element.iterancestors()))
 
 
 def _selectors_for(element: etree._Element, doc: etree._Element) -> list[tuple[str, int]]:

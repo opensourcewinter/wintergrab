@@ -205,7 +205,7 @@ checks that it is up to date.
   - `getall(self) -> list[str]`
   - `learn(self, examples: Mapping[str, str] | list[Mapping[str, str]]) -> Any`: Learn an extraction schema from example values ("scraping by example").
   - `links(self, css: str | None = None, *, allow: str | Iterable[str] | None = None, deny: str | Iterable[str] | None = None, domains: str | Iterable[str] | None = None, same_domain: bool = False, unique: bool = True) -> list[str]`: Absolute http(s) URLs of the links on the page (fragments removed).
-  - `markdown(self, *, main_content: bool = False) -> str`: Convert the element to Markdown (links and images made absolute).
+  - `markdown(self, *, main_content: bool = False, skip: Collection[Any] = ()) -> str`: Convert the element to Markdown (links and images made absolute).
   - `next_page(self) -> str | None`: URL of the "next page" link (rel=next, "Next", arrows, numbered pagination...), if any.
   - `re(self, pattern: str | Pattern[str], flags: int = 0) -> list[str]`: Apply a regex to the text and return every match.
   - `re_first(self, pattern: str | Pattern[str], default: str | None = None, flags: int = 0) -> str | None`

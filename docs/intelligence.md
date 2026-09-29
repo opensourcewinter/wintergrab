@@ -36,7 +36,7 @@ It adds up evidence. Each rule that applies gives its type a weight:
 | a 404 status, "Page not found" in the title | | 8, 5 |
 | a password field in a small form | | 6 |
 | the URL | `/p/...`, `/category/`, `/blog/...`, `/careers/`, `?q=`, the site root | 2-4 |
-| layout | an add-to-cart button, many repeated cards with prices, pagination, a long `<article>`, a byline and a date, code blocks | 1-3 |
+| layout | an add-to-cart button, one price in the title's block (a product, whatever the related-product cards below it list), many repeated cards with prices, pagination, a long `<article>`, a byline and a date, code blocks | 1-3 |
 | wording | "Results for", "Sign in", "Apply now", "Get tickets" | 1.5-3 |
 
 The weights are evidence strengths chosen by hand, not trained
