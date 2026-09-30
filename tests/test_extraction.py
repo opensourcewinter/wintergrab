@@ -424,6 +424,29 @@ def test_other_records_cards_are_not_the_pages_own_values(site) -> None:
     assert len(Extractor("product").extract_all(listing)) == 4
 
 
+def test_a_description_under_its_section_title(site) -> None:
+    """books.toscrape.com titles a book's description in an element of its own (<div id="product_description">
+    <h2>Product Description</h2></div>) and writes it in the <p> after that: the description is the text, not
+    its title (read from the real markup, the generator learned #product_description, "Product Description" on
+    every page)."""
+    import wintergrab
+
+    page = wintergrab.get(site.url + "/books/catalogue/book-3/index.html")
+    description = Extractor("product").extract(page).data["description"]
+    assert description.startswith("Book number 3 is the story of a town") and len(description) > 300
+
+    def read(body: str) -> object:
+        doc = wintergrab.parse(f"<html><body><h1>Lamp</h1>{body}</body></html>")
+        return Extractor("product").extract(doc).data["description"]
+
+    assert read('<h2 class="description">Description</h2><div>A brass lamp with a linen shade.</div>') == (
+        "A brass lamp with a linen shade."
+    )
+    assert read('<div class="description"><h2>About</h2><p>A brass lamp.</p></div>') == "About A brass lamp."
+    # a section's title followed by another section's: no text of its own
+    assert read('<div id="product_description"><h2>Product Description</h2></div><div><h2>Details</h2></div>') is None
+
+
 def test_cli_get_extract(site, tmp_path, capsys) -> None:
     schema = tmp_path / "product.json"
     schema.write_text(

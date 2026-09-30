@@ -1235,6 +1235,16 @@ an error that says so, not a setting silently ignored
   line in the title's block, a block shorter than an article) describes it at
   length: "long article text" and "many paragraphs" do not count against it,
   and the cards of the page's other records are no part of its article.
+- **A description is not its section's title.** On books.toscrape.com
+  `<div id="product_description"><h2>Product Description</h2></div>` comes
+  before the `<p>` that holds the description, and the DOM heuristics read
+  "Product Description" on every book page; the scraper generator learned
+  `#product_description` from it. An element marked as a description that
+  holds nothing but a heading titles the text after it now. The selector
+  learner does not look for texts longer than 300 characters: it says so,
+  and a generated scraper reads them from each page's own evidence. The test
+  site's book pages have the real ones' description, as long as many of
+  theirs.
 - **The DuckDB output waits for a held file on Windows too.** A file another
   program has open is waited for a few seconds; on Windows the system's
   message for it ("being used by another process") was not read as a hold,

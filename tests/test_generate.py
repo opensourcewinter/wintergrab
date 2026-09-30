@@ -31,6 +31,8 @@ def test_selectors_learned_from_sample_pages(site) -> None:
     assert fields["url"].status == "skipped" and fields["url"].note == "the page's own address"
     assert fields["currency"].status == "skipped" and fields["currency"].note == "read from price"
     assert fields["brand"].status == "not found"
+    # not "#product_description", the title of the description's section: the text, too long to look for
+    assert fields["description"].status == "not learned" and "longer than 300 characters" in fields["description"].note
     assert generated.schema["price"].selectors == ["div.product_main > p.price_color"]  # class "Three" reads as 3
     assert not generated.base["price"].selectors
     assert generated.values[0]["category"] == "Poetry" and generated.methods[0]["price"] == "dom"
@@ -40,6 +42,7 @@ def test_selectors_learned_from_sample_pages(site) -> None:
     [other] = _books(site, 11)
     record = Extractor(generated.schema).extract(other)
     assert record.data["name"] == "Book number 11" and record.data["price"] == 26.5 and record.data["rating"] == 2
+    assert record.data["description"].startswith("Book number 11 is the story")  # read from the page's evidence
     assert record.fields["price"].method == "selector" and "dom" in record.fields["price"].agreed
     assert record.confidence > Extractor("product").extract(other).confidence
 

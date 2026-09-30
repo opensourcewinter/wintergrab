@@ -114,7 +114,10 @@ you recently viewed", "customers also bought": a list of repeated cards with
 links that does not hold the page's `<h1>`) are left out for every field,
 whatever the list is called: their prices, ratings and pictures are not the
 page's own, and a model is not shown them either. In the visible text, an
-amount of zero ("Tax £0.00", free shipping) is no price.
+amount of zero ("Tax £0.00", free shipping) is no price. An element marked
+as the description that holds nothing but a heading (`<div
+id="product_description"><h2>Product Description</h2></div>`) is the title
+of the text after it, and that text is the description.
 
 ## Confidence
 

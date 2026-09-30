@@ -527,6 +527,26 @@ def _marked(page: PageContext, kind: str) -> list[Selector]:
     return found
 
 
+_HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _section_title(node: Any) -> bool:
+    """Whether an element holds nothing but a heading: the title of the section that follows it
+    (``<div id="product_description"><h2>Product Description</h2></div>`` on books.toscrape.com)."""
+    if tag_name(node) in _HEADINGS:
+        return True
+    headings = list(node.iter(*_HEADINGS))
+    return len(headings) == 1 and text_content(node) == text_content(headings[0])
+
+
+def _next_text(node: Any) -> str:
+    """The text of the element after ``node``, unless that is another section's title."""
+    following = next((el for el in node.itersiblings() if isinstance(el.tag, str)), None)
+    if following is None or _section_title(following):
+        return ""
+    return text_content(following)
+
+
 def _inside(node: Any, nodes: set[Any]) -> bool:
     """Whether ``node`` is one of ``nodes`` or inside one."""
     return node is not None and (node in nodes or any(a in nodes for a in node.iterancestors()))
@@ -770,7 +790,14 @@ class DomHeuristics(Strategy):
         return [(f"{lat}, {lon}", source) for (lat, lon), source in _map_points(page)]
 
     def _description(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
-        found = self._texts(page, "description", "[class*=description]", max_len=20_000)
+        found = []
+        for match in _marked(page, "description"):
+            text = match.text
+            if text and match.root is not None and _section_title(match.root):
+                # <div id="product_description"><h2>Product Description</h2></div><p>...</p>: the text follows
+                text = _next_text(match.root)
+            if text and len(text) <= 20_000:
+                found.append((text, "dom:[class*=description]"))
         return sorted(found, key=lambda pair: -len(pair[0]))[:1]
 
     def _sku(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:

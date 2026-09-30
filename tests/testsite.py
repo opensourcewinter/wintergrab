@@ -491,6 +491,14 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(404, layout("Not found", "<p>nope</p>"))
 
 
+# A book's description, as long as many on books.toscrape.com: with the page's information table it takes the
+# book's <article class="product_page"> past an article's length of text.
+_BLURB = (
+    "It is told over one summer by the people who lived through it, each chapter taking one of them from the "
+    "harbour to the hills and back. "
+) * 9
+
+
 def _book(i: int) -> dict[str, Any]:
     return {
         "title": f"Book number {i}",
@@ -499,6 +507,7 @@ def _book(i: int) -> dict[str, Any]:
         "stock": 3 + i,
         "upc": f"upc{i:04d}",
         "category": "Poetry" if i % 2 else "Travel",
+        "description": f"Book number {i} is the story of a town and the family that kept its secrets. " + _BLURB,
     }
 
 
@@ -576,6 +585,8 @@ def _books_page(handler: Handler, path: str) -> None:
             f"<div class='col-sm-6 product_main'><h1>{b['title']}</h1><p class='price_color'>{b['price']}</p>"
             f"<p class='instock availability'><i class='icon-ok'></i> In stock ({b['stock']} available)</p>"
             f"<p class='star-rating {b['rating']}'></p></div>"  # (no cart button of its own, as on the real site)
+            f"<div id='product_description' class='sub-header'><h2>Product Description</h2></div>"
+            f"<p>{b['description']}</p><div class='sub-header'><h2>Product Information</h2></div>"
             f"<table class='table table-striped'><tr><th>UPC</th><td>{b['upc']}</td></tr>"
             f"<tr><th>Product Type</th><td>Books</td></tr><tr><th>Price (excl. tax)</th><td>{b['price']}</td></tr>"
             f"<tr><th>Price (incl. tax)</th><td>{b['price']}</td></tr><tr><th>Tax</th><td>£0.00</td></tr>"

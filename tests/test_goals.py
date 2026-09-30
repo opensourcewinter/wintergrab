@@ -259,6 +259,9 @@ def test_the_survey_samples_more_of_the_pages_the_goal_wants(site) -> None:
     assert patterns["/books/catalogue/category/books/{slug}/index.html"] == 3  # the categories: their share
     plan = plan_goal(goal, surveys={site.url + "/books/": survey})
     assert plan.sites[0].sample["record_pages"] >= 6
+    # the books rated 4 or more among them: 4 of the site's 12 (a book's long description had made every book
+    # page an unsure one, read as a listing of its six other books: "records: about 0")
+    assert plan.sites[0].sample["passing"] >= 1 and plan.sites[0].estimate.records >= 2
 
 
 def test_the_survey_learns_nothing_from_an_unsure_page(site) -> None:

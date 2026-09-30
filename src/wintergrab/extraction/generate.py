@@ -57,6 +57,8 @@ __all__ = ["GeneratedSchema", "LearnedField", "generate_schema"]
 _MODEL_CONFIDENCE = 0.5
 #: Pages whose elements are searched for a field's value (the others only check the selectors).
 _SEARCHED_PAGES = 4
+#: The longest text searched for on a page: a description longer than this is read from the page's evidence.
+_SEARCHED_TEXT = 300
 #: How stable each kind of selector is (lower is better): an attribute meant for machines, a class
 #: or an id, a label beside the element, its tag, its place under a classed ancestor, its place on the page.
 _ATTRIBUTE, _CLASS, _LABEL, _TAG, _ANCHORED, _POSITION = range(6)
@@ -272,7 +274,12 @@ def _choose(
             proposed[query] = min(preference, proposed.get(query, preference))
     if not proposed:
         out.status = "not learned"
-        out.note = "the value is not in the pages' text or attributes"
+        texts = [found[i][f.name].raw for i in pages[:_SEARCHED_PAGES]]
+        out.note = (
+            f"a text longer than {_SEARCHED_TEXT} characters: read from each page's own evidence"
+            if all(isinstance(t, str) and len(t) > _SEARCHED_TEXT for t in texts)
+            else "the value is not in the pages' text or attributes"
+        )
         return
     best: tuple[tuple[int, ...], str, _Check] | None = None
     closest = 0
@@ -360,7 +367,7 @@ def _proposals(
     holders: list[tuple[etree._Element, str | None]] = []
     raw = fv.raw if isinstance(fv.raw, str) else None if fv.raw is None else str(fv.raw)
     others = ctx.other_records  # the cards of related products: another record's values, not this page's
-    if raw and len(raw) <= 300:  # where the page shows the value as it was found
+    if raw and len(raw) <= _SEARCHED_TEXT:  # where the page shows the value as it was found
         located = sorted(_locate(doc, raw, ctx.url, others), key=lambda m: m.rank)
         holders += [(m.element, m.attr) for m in located[:4]]
     value = _plain(fv.value)
