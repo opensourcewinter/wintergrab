@@ -1224,6 +1224,17 @@ an error that says so, not a setting silently ignored
   have no page of its own (`/catalogue/category/books` on books.toscrape.com
   answers 403, its categories live below it): the crawl starts from a
   sampled page under the section now, never from a URL made up from the path.
+- **A product's long description is no article.** books.toscrape.com keeps
+  a book's description, its information table and its "recently viewed"
+  cards in one `<article class="product_page">`. Past 1,500 characters the
+  classifier counted that as an article's text (3.0 against the book's 4.0,
+  confidence 0.16): in the owner's fourth sandbox run eight of the ten books
+  sampled were unsure, seven of them read as listings of their cards, and the
+  plan counted three books and expected "about 0" rated 4 or more (the crawl
+  found 21 in 54). A page that offers one thing (its own price and a stock
+  line in the title's block, a block shorter than an article) describes it at
+  length: "long article text" and "many paragraphs" do not count against it,
+  and the cards of the page's other records are no part of its article.
 - **The DuckDB output waits for a held file on Windows too.** A file another
   program has open is waited for a few seconds; on Windows the system's
   message for it ("being used by another process") was not read as a hold,

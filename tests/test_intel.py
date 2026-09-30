@@ -162,6 +162,44 @@ def test_a_product_page_without_a_cart_button_of_its_own() -> None:
     assert classify_url("https://shop.example/catalogue/blue-widget_123/index.html").type == "unknown"  # a section
 
 
+def test_a_product_page_with_a_long_description_is_a_product() -> None:
+    """A book page on books.toscrape.com keeps its description, its information table and its "recently viewed"
+    cards in one <article class="product_page">. Past 1,500 characters that read as an article's text: 3.0
+    against the book's 4.0, confidence 0.16: in the owner's fourth sandbox run eight of the ten books sampled
+    were unsure, seven of them read as listings of their cards, so the plan counted three books and expected
+    "about 0" rated 4 or more. A page that offers one thing (its price and stock line by its title) describes it at length, and
+    the cards of the page's other records are no part of its article."""
+    cards = "".join(
+        f'<li><article class="product_pod"><h3><a href="../b-{i}_{i}/index.html">Book {i}</a></h3>'
+        f'<p class="price_color">£{20 + i}.99</p><p class="instock availability">In stock</p>'
+        f"<form><button>Add to basket</button></form></article></li>"
+        for i in range(6)
+    )
+    viewed = f'<h2>Products you recently viewed</h2><ul class="row">{cards}</ul>'
+    table = "<table><tr><th>UPC</th><td>6957f44c3847a760</td></tr><tr><th>Tax</th><td>£0.00</td></tr></table>"
+    title = '<div class="product_main"><h1>Sharp Objects</h1><p class="price_color">£47.82</p>'
+    url = "https://shop.example/catalogue/sharp-objects_997/index.html"
+
+    stock = '<p class="instock availability"><i class="icon-ok"></i> In stock (20 available)</p>'
+    book = page(
+        f'<article class="product_page">{title}{stock}</div><p>{LOREM * 10}</p>{table}{viewed}</article>', url=url
+    )
+    result = classify_page(book)
+    assert result.type == "product" and result.confidence >= 0.25, result.scores
+    assert "article" not in result.scores
+    # without a stock line, the cards alone had taken a shorter description past an article's length
+    book = page(f'<article class="product_page">{title}</div><p>{LOREM * 7}</p>{table}{viewed}</article>', url=url)
+    assert "article" not in classify_page(book).scores
+    # an article that names a price and says "available" in its text is no offer: its title's block is the article
+    news = page(
+        f"<article><h1>Budget approved</h1>{''.join(f'<p>{LOREM}</p>' for _ in range(8))}"
+        "<p>Each household gets £120, available from May.</p></article>",
+        url="https://news.example/budget-approved",
+    )
+    result = classify_page(news)
+    assert result.type == "article" and "long article text" in result.evidence, result.scores
+
+
 def test_related_types_do_not_compete() -> None:
     # A news page is also an article: "article" scoring high must not make "news" unsure.
     result = classify_page(news_page())

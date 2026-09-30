@@ -118,6 +118,8 @@ _MONEY = re.compile(
     )
 )
 _MAX_TEXT = 100_000  # wording rules read this much of the page's text
+_ARTICLE_TEXT = 1500  # characters of an <article> that make it an article's text
+_STOCK_LINE = 40  # characters of a stock line ("In stock (22 available)"), not a sentence
 _NOT_FOUND = re.compile(r"\b(?:404|page not found|not found|nicht gefunden|introuvable|no encontrada)\b", re.I)
 _LOGIN_WORDS = re.compile(r"\b(?:log ?in|sign ?in|anmelden|connexion|iniciar sesi[oó]n)\b", re.I)
 _SEARCH_WORDS = re.compile(r"\b(?:search results|results for|no results|resultados|suchergebnisse|résultats)\b", re.I)
@@ -267,6 +269,28 @@ class PageFeatures:
         return normalize_availability(self.title_text) is not None
 
     @cached_property
+    def stock_line(self) -> bool:
+        """Whether the title's block has a line of its own saying whether the thing is in stock ("In stock (22
+        available)", "Sold out"): a short element, not a sentence that mentions "available"."""
+        block, others = self.title_block, self.page.other_records
+        if block is None:
+            return False
+        for el in block.iter():
+            if not isinstance(el.tag, str) or el in others or any(a in others for a in el.iterancestors()):
+                continue
+            text = text_content(el)
+            if 0 < len(text) <= _STOCK_LINE and normalize_availability(text) is not None:
+                return True
+        return False
+
+    @cached_property
+    def offer(self) -> bool:
+        """Whether the title's block offers the page's one thing: its own price and stock line, in a block shorter
+        than an article's text, so that the page's long text lies outside it (the thing's description). A block
+        as long as an article is the article itself, whose words may name a price and "available"."""
+        return self.own_price and len(self.title_text) < _ARTICLE_TEXT and self.stock_line
+
+    @cached_property
     def password_inputs(self) -> int:
         return len(self.page.root.css("input[type=password]"))
 
@@ -289,9 +313,13 @@ class PageFeatures:
 
     @cached_property
     def article_text(self) -> int:
-        """Characters of text in the page's longest ``<article>`` (or ``<main>``) element."""
+        """Characters of text in the page's longest ``<article>`` (or ``<main>``) element, the cards of the page's
+        other records left out (books.toscrape.com's "recently viewed" strip is inside the book's ``<article>``)."""
+        others = self.page.other_records
         lengths = [
-            len(el.text) for el in self.page.root.css("article, [itemprop=articleBody], .article-body, .post-content")
+            len(text_content(el.root, skip_nodes=others))
+            for el in self.page.root.css("article, [itemprop=articleBody], .article-body, .post-content")
+            if el.root is not None
         ]
         return max(lengths, default=0)
 
@@ -407,8 +435,10 @@ def _default_rules() -> list[tuple[str, str, Rule]]:
         "priced cards and a pager",
         lambda f: 2.5 if f.pagination and f.repeated >= 3 and f.prices >= 3 else None,
     )
-    add("article", "long article text", lambda f: 3.0 if f.article_text >= 1500 else None)
-    add("article", "many paragraphs", lambda f: 1.5 if f.paragraphs >= 6 else None)
+    # A page that offers one thing (its price and stock line by its title) describes it at length: its long text is
+    # the thing's description, not an article's.
+    add("article", "long article text", lambda f: 3.0 if f.article_text >= _ARTICLE_TEXT and not f.offer else None)
+    add("article", "many paragraphs", lambda f: 1.5 if f.paragraphs >= 6 and not f.offer else None)
     add("article", "byline and date", lambda f: 2.0 if f.byline and f.time_elements else None)
     add("documentation", "code blocks", lambda f: 3.0 if f.code_blocks >= 3 else None)
     add("login", "password field", lambda f: 6.0 if f.password_inputs and f.form_inputs <= 6 else None)
