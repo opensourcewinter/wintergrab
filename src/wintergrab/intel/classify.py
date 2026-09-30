@@ -30,8 +30,9 @@ from functools import cached_property
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from ..extraction.page import PageContext, schema_types
-from ..parser.text import tag_name
+from ..data.normalize import normalize_availability
+from ..extraction.page import STRUCTURED_KINDS, PageContext, schema_types
+from ..parser.text import tag_name, text_content
 
 __all__ = ["PAGE_TYPES", "PageClassifier", "PageFeatures", "PageType", "classify_page", "classify_url"]
 
@@ -64,7 +65,9 @@ _NAVIGATION = frozenset({"nav", "header", "footer", "aside"})
 
 _URL_RULES: list[tuple[str, float, re.Pattern[str]]] = [
     ("product", 2.0, re.compile(r"/(?:products?|p|dp|item|items|sku|pd|gp/product)/(?!page(?:/|$))[^/]+|[-_/]p[-_]?\d{3,}(?:\.html?)?$|/\d{5,}\.html?$")),
-    ("category", 2.0, re.compile(r"/(?:category|categories|c|collections?|shop|department|departments|catalog|catalogue|browse)(?:/|$)")),
+    ("category", 2.0, re.compile(r"/(?:category|categories|c)(?:/|$)")),
+    # a section that holds the products too (shop.example/catalogue/blue-widget_123): weaker evidence
+    ("category", 1.0, re.compile(r"/(?:collections?|shop|departments?|catalog|catalogue|browse)(?:/|$)")),
     ("news", 2.0, re.compile(r"/(?:news|press|press-releases?|newsroom)(?:/|$)")),
     ("article", 2.0, re.compile(r"/(?:blog|article|articles|post|posts|stories|story|insights|magazine)/[^/]+|/\d{4}/\d{2}/(?:\d{2}/)?[^/]+")),
     ("job", 3.0, re.compile(r"/(?:jobs?|careers?|vacanc(?:y|ies)|positions?|openings?)(?:/|$)")),
@@ -115,6 +118,8 @@ _MONEY = re.compile(
     )
 )
 _MAX_TEXT = 100_000  # wording rules read this much of the page's text
+_ARTICLE_TEXT = 1500  # characters of an <article> that make it an article's text
+_STOCK_LINE = 40  # characters of a stock line ("In stock (22 available)"), not a sentence
 _NOT_FOUND = re.compile(r"\b(?:404|page not found|not found|nicht gefunden|introuvable|no encontrada)\b", re.I)
 _LOGIN_WORDS = re.compile(r"\b(?:log ?in|sign ?in|anmelden|connexion|iniciar sesi[oó]n)\b", re.I)
 _SEARCH_WORDS = re.compile(r"\b(?:search results|results for|no results|resultados|suchergebnisse|résultats)\b", re.I)
@@ -198,7 +203,7 @@ class PageFeatures:
     @cached_property
     def schema_types(self) -> list[str]:
         types = []
-        for kind in ("json-ld", "microdata"):
+        for kind in STRUCTURED_KINDS:
             for _path, node in self.page.nodes(kind):
                 types.extend(schema_types(node))
         return types
@@ -225,6 +230,67 @@ class PageFeatures:
         return len(set(_MONEY.findall(self.text)))
 
     @cached_property
+    def title_block(self) -> Any:
+        """The title's block: the smallest element (lxml) around the page's one ``<h1>`` that holds a price, or
+        ``None``. A page about one priced thing has its price there; a listing's title stands above its cards,
+        so its block holds all their prices."""
+        headings = self.page.root.css("h1")
+        if len(headings) != 1 or headings[0].root is None:
+            return None
+        for ancestor in headings[0].root.iterancestors():
+            if _MONEY.search(text_content(ancestor)):
+                return ancestor
+            if tag_name(ancestor) == "body":
+                break
+        return None
+
+    @cached_property
+    def title_text(self) -> str:
+        """The title's block's text, the cards of the page's other records left out (a listing's two cards, a
+        product's "recently viewed" strip: their prices and stock lines are not the page's own)."""
+        block = self.title_block
+        return text_content(block, skip_nodes=self.page.other_records) if block is not None else ""
+
+    @cached_property
+    def title_prices(self) -> int:
+        """Prices written in the title's block, its other records' cards aside (mentions, not distinct values: a
+        listing of same-priced items writes the price once per card)."""
+        return len(_MONEY.findall(self.title_text))
+
+    @cached_property
+    def own_price(self) -> bool:
+        """Whether the title's block holds one price of the page's own (or two: an old price beside the new one):
+        the page is about one priced thing, whatever the cards below it list."""
+        return 1 <= self.title_prices <= 2
+
+    @cached_property
+    def title_availability(self) -> bool:
+        """Whether the title's block says if the thing is in stock: a product page's own line, not a card's."""
+        return normalize_availability(self.title_text) is not None
+
+    @cached_property
+    def stock_line(self) -> bool:
+        """Whether the title's block has a line of its own saying whether the thing is in stock ("In stock (22
+        available)", "Sold out"): a short element, not a sentence that mentions "available"."""
+        block, others = self.title_block, self.page.other_records
+        if block is None:
+            return False
+        for el in block.iter():
+            if not isinstance(el.tag, str) or el in others or any(a in others for a in el.iterancestors()):
+                continue
+            text = text_content(el)
+            if 0 < len(text) <= _STOCK_LINE and normalize_availability(text) is not None:
+                return True
+        return False
+
+    @cached_property
+    def offer(self) -> bool:
+        """Whether the title's block offers the page's one thing: its own price and stock line, in a block shorter
+        than an article's text, so that the page's long text lies outside it (the thing's description). A block
+        as long as an article is the article itself, whose words may name a price and "available"."""
+        return self.own_price and len(self.title_text) < _ARTICLE_TEXT and self.stock_line
+
+    @cached_property
     def password_inputs(self) -> int:
         return len(self.page.root.css("input[type=password]"))
 
@@ -234,7 +300,12 @@ class PageFeatures:
 
     @cached_property
     def cart_button(self) -> bool:
+        """An add-to-cart button of the page's own (a related product's card has one too, and says nothing)."""
+        others = self.page.other_records
         for el in self.page.root.css("button, input[type=submit], a[class*=cart], a[class*=button], a[class*=btn]"):
+            node = el.root
+            if others and node is not None and (node in others or any(a in others for a in node.iterancestors())):
+                continue
             label = el.text or el.attr("value") or el.attr("aria-label") or ""
             if label and _CART.search(label):
                 return True
@@ -242,9 +313,13 @@ class PageFeatures:
 
     @cached_property
     def article_text(self) -> int:
-        """Characters of text in the page's longest ``<article>`` (or ``<main>``) element."""
+        """Characters of text in the page's longest ``<article>`` (or ``<main>``) element, the cards of the page's
+        other records left out (books.toscrape.com's "recently viewed" strip is inside the book's ``<article>``)."""
+        others = self.page.other_records
         lengths = [
-            len(el.text) for el in self.page.root.css("article, [itemprop=articleBody], .article-body, .post-content")
+            len(text_content(el.root, skip_nodes=others))
+            for el in self.page.root.css("article, [itemprop=articleBody], .article-body, .post-content")
+            if el.root is not None
         ]
         return max(lengths, default=0)
 
@@ -343,9 +418,16 @@ def _default_rules() -> list[tuple[str, str, Rule]]:
 
     # layout and wording
     add("product", "add-to-cart button", lambda f: 3.0 if f.cart_button else None)
-    add("product", "one price near the title", lambda f: 1.5 if 1 <= f.prices <= 3 and len(f.h1) == 1 else None)
-    add("category", "many prices", lambda f: 3.0 if f.prices >= 5 and f.repeated >= 5 else None)
-    add("category", "repeated cards with prices", lambda f: 2.0 if f.repeated >= 8 and f.prices >= 3 else None)
+    # One price in the title's block: a page about one priced thing; the prices of the related products
+    # or "recently viewed" cards below it are not the page's own.
+    add("product", "one price near the title", lambda f: 2.5 if f.own_price else None)
+    add("product", "availability near the title", lambda f: 1.5 if f.own_price and f.title_availability else None)
+    add("category", "many prices", lambda f: 3.0 if f.prices >= 5 and f.repeated >= 5 and not f.own_price else None)
+    add(
+        "category",
+        "repeated cards with prices",
+        lambda f: 2.0 if f.repeated >= 8 and f.prices >= 3 and not f.own_price else None,
+    )
     add("listing", "repeated cards", lambda f: 3.0 if f.repeated >= 8 and f.prices < 3 else None)
     add("listing", "pagination", lambda f: 1.0 if f.pagination and f.repeated >= 5 else None)
     add(
@@ -353,8 +435,10 @@ def _default_rules() -> list[tuple[str, str, Rule]]:
         "priced cards and a pager",
         lambda f: 2.5 if f.pagination and f.repeated >= 3 and f.prices >= 3 else None,
     )
-    add("article", "long article text", lambda f: 3.0 if f.article_text >= 1500 else None)
-    add("article", "many paragraphs", lambda f: 1.5 if f.paragraphs >= 6 else None)
+    # A page that offers one thing (its price and stock line by its title) describes it at length: its long text is
+    # the thing's description, not an article's.
+    add("article", "long article text", lambda f: 3.0 if f.article_text >= _ARTICLE_TEXT and not f.offer else None)
+    add("article", "many paragraphs", lambda f: 1.5 if f.paragraphs >= 6 and not f.offer else None)
     add("article", "byline and date", lambda f: 2.0 if f.byline and f.time_elements else None)
     add("documentation", "code blocks", lambda f: 3.0 if f.code_blocks >= 3 else None)
     add("login", "password field", lambda f: 6.0 if f.password_inputs and f.form_inputs <= 6 else None)

@@ -19,10 +19,13 @@ shown or kept (logs, run records), its password is left out.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import logging
+import os
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -34,11 +37,14 @@ from .common import column_name, kind_of, require
 
 __all__ = ["PostgresExporter", "read_postgres"]
 
+log = logging.getLogger(__name__)
+
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 _META = "_wintergrab_columns"
 _ROWID = "_wg_rowid"
 _TYPES = {"bool": "boolean", "int": "bigint", "float": "double precision", "str": "text", "json": "jsonb"}
 _OPTIONS = ("table",)  # the URL's own query parameters (the others are the connection's)
+_CONNECT_TIMEOUT = 10  # seconds
 
 
 def _psycopg() -> Any:
@@ -58,11 +64,21 @@ def parse_target(url: str) -> tuple[str, list[str]]:
     return dsn, names
 
 
+def connect_options(dsn: str) -> dict[str, Any]:
+    """``psycopg.connect``'s options for ``dsn``: a ``connect_timeout`` of 10 seconds, unless the URL or
+    ``PGCONNECT_TIMEOUT`` gives one (libpq's own waits as long as the system does, minutes, and a crawl with it)."""
+    if any(key == "connect_timeout" for key, _ in parse_qsl(urlsplit(dsn).query)) or os.environ.get(
+        "PGCONNECT_TIMEOUT"
+    ):
+        return {}
+    return {"connect_timeout": _CONNECT_TIMEOUT}
+
+
 def _connect(url: str) -> tuple[Any, list[str]]:
     psycopg = _psycopg()
     dsn, names = parse_target(url)
     try:
-        return psycopg.connect(dsn, autocommit=False), names
+        return psycopg.connect(dsn, autocommit=False, **connect_options(dsn)), names
     except psycopg.Error as exc:
         raise ConfigurationError(f"cannot connect to {redact_url(url)}: {str(exc).strip()}", key="output") from None
 
@@ -153,9 +169,43 @@ class PostgresExporter(Exporter):
         self._used = set(self._types) | {_ROWID}
 
     def _rollback(self) -> None:
-        """Undo the transaction, and forget the columns it added (they are gone with it)."""
-        self._conn.rollback()
+        """Undo the transaction, and forget the columns it added (they are gone with it). On a connection the server
+        hung up, there is nothing to undo: the transaction went with it."""
+        if self._alive():
+            with contextlib.suppress(self._psycopg.Error):
+                self._conn.rollback()
+                self._load_columns()
+
+    def _alive(self) -> bool:
+        return not (self._conn.closed or self._conn.broken)
+
+    def _reconnect(self) -> None:
+        """Connect again (the server hung up: a restart, a failover, an idle timeout), to the table as it is."""
+        with contextlib.suppress(Exception):
+            self._conn.close()
+        self._conn, _ = _connect(self.url)
         self._load_columns()
+        log.warning("%s: the database hung up; connected again", self.table_name)
+
+    def _run(self, action: Callable[[], None], failed: str, items: int) -> None:
+        """Do ``action``, one transaction; when the server hung up, connect again and do it once more (``failed``
+        begins the error that says it could not be done, the ``items`` it leaves unwritten)."""
+        for attempt in (1, 2):
+            try:
+                action()
+                return
+            except self._psycopg.Error as exc:
+                lost = not self._alive()
+                self._rollback()
+                if not lost or attempt == 2:
+                    raise ExportError(f"{self.table_name}: {failed}{str(exc).strip()}", items=items) from None
+                try:
+                    self._reconnect()
+                except ConfigurationError as gone:
+                    raise ExportError(
+                        f"{self.table_name}: {failed}the database hung up, and does not answer again ({gone})",
+                        items=items,
+                    ) from None
 
     def _unique_index(self) -> None:
         """The unique index on ``unique_key``'s column (once the column exists); others go."""
@@ -219,12 +269,12 @@ class PostgresExporter(Exporter):
         text = dumps(row)
         self.bytes_written += _size(text) + 1  # type: ignore[operator]
         record = json.loads(text)  # JSON values, as every output gets them
-        try:
+
+        def columns() -> None:
             for key, value in record.items():
                 self._column(str(key), kind_of(value))
-        except self._psycopg.Error as exc:
-            self._rollback()
-            raise ExportError(f"{self.table_name}: {str(exc).strip()}") from None
+
+        self._run(columns, "", 1)
         self._rows.append(record)
         self.count += 1
         self._maybe_flush()
@@ -243,35 +293,34 @@ class PostgresExporter(Exporter):
 
     def flush(self) -> None:
         if not self._rows:
-            self._conn.commit()
+            if self._alive():
+                self._conn.commit()
             return
+        rows, self._rows = self._rows, []  # (written, or said not to be)
+        self._run(lambda: self._insert(rows), f"{len(rows)} item(s) not written: ", len(rows))
+
+    def _insert(self, rows: list[dict[str, Any]]) -> None:
         sql = self._sql
         key_column = self._columns.get(self.unique_key or "") if self.unique_key else None
         groups: dict[tuple[str, ...], list[list[Any]]] = {}
-        for record in self._rows:
+        for record in rows:
             columns = tuple(self._columns[str(k)] for k in record)
             groups.setdefault(columns, []).append([self._value(self._columns[str(k)], v) for k, v in record.items()])
-        try:
-            with self._conn.cursor() as cursor:
-                for columns, values in groups.items():
-                    query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
-                        self._table,
-                        sql.SQL(", ").join(map(sql.Identifier, columns)),
-                        sql.SQL(", ").join(sql.Placeholder() * len(columns)),
-                    )
-                    if key_column is not None and key_column in columns:
-                        others = [c for c in columns if c != key_column]
-                        action = sql.SQL("DO UPDATE SET {}").format(sql.SQL(", ").join(
-                            sql.SQL("{} = EXCLUDED.{}").format(sql.Identifier(c), sql.Identifier(c)) for c in others
-                        )) if others else sql.SQL("DO NOTHING")  # fmt: skip
-                        query = sql.SQL("{} ON CONFLICT ({}) {}").format(query, sql.Identifier(key_column), action)
-                    cursor.executemany(query, values)
-            self._conn.commit()
-        except self._psycopg.Error as exc:
-            self._rollback()
-            raise ExportError(f"{self.table_name}: {len(self._rows)} item(s) not written: {str(exc).strip()}") from None
-        finally:
-            self._rows.clear()
+        with self._conn.cursor() as cursor:
+            for columns, values in groups.items():
+                query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+                    self._table,
+                    sql.SQL(", ").join(map(sql.Identifier, columns)),
+                    sql.SQL(", ").join(sql.Placeholder() * len(columns)),
+                )
+                if key_column is not None and key_column in columns:
+                    others = [c for c in columns if c != key_column]
+                    action = sql.SQL("DO UPDATE SET {}").format(sql.SQL(", ").join(
+                        sql.SQL("{} = EXCLUDED.{}").format(sql.Identifier(c), sql.Identifier(c)) for c in others
+                    )) if others else sql.SQL("DO NOTHING")  # fmt: skip
+                    query = sql.SQL("{} ON CONFLICT ({}) {}").format(query, sql.Identifier(key_column), action)
+                cursor.executemany(query, values)
+        self._conn.commit()
 
     def close(self) -> None:
         try:

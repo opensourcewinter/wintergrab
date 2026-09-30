@@ -31,7 +31,15 @@ from .css import css_to_xpath, looks_like_xpath
 from .selector import Selector, parse_document
 from .text import SKIP_TAGS, normalize_space, own_text, tag_name, text_content
 
-__all__ = ["LearnedSchema", "RecordGroup", "auto_extract", "detect_records", "is_stable_class", "learn_schema"]
+__all__ = [
+    "LearnedSchema",
+    "RecordGroup",
+    "auto_extract",
+    "detect_records",
+    "is_stable_class",
+    "learn_schema",
+    "other_records",
+]
 
 # Minimum score for auto_extract() to trust the best group (tuned on the test fixtures).
 _MIN_AUTO_SCORE = 2.0
@@ -1008,6 +1016,12 @@ class RecordGroup:
         """The group as a reusable :class:`LearnedSchema` (to extract other pages of the site)."""
         return LearnedSchema(self.container_selector, dict(self.fields))
 
+    @property
+    def convincing(self) -> bool:
+        """Whether the group looks like records rather than a menu, a breadcrumb trail, a pager or a footer: its
+        score reaches the one :func:`auto_extract` trusts."""
+        return self.score >= _MIN_AUTO_SCORE
+
     def __repr__(self) -> str:
         return (
             f"RecordGroup({self.container_selector!r}, {len(self.elements)} records, "
@@ -1050,6 +1064,25 @@ def detect_records(root: Any, *, min_records: int = 3, max_groups: int = 5) -> l
     return results
 
 
+def other_records(root: Any) -> set[etree._Element]:
+    """The cards of a page's lists of repeated records ("Products you recently viewed", "customers also bought",
+    "more from this seller"...): the convincing groups :func:`detect_records` finds whose records link somewhere
+    and none of which holds the page's ``<h1>``. On a page about one thing they are about other things: their
+    prices, ratings and pictures are not the page's own. A list holding the ``<h1>`` is the page's own (a listing
+    read as a whole).
+    """
+    doc, _ = _resolve(root)
+    own: set[etree._Element] = set()
+    for h1 in doc.iter("h1"):
+        own.add(h1)
+        own.update(h1.iterancestors())
+    found: set[etree._Element] = set()
+    for group in detect_records(doc, min_records=2):
+        if group.convincing and "url" in group.fields and not any(el in own for el in group.elements):
+            found.update(group.elements)
+    return found
+
+
 def auto_extract(root: Any, base_url: str | None = None, *, min_records: int = 3) -> list[dict[str, Any]]:
     """Records of the page's main repeating list, as dicts - no selectors needed.
 
@@ -1062,7 +1095,7 @@ def auto_extract(root: Any, base_url: str | None = None, *, min_records: int = 3
     """
     doc, url = _resolve(root)
     groups = detect_records(doc, min_records=min_records, max_groups=1)
-    if not groups or groups[0].score < _MIN_AUTO_SCORE or not groups[0].fields:
+    if not groups or not groups[0].convincing or not groups[0].fields:
         return []
     return groups[0].extract(base_url or url)
 
@@ -1146,8 +1179,11 @@ def _deepest(matches: list[_Match]) -> list[_Match]:
     return [m for m in matches if m.element not in covered]
 
 
-def _locate(root: etree._Element, value: str, base: str | None) -> list[_Match]:
-    """Every element whose text or attribute holds ``value``, ranked (exact text < attribute < contains)."""
+def _locate(
+    root: etree._Element, value: str, base: str | None, demote: Collection[etree._Element] = ()
+) -> list[_Match]:
+    """Every element whose text or attribute holds ``value``, ranked (exact text < attribute < contains).
+    Matches inside ``demote`` (the cards of the page's other records) rank after every other."""
     needle = normalize_space(value)
     if not needle:
         return []
@@ -1197,6 +1233,8 @@ def _locate(root: etree._Element, value: str, base: str | None) -> list[_Match]:
     for m in found:
         if _context_penalty(m.element) < 1:  # breadcrumbs, menus, footers
             m.rank += 0.4
+        if demote and (m.element in demote or any(a in demote for a in m.element.iterancestors())):
+            m.rank += 5  # another record's value: after even a partial match outside the cards
     return found
 
 
@@ -1366,11 +1404,12 @@ def learn_schema(root: Any, examples: Any, *, base_url: str | None = None) -> Le
     doc, url = _resolve(root)
     base = _document_base(doc, base_url or url)
     records = _normalize_examples(examples)
+    cards = other_records(doc) if len(records) == 1 else set()  # one record: the page's, not a related item's
     located: list[dict[str, _Match]] = []
     for record in records:
         pools: dict[str, list[_Match]] = {}
         for name, value in record.items():
-            found = _locate(doc, value, base)
+            found = _locate(doc, value, base, cards)
             if not found:
                 raise ValueError(
                     f"Example value for field {name!r} not found on the page: {value!r}. It must equal (or be "

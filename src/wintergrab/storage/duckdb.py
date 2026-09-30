@@ -70,10 +70,10 @@ def _connect(path: Path, *, read_only: bool) -> Any:
 
 
 def _held(exc: BaseException) -> bool:
-    """Whether DuckDB could not open a file because another program has it ("Could not set lock on file";
-    on Windows, "File is already open in")."""
+    """Whether DuckDB could not open a file because another program has it ("Could not set lock on file"; on
+    Windows, "File is already open in", or the system's "being used by another process")."""
     message = str(exc).lower()
-    return "could not set lock" in message or "already open" in message
+    return "could not set lock" in message or "already open" in message or "used by another process" in message
 
 
 def _objects(connection: Any) -> dict[str, str]:

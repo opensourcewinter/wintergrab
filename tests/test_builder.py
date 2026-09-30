@@ -77,9 +77,14 @@ def test_what_it_proposes(site, tmp_path) -> None:
     assert rating["type"] == "rating" and rating["candidates"][0]["selector"].endswith("::attr(class)")
     specs = detail.table(_number(detail, lambda el: el.tag == "td"))  # a record's properties, by their labels
     assert specs["kind"] == "properties"
-    assert [(f["name"], f["selector"]) for f in specs["fields"]] == [
+    assert [(f["name"], f["selector"]) for f in specs["fields"]] == [  # every row, as the real site's table has
         ("upc", '//tr[th[normalize-space()="UPC"]]/td'),
         ("product_type", '//tr[th[normalize-space()="Product Type"]]/td'),
+        ("price_excl_tax", '//tr[th[normalize-space()="Price (excl. tax)"]]/td'),
+        ("price_incl_tax", '//tr[th[normalize-space()="Price (incl. tax)"]]/td'),
+        ("tax", '//tr[th[normalize-space()="Tax"]]/td'),
+        ("availability", '//tr[th[normalize-space()="Availability"]]/td'),
+        ("number_of_reviews", '//tr[th[normalize-space()="Number of reviews"]]/td'),
     ]
     with pytest.raises(ConfigurationError, match="not in a table"):
         detail.table(_number(detail, lambda el: el.tag == "h1"))

@@ -178,7 +178,8 @@ def test_calls_a_page_made() -> None:
 
 def test_the_sources_of_a_page_over_http(shop) -> None:
     sources = data_sources(wg.get(shop + "/catalog"))
-    assert [(g.count, g.fields) for g in sources.html][:1] == [(6, ["title", "url", "price"])]
+    # the cards; its table's rows repeat elements too, but are no convincing record group (they are a table)
+    assert [(g.selector, g.count, g.fields) for g in sources.html] == [("article.card", 6, ["title", "url", "price"])]
     assert sources.tables == [{"rows": 3, "columns": ["Size", "Chest"]}]
     assert sources.json_ld == {"Organization": 1, "ItemList": 1}
     assert sources.meta == ["og:title", "og:type", "title", "description", "language"]

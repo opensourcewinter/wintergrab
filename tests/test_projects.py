@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from test_history import ShopSpider, product_page, shop  # noqa: F401 (the fixture)
+from testsite import BOOK_SECTION_PAGES
 from wintergrab.errors import ConfigurationError
 from wintergrab.project import Project, Scheduler
 from wintergrab.schedules import Cron, Interval, Once, parse_schedule
@@ -224,7 +225,7 @@ def test_a_project(site, receiver, tmp_path, capsys, monkeypatch) -> None:
     assert main(["run", "--project", str(path)]) == 0
     err = capsys.readouterr().err
     assert "books: finished in" in err and "rated: finished in" in err
-    assert len((tmp_path / "data" / "books.jsonl").read_text().splitlines()) == 16
+    assert len((tmp_path / "data" / "books.jsonl").read_text().splitlines()) == BOOK_SECTION_PAGES
     assert len((tmp_path / "data" / "rated.jsonl").read_text().splitlines()) == 4
     from wintergrab.runs import RunRegistry
 

@@ -203,6 +203,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/slow":
             time.sleep(float(q("delay", "0.5")))
             return self.send(200, layout("slow", "<p>finally</p>"))
+        if path == "/ratelimit":  # a page with the site's rate-limit headers (style: ietf, x or combined)
+            remaining, reset, style = q("remaining", "5"), q("reset", "10"), q("style", "ietf")
+            if style == "combined":
+                headers = {"RateLimit": f"limit=10, remaining={remaining}, reset={reset}"}
+            else:
+                prefix = "X-RateLimit-" if style == "x" else "RateLimit-"
+                headers = {prefix + "Limit": "10", prefix + "Remaining": remaining, prefix + "Reset": reset}
+            return self.send(200, layout("limited", f"<p>{remaining} left</p>"), headers=headers)
         if path == "/redirect":
             return self.send(int(q("code", "302")), "", headers={"Location": q("to", "/")})
         if path == "/attachment.csv":  # a file a browser downloads rather than shows
@@ -450,6 +458,24 @@ class Handler(BaseHTTPRequestHandler):
                 " = 'leaked'}).catch(e => {document.getElementById('out').textContent = 'refused'});</script>",
             )
             return self.send(200, html)
+        if path.startswith("/same/"):  # the same page under three URLs
+            links = " ".join(f"<a href='/same/{n}'>{n}</a>" for n in (1, 2, 3))
+            return self.send(200, layout("Same", f"<h1>The same page</h1><p>Nothing here differs.</p>{links}"))
+        if path.startswith("/near/"):  # nearly the same page under three URLs: one number differs
+            n = path.rsplit("/", 1)[1]
+            words = " ".join(f"word{i}" for i in range(200))
+            links = " ".join(f"<a href='/near/{k}'>{k}</a>" for k in (1, 2, 3))
+            return self.send(200, layout("Near", f"<h1>Almost the same page</h1><p>{words} Visit {n}.</p>{links}"))
+        if path.startswith("/canonical/"):  # product N under another URL, naming the product page as canonical
+            p = product(int(path.rsplit("/", 1)[1].split("?")[0]))
+            body = (
+                f"<h1>{p['name']}</h1><p class='price'>${p['price']:.2f}</p>"
+                f"<a href='/product/{p['id']}'>the product</a> <a href='/canonical/{p['id']}?ref=again'>again</a>"
+            )
+            html = layout(p["name"], body).replace(
+                "<head>", f"<head><link rel='canonical' href='/product/{p['id']}'>", 1
+            )
+            return self.send(200, html)
         if path.startswith("/item/"):
             i = path.rsplit("/", 1)[1]
             delay = float(q("delay", "0"))
@@ -465,6 +491,14 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(404, layout("Not found", "<p>nope</p>"))
 
 
+# A book's description, as long as many on books.toscrape.com: with the page's information table it takes the
+# book's <article class="product_page"> past an article's length of text.
+_BLURB = (
+    "It is told over one summer by the people who lived through it, each chapter taking one of them from the "
+    "harbour to the hills and back. "
+) * 9
+
+
 def _book(i: int) -> dict[str, Any]:
     return {
         "title": f"Book number {i}",
@@ -473,11 +507,60 @@ def _book(i: int) -> dict[str, Any]:
         "stock": 3 + i,
         "upc": f"upc{i:04d}",
         "category": "Poetry" if i % 2 else "Travel",
+        "description": f"Book number {i} is the story of a town and the family that kept its secrets. " + _BLURB,
     }
+
+
+BOOK_CATEGORIES = ("Travel", "Mystery", "Historical Fiction", "Sequential Art", "Classics", "Philosophy", "Romance",
+                   "Womens Fiction", "Fiction", "Childrens", "Religion", "Nonfiction")  # fmt: skip
+# Every page under /books/ a crawl that follows each link reaches: the listing and its index.html alias (the
+# breadcrumbs name it), the other listing pages, the books, the categories (two pages each), and the root "Books"
+# category with its own other pages.
+BOOK_SECTION_PAGES = 2 + (BOOK_PAGES - 1) + BOOK_PAGES * BOOKS_PER_PAGE + 2 * len(BOOK_CATEGORIES) + BOOK_PAGES
+
+
+def _book_pods(numbers: Any, prefix: str) -> str:
+    return "".join(
+        f"<li><article class='product_pod'><div class='image_container'><a href='{prefix}book-{i}/index.html'>"
+        f"<img src='media/{i}.jpg' alt='{b['title']}' class='thumbnail'></a></div>"
+        f"<p class='star-rating {b['rating']}'></p><h3><a href='{prefix}book-{i}/index.html' title='{b['title']}'>"
+        f"{b['title'][:10]}...</a></h3><div class='product_price'><p class='price_color'>{b['price']}</p>"
+        f"<p class='instock availability'><i class='icon-ok'></i> In stock</p></div></article></li>"
+        for i, b in ((i, _book(i)) for i in numbers)
+    )
+
+
+def _book_categories(prefix: str) -> str:
+    """The sidebar of categories that comes before the books on every page, as on books.toscrape.com."""
+    links = "".join(
+        f"<li><a href='{prefix}category/books/{name.lower().replace(' ', '-')}_{n}/index.html'>{name}</a></li>"
+        for n, name in enumerate(BOOK_CATEGORIES, 2)
+    )
+    return f"<div class='side_categories'><ul class='nav nav-list'><li><a href='{prefix}category/books_1/index.html'>Books</a><ul>{links}</ul></li></ul></div>"
 
 
 def _books_page(handler: Handler, path: str) -> None:
     """A miniature of books.toscrape.com (same markup, fewer books)."""
+    if path.startswith("/books/catalogue/category/books_1/"):  # "Books", the root category: every book, paginated
+        n = int(path.rsplit("-", 1)[1].split(".")[0]) if "/page-" in path else 1  # (its own page-N.html, as the
+        nxt = f"<ul class='pager'><li class='next'><a href='page-{n + 1}.html'>next</a></li></ul>"  # real one)
+        body = (
+            _book_categories("../../")
+            + f"<h1>Books</h1><ol class='row'>{_book_pods(range((n - 1) * BOOKS_PER_PAGE + 1, n * BOOKS_PER_PAGE + 1), '../../')}</ol>"
+            + (nxt if n < BOOK_PAGES else "")
+        )
+        return handler.send(200, layout("Books | Books to Scrape", body))
+    if path.startswith("/books/catalogue/category/books/"):  # a category: two books a page, two pages, the sidebar
+        n = int(path.rsplit("_", 1)[1].split("/")[0])
+        page = int(path.rsplit("-", 1)[1].split(".")[0]) if "/page-" in path else 1  # (its own page-2.html)
+        name = BOOK_CATEGORIES[(n - 2) % len(BOOK_CATEGORIES)]
+        first = n - 2 + 2 * (page - 1)
+        books = [first % (BOOK_PAGES * BOOKS_PER_PAGE) + 1, (first + 1) % (BOOK_PAGES * BOOKS_PER_PAGE) + 1]
+        nxt = "<ul class='pager'><li class='next'><a href='page-2.html'>next</a></li></ul>" if page == 1 else ""
+        body = (
+            _book_categories("../../../") + f"<h1>{name}</h1><ol class='row'>{_book_pods(books, '../../../')}</ol>{nxt}"
+        )
+        return handler.send(200, layout(f"{name} | Books to Scrape", body))
     if path in ("/books/", "/books/index.html") or path.startswith("/books/catalogue/page-"):
         n = 1 if not path.startswith("/books/catalogue/page-") else int(path.rsplit("-", 1)[1].split(".")[0])
         prefix = "catalogue/" if not path.startswith("/books/catalogue/") else ""
@@ -490,20 +573,29 @@ def _books_page(handler: Handler, path: str) -> None:
             for i, b in ((i, _book(i)) for i in range((n - 1) * BOOKS_PER_PAGE + 1, n * BOOKS_PER_PAGE + 1))
         )
         nxt = f"<li class='next'><a href='{prefix}page-{n + 1}.html'>next</a></li>" if n < BOOK_PAGES else ""
-        return handler.send(
-            200, layout("All products | Books to Scrape", f"<ol class='row'>{pods}</ol><ul class='pager'>{nxt}</ul>")
-        )
+        body = _book_categories(prefix) + f"<ol class='row'>{pods}</ol><ul class='pager'>{nxt}</ul>"
+        return handler.send(200, layout("All products | Books to Scrape", body))
     if path.startswith("/books/catalogue/book-"):
         i = int(path.split("book-")[1].split("/")[0])
         b = _book(i)
         body = (
             f"<ul class='breadcrumb'><li><a href='../../index.html'>Home</a></li><li><a href='#'>Books</a></li>"
             f"<li><a href='#'>{b['category']}</a></li><li class='active'>{b['title']}</li></ul>"
+            f"<article class='product_page'>"  # as on the real site: the page's content, the related books included
             f"<div class='col-sm-6 product_main'><h1>{b['title']}</h1><p class='price_color'>{b['price']}</p>"
             f"<p class='instock availability'><i class='icon-ok'></i> In stock ({b['stock']} available)</p>"
-            f"<p class='star-rating {b['rating']}'></p></div>"
+            f"<p class='star-rating {b['rating']}'></p></div>"  # (no cart button of its own, as on the real site)
+            f"<div id='product_description' class='sub-header'><h2>Product Description</h2></div>"
+            f"<p>{b['description']}</p><div class='sub-header'><h2>Product Information</h2></div>"
             f"<table class='table table-striped'><tr><th>UPC</th><td>{b['upc']}</td></tr>"
-            f"<tr><th>Product Type</th><td>Books</td></tr></table>"
+            f"<tr><th>Product Type</th><td>Books</td></tr><tr><th>Price (excl. tax)</th><td>{b['price']}</td></tr>"
+            f"<tr><th>Price (incl. tax)</th><td>{b['price']}</td></tr><tr><th>Tax</th><td>£0.00</td></tr>"
+            f"<tr><th>Availability</th><td>In stock ({b['stock']} available)</td></tr>"
+            f"<tr><th>Number of reviews</th><td>0</td></tr></table>"
+            # the real site's "Products you recently viewed": six other books' cards, prices and ratings included
+            f"<section><div class='sub-header'><h2>Products you recently viewed</h2></div>"
+            f"<ul class='row'>{_book_pods([(i + k) % (BOOK_PAGES * BOOKS_PER_PAGE) + 1 for k in range(6)], '../')}</ul>"
+            f"</section></article>"
         )
         return handler.send(200, layout(f"{b['title']} | Books to Scrape", body))
     return handler.send(404, layout("Not found", "<p>nope</p>"))

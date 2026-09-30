@@ -106,6 +106,9 @@ EPILOG_GOAL = """examples:
   wintergrab goal "jobs posted in the last 30 days with title, company and salary" --site jobs.example
   wintergrab goal "articles from news.example published in 2025" --plan-only --save-plan news.plan.json
   wintergrab goal --plan news.plan.json --yes -o articles.jsonl   # run a saved (maybe edited) plan
+  wintergrab goal --plan shop.plan.json --yes -o shop.jsonl --provenance --heal shop.extractor
+      # the whole loop, run again and again: where each value came from, selectors repaired when the
+      # site changes, questions for you in shop.extractor/review.jsonl, a regression fixture per site
 
 The request is read by rules (entities, fields, conditions such as "under $1000",
 "rated 4 or more", "in the last 30 days", "in stock"); the plan shows how it was
@@ -608,7 +611,8 @@ class QuickSpider(Spider):
             if self.heal:
                 from .extraction.healing import HealingExtractor
 
-                extractor = HealingExtractor(self.heal, self.extract, review=self.review, provenance=self.provenance,
+                review = self.review or Path(self.heal) / "review.jsonl"
+                extractor = HealingExtractor(self.heal, self.extract, review=review, provenance=self.provenance,
                                              model=model)  # fmt: skip
             else:
                 from .extraction import Extractor
@@ -716,6 +720,21 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _max_pages_note(estimate: Any, max_pages: int | None) -> str:
+    """What ``--max-pages`` leaves of a plan that needs more pages than that ("" when it needs fewer)."""
+    planned = estimate.pages + estimate.listing_pages
+    if not max_pages or max_pages >= planned:
+        return ""
+    share = max_pages / planned
+    more = "" if estimate.exact else " or more"
+    records = (
+        ""
+        if estimate.records_at_most is not None
+        else f": about {round(estimate.records * share):,} of the {estimate.records:,} records"
+    )
+    return f"  --max-pages {max_pages:,} stops the crawl before the {planned:,}{more} pages the plan needs{records}"
+
+
 def cmd_goal(args: argparse.Namespace) -> int:
     from .goals import GoalPlan, parse_goal, plan_goal
 
@@ -772,6 +791,9 @@ def cmd_goal(args: argparse.Namespace) -> int:
     if args.plan_only or args.verbose >= 0:
         whole = bool(args.plan) or args.plan_only  # else "Understood:" said what the goal is
         print(plan.describe() if whole else "\n" + plan.describe(goal=False), file=shown)
+        cut = _max_pages_note(plan.estimate, args.max_pages)
+        if cut:
+            print(cut, file=shown)
         if args.explain:
             print("\nWhat the estimates rest on:\n" + plan.explain(), file=shown)
     if args.plan_only:
@@ -780,21 +802,28 @@ def cmd_goal(args: argparse.Namespace) -> int:
     if not any(site.allowed for site in plan.sites):
         print("robots.txt keeps crawlers out: nothing to collect", file=sys.stderr)
         return 1
-    big = estimate.requests > args.confirm_over or estimate.browser_pages > 50
+    requests = min(estimate.requests, args.max_pages) if args.max_pages else estimate.requests
+    big = requests > args.confirm_over or min(estimate.browser_pages, requests) > 50
     if big and not args.yes:
         if sys.stdin.isatty():
-            answer = input(f"Run it? About {estimate.requests:,} requests. [y/N] ")
+            answer = input(f"Run it? About {requests:,} requests. [y/N] ")
             if answer.strip().lower() not in ("y", "yes"):
                 return 0
         else:
-            print(f"the plan makes about {estimate.requests:,} requests: add --yes to run it", file=sys.stderr)
+            print(f"the plan makes about {requests:,} requests: add --yes to run it", file=sys.stderr)
             return 0
     output = args.output or "-"
+    if args.review and not args.heal:
+        print("error: --review needs --heal DIR (the review queue is a self-healing extractor's)", file=sys.stderr)
+        return 2
     result = plan.run(
         output,
         max_pages=args.max_pages,
         keep_items=output == "-",
         use_api=not args.no_api,
+        provenance=args.provenance,
+        heal=args.heal,
+        review=args.review,
         log_level="DEBUG" if args.verbose > 0 else ("WARNING" if args.verbose < 0 else "INFO"),
         progress=False if output == "-" else None,
         optimize=not args.no_optimize,
@@ -809,6 +838,14 @@ def cmd_goal(args: argparse.Namespace) -> int:
         if plan.goal.monitor:
             again = f"wintergrab goal --plan {args.save_plan or args.plan or 'PLAN.json'} --yes -o {args.output or 'OUT.jsonl'}"
             print(f"to watch for changes ({plan.goal.monitor}), run this again on a schedule: {again}", file=sys.stderr)
+    if result.counts["export_errors"]:
+        if args.verbose < 0:  # (the summary, which says it, was not printed)
+            from .spider.exporters import output_failures
+
+            print(
+                output_failures(result.counts["export_errors"], result.counts["not_written"], output), file=sys.stderr
+            )
+        return 1
     return 0
 
 
@@ -1438,7 +1475,7 @@ def cmd_heal(args: argparse.Namespace) -> int:
     from .extraction.healing import HealingExtractor
 
     try:
-        extractor = HealingExtractor(args.directory, review=args.review)
+        extractor = HealingExtractor(args.directory, review=args.review or Path(args.directory) / "review.jsonl")
         versions = extractor.versions
         if args.rollback:
             version = versions.rollback(reason=args.note or "rolled back by hand", by="human")
@@ -1541,7 +1578,7 @@ def _crawl_settings(args: argparse.Namespace) -> tuple[type[Spider], dict[str, A
             container=args.container,
             provenance=args.provenance,
             heal=args.heal,
-            review=args.review,
+            review=_review_file(args),
             model=args.model,
             model_url=args.model_url,
         )
@@ -1738,6 +1775,14 @@ def cmd_crawl(args: argparse.Namespace) -> int:
             f"{stats['dead_letters']} failed request(s) recorded; retry just those with --retry-failed",
             file=sys.stderr,
         )
+    if stats.get("export_errors"):
+        from .spider.exporters import output_failures
+
+        print(
+            output_failures(stats["export_errors"], stats.get("items_not_written", 0), spider.output or "-"),
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
@@ -2500,6 +2545,30 @@ def cmd_data_quality(args: argparse.Namespace) -> int:
     return 1 if any(issue.severity == "error" for issue in comparison) else 0
 
 
+def cmd_data_trace(args: argparse.Namespace) -> int:
+    from .data.trace import describe_provenance, find_records
+
+    where = _parse_pairs(args.where, "=", "--where")
+    shown = traced = 0
+    try:
+        for record in find_records(args.input, where, limit=args.limit):
+            shown += 1
+            if args.json:
+                print(json.dumps(record, ensure_ascii=False, default=str))
+            else:
+                if shown > 1:
+                    print()
+                print(describe_provenance(record, args.field))
+            traced += isinstance(record.get("_provenance"), dict)
+    except WintergrabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if not shown:
+        print("no record matches" if where else "no records", file=sys.stderr)
+        return 1
+    return 0 if traced else 1
+
+
 # --------------------------------------------------------------------------- #
 # argument parsing
 # --------------------------------------------------------------------------- #
@@ -2564,7 +2633,9 @@ def _add_typed_extract_options(p: Any, *, schema_flag: bool = True) -> None:
         metavar="DIR",
         help="(--extract) keep versions of the extractor in DIR and repair its selectors when the site changes",
     )
-    p.add_argument("--review", metavar="FILE", help="(--heal) queue what needs a person in FILE (wintergrab review)")
+    p.add_argument(
+        "--review", metavar="FILE", help="(--heal) queue what needs a person in FILE instead of DIR/review.jsonl"
+    )
     p.add_argument(
         "--model",
         metavar="PROVIDER:NAME",
@@ -2584,14 +2655,23 @@ def _model(args: argparse.Namespace) -> Any:
     return load_model(spec, base_url=getattr(args, "model_url", None))
 
 
+def _review_file(args: argparse.Namespace) -> str | None:
+    """``--review FILE``, which needs ``--heal DIR`` (whose ``review.jsonl`` it is by default)."""
+    review, heal = getattr(args, "review", None), getattr(args, "heal", None)
+    if review and not heal:
+        raise SystemExit("error: --review needs --heal DIR (the review queue is a self-healing extractor's)")
+    return review
+
+
 def _extractor(args: argparse.Namespace) -> Any:
+    review = _review_file(args)
     if not getattr(args, "extract", None) and not getattr(args, "heal", None):
         return None
     if getattr(args, "heal", None):
         from .extraction.healing import HealingExtractor
 
-        return HealingExtractor(args.heal, args.extract, review=args.review, provenance=args.provenance,
-                                model=_model(args))  # fmt: skip
+        return HealingExtractor(args.heal, args.extract, review=review or Path(args.heal) / "review.jsonl",
+                                provenance=args.provenance, model=_model(args))  # fmt: skip
     from .extraction import Extractor
 
     return Extractor(
@@ -2916,6 +2996,20 @@ def build_parser() -> argparse.ArgumentParser:
     qual.add_argument("--json", action="store_true", help="print the report as JSON")
     qual.add_argument("--limit", type=int, metavar="N", help="only the first N records")
     qual.set_defaults(func=cmd_data_quality)
+    trace = actions.add_parser(
+        "trace",
+        help="where a record's values came from (records collected with --provenance)",
+        description="For records collected with --provenance: the page or API call, when, which extractor, the "
+        "run and the output; per field how it was read, what else was found, and what the pipeline did to it.",
+    )
+    trace.add_argument("input", metavar="INPUT")
+    trace.add_argument("field", nargs="*", metavar="FIELD", help="only these fields (default: every field)")
+    trace.add_argument(
+        "--where", action="append", metavar="FIELD=VALUE", help="the record(s) with this value (repeatable: all)"
+    )
+    trace.add_argument("--limit", type=int, default=5, metavar="N", help="records to show (default 5)")
+    trace.add_argument("--json", action="store_true", help="print the record(s), provenance included, as JSON")
+    trace.set_defaults(func=cmd_data_trace)
     ent = actions.add_parser("entities", help="find which names are the same company, brand, product, person or place")
     ent.add_argument("input", metavar="INPUT")
     ent.add_argument("--field", required=True, metavar="FIELD", help="the field holding the names (dotted paths work)")
@@ -3141,6 +3235,14 @@ def build_parser() -> argparse.ArgumentParser:
         "(by default the plan collects from it)",
     )
     gp.add_argument("--timeout", type=float, default=20, metavar="SEC", help="per request (default 20)")
+    gp.add_argument("--provenance", action="store_true", help="add where each value came from to the records")
+    gp.add_argument(
+        "--heal",
+        metavar="DIR",
+        help="read the records with a self-healing extractor kept in DIR: selectors repaired when the site "
+        "changes, questions for you in DIR/review.jsonl (wintergrab review), a regression fixture per site",
+    )
+    gp.add_argument("--review", metavar="FILE", help="(--heal) the review queue's file, instead of DIR/review.jsonl")
     gp.add_argument("-o", "--output", metavar="FILE", help="save the records (.jsonl, .csv, .json); default stdout")
     gp.add_argument("--json", action="store_true", help="print the plan as JSON (and collect nothing)")
     gp.set_defaults(func=cmd_goal)

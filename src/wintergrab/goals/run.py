@@ -4,6 +4,7 @@
 
     result = plan.run("laptops.jsonl")      # or run_plan(plan, "laptops.jsonl")
     print(result.summary())
+    result = plan.run("laptops.jsonl", provenance=True, heal="laptops.extractor")   # the whole loop
 
 Each site's :class:`GoalSpider` follows its :class:`~wintergrab.goals.plan.SitePlan`:
 the API the site's pages call when the plan found one (:mod:`wintergrab.goals.api`),
@@ -19,28 +20,41 @@ browser when the plan says so, record pages are fetched before more listing
 pages, and the crawl stops at the goal's limit. The crawl learns as it goes
 (:mod:`wintergrab.spider.optimizer`): URL patterns that give nothing are
 skipped, and query parameters that change nothing are dropped.
+
+With ``provenance=True`` every record says where each value came from. With ``heal=DIR`` the records are
+read by a self-healing extractor kept in that directory (:mod:`wintergrab.extraction.healing`): the
+schema's selectors are repaired when the site changes, what it cannot decide and the values it found with
+little confidence are questions for a person in its review queue, and the first complete record of each
+site is kept as a regression fixture, so the whole loop of a goal (collect, keep provenance, notice a
+change, repair or ask, test) is one run, repeated.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from ..data.pipeline import Deduplicate, Filter, Pipeline
 from ..data.schema import Schema
-from ..errors import RobotsPolicyError, describe
+from ..errors import ConfigurationError, RobotsPolicyError, describe
 from ..extraction import Extractor
+from ..extraction.healing import HealingExtractor
+from ..extraction.review import ReviewQueue
 from ..fetchers.resources import registrable_domain
 from ..fetchers.response import Response
 from ..fetchers.strategy import FetchStrategy
 from ..intel.classify import classify_page
 from ..request import Request
 from ..spider import CrawlResult, Spider
+from ..spider.exporters import output_failures
 from ..utils import host_of
 from .api import MAX_API_PAGES, ApiSource, next_page, records_of, total_of
 from .goal import Goal
@@ -72,6 +86,15 @@ class GoalSpider(Spider):
         schema: What records are read with (default: the goal's fields).
         keep_pages: Keep the record pages fetched (:attr:`pages`).
         use_api: Ask the API a plan found (``False``: read the pages).
+        provenance: Records say where each value came from (``_provenance``: for a page's record, the
+            extractor's evidence per field; for an API's, the call, its page and the field each value was
+            read from).
+        heal: A directory: records are read by a :class:`~wintergrab.extraction.healing.HealingExtractor`
+            kept there. It repairs the schema's selectors when the site changes, puts what it cannot decide
+            and the values it found with little confidence to a person (``review``), and the first complete
+            record of each site is kept there as a regression fixture (``wintergrab heal DIR --check``).
+        review: With ``heal``: the review queue (a :class:`~wintergrab.extraction.review.ReviewQueue` or
+            its file; by default ``review.jsonl`` in the extractor's directory).
         settings: More :class:`~wintergrab.Spider` settings.
     """
 
@@ -86,6 +109,9 @@ class GoalSpider(Spider):
         schema: Schema | None = None,
         keep_pages: bool = False,
         use_api: bool = True,
+        provenance: bool = False,
+        heal: str | os.PathLike[str] | None = None,
+        review: ReviewQueue | str | os.PathLike[str] | None = None,
         **settings: Any,
     ) -> None:
         self.goal = goal
@@ -103,7 +129,24 @@ class GoalSpider(Spider):
         # and the hosts of the APIs, which may be elsewhere (api.shop-cdn.example)
         settings.setdefault("allowed_domains", sorted({*self.plans, *(host_of(a.url) for a in self.apis.values())}))
         super().__init__(**settings)
-        self.extractor = Extractor(schema if schema is not None else goal.schema())
+        self.provenance = provenance
+        read_with = schema if schema is not None else goal.schema()
+        #: The self-healing extractor's directory, with ``heal``.
+        self.heal = Path(heal) if heal is not None else None
+        self.extractor: Extractor | HealingExtractor
+        if self.heal is not None:
+            queue = review if review is not None else self.heal / "review.jsonl"
+            self.extractor = HealingExtractor(self.heal, read_with, review=queue, provenance=provenance)
+        elif review is not None:
+            raise ConfigurationError("review needs heal: the review queue is a self-healing extractor's", key="review")
+        else:
+            self.extractor = Extractor(read_with, provenance=provenance)
+        #: Regression fixtures kept in this run (one per site, with ``heal``).
+        self.fixtures_kept = 0
+        self._fixture_sites: set[str] = set()
+        if isinstance(self.extractor, HealingExtractor):
+            fixtures = self.extractor.versions.fixtures()
+            self._fixture_sites = {registrable_domain(host_of(f.url)) for f in fixtures if f.by == "goal"}
         self.identity = next((f for f in goal.fields if f in ("name", "title")), goal.fields[0])
         #: Record pages where the record's name (or title) was not found.
         self.incomplete = 0
@@ -121,6 +164,16 @@ class GoalSpider(Spider):
         #: What happened to an API that failed or stopped early.
         self.api_notes: list[str] = []
         self._api_asked: set[str] = set()
+
+    @property
+    def healer(self) -> HealingExtractor | None:
+        """The self-healing extractor (with ``heal``)."""
+        return self.extractor if isinstance(self.extractor, HealingExtractor) else None
+
+    def on_close(self, result: CrawlResult) -> None:
+        """A self-healing extractor keeps what it learned for the next run."""
+        if isinstance(self.extractor, HealingExtractor):
+            self.extractor.close()
 
     # -- the APIs ------------------------------------------------------------------------------ #
     def start_requests(self) -> Iterator[Request | str]:
@@ -170,6 +223,8 @@ class GoalSpider(Spider):
                 self.api_incomplete += 1
                 continue
             self.api_records += 1
+            if self.provenance:
+                record["_provenance"] = self._api_provenance(source, asked, number)
             yield record
         following = next_page(source, asked, body, answer, len(records))
         if following is None:
@@ -182,6 +237,13 @@ class GoalSpider(Spider):
             self.api_notes.append(f"{self.plans[site].site}: its API gave page {number + 1} as one already read")
             return
         yield self._api_request(site, url, next_body, number + 1)
+
+    def _api_provenance(self, source: ApiSource, url: str, page: int) -> dict[str, Any]:
+        """Where an API record's values came from: the call, its page, and the field each value was read from
+        (as a page's record says the page and the evidence per field)."""
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")  # (the answer was just received)
+        api = {"method": source.method, "page": page, "records": source.path, "fields": dict(source.fields)}
+        return {"url": url, "fetched_at": stamp, "extractor": self.extractor.name, "api": api}
 
     def api_failed(self, request: Request, error: BaseException) -> Any:
         """An API request that failed: a refusal is reported; another failure on the first page leaves the site
@@ -243,6 +305,14 @@ class GoalSpider(Spider):
             return
         if not data.get("url"):
             data["url"] = response.url
+        healer = self.healer
+        if healer is not None:
+            site = registrable_domain(host_of(response.url))
+            if site not in self._fixture_sites:  # a site's first complete record: what later versions must read
+                values = {k: v for k, v in record.data.items() if not k.startswith("_") and v not in (None, "", [], {})}
+                healer.versions.add_fixture(response.url, response.body, values, by="goal")
+                self._fixture_sites.add(site)
+                self.fixtures_kept += 1
         yield data
 
     def parse(self, response: Response) -> Any:
@@ -279,11 +349,17 @@ class GoalResult:
     pages: list[Response] = field(default_factory=list)
     #: What happened to an API that failed or stopped early.
     notes: list[str] = field(default_factory=list)
+    #: With ``heal``: the self-healing extractor's directory, its active version, and its review queue's file.
+    extractor: str | None = None
+    extractor_version: int | None = None
+    review: str | None = None
 
     def summary(self) -> str:
         """The records, the fields they have, and what was left out and why."""
         c = self.counts
         lines = [f"{c['records']:,} record(s)" + (f" -> {self.output}" if self.output else "")]
+        if c["export_errors"]:
+            lines.append(output_failures(c["export_errors"], c["not_written"], self.output or "-"))
         if c["records"] and self.found:
             share = ", ".join(f"{f} {n / c['records']:.0%}" for f, n in self.found.items())
             lines.append(f"fields found: {share}")
@@ -306,6 +382,15 @@ class GoalResult:
             + (f", {c['browser_pages']:,} in a browser" if c["browser_pages"] else "")
             + f", {c['errors']:,} error(s)"
         )
+        if self.extractor:
+            healing = f"self-healing extractor {self.extractor}: version {self.extractor_version}"
+            if c["repairs"]:
+                healing += f", {c['repairs']:,} repair(s) this run"
+            if c["fixtures"]:
+                healing += f", {c['fixtures']:,} regression fixture(s) kept"
+            lines.append(healing)
+        if c["questions"]:
+            lines.append(f"{c['questions']:,} question(s) waiting for you: wintergrab review {self.review}")
         lines.extend(f"note: {note}" for note in self.notes)
         return "\n".join(lines)
 
@@ -320,6 +405,9 @@ def run_plan(
     use_api: bool = True,
     log_level: str | None = "INFO",
     progress: bool | None = None,
+    provenance: bool = False,
+    heal: str | os.PathLike[str] | None = None,
+    review: ReviewQueue | str | os.PathLike[str] | None = None,
     **settings: Any,
 ) -> GoalResult:
     """Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
@@ -331,6 +419,11 @@ def run_plan(
         keep_items: Keep the records in memory (``result.records``); by default when there is no ``output``.
         keep_pages: Keep the record pages fetched (``result.pages``).
         use_api: Collect from the API the plan found, where it found one (``False``: read the pages).
+        provenance: Records say where each value came from (``_provenance``).
+        heal: A directory for a self-healing extractor (see :class:`GoalSpider`): selectors repaired when
+            the site changes, questions for a person in its review queue, a regression fixture per site.
+            ``result.summary()`` says what it did; ``result.counts``: ``repairs``, ``questions``, ``fixtures``.
+        review: With ``heal``: the review queue's file (by default ``review.jsonl`` in the directory).
         settings: More :class:`~wintergrab.Spider` settings (``concurrency``, ``cache``, ``obey_robots_txt``...);
             ``optimize=False`` fetches every page the plan leads to (see :mod:`wintergrab.spider.optimizer`).
     """
@@ -368,12 +461,16 @@ def run_plan(
             options.setdefault("history", str(Path(".wintergrab") / f"{goal.kind.name}.history"))
     if goal.limit:
         options.setdefault("max_items", goal.limit)
+    started = time.time()
     spider = GoalSpider(
         goal,
         sites,
         schema=plan.extraction_schema() if plan.schema is not None else None,
         keep_pages=keep_pages,
         use_api=use_api,
+        provenance=provenance,
+        heal=heal,
+        review=review,
         output=output,
         keep_items=keep,
         max_pages=max_pages,
@@ -391,11 +488,29 @@ def run_plan(
     counts["pages"] = int(crawl.stats.get("pages", 0))
     counts["browser_pages"] = int(crawl.stats.get("browser_pages", 0))
     counts["errors"] = int(crawl.stats.get("errors", 0))
+    counts["export_errors"] = int(crawl.stats.get("export_errors", 0))
+    counts["not_written"] = int(crawl.stats.get("items_not_written", 0))
     counts["record_pages"] = spider.record_pages
     counts["incomplete"] = spider.incomplete
     counts["api_pages"] = spider.api_pages
     counts["api_records"] = spider.api_records
     counts["api_incomplete"] = spider.api_incomplete
+    healer = spider.healer
+    if healer is not None:
+        directory = str(healer.versions.directory)
+        result.extractor, result.extractor_version = directory, healer.versions.active_number
+        history = healer.versions.history()
+        counts["repairs"] = sum(
+            1
+            for e in history
+            if e.get("event") == "repair" and e.get("outcome") == "applied" and e.get("at", 0) >= started
+        )
+        counts["fixtures"] = spider.fixtures_kept
+        if healer.review is not None:
+            result.review = str(healer.review.path)
+            counts["questions"] = sum(
+                1 for item in healer.review.pending() if item.details.get("extractor") == directory
+            )
     result.notes = list(spider.api_notes)
     cut_short = crawl.status != "finished" or bool(goal.limit and counts["records"] >= goal.limit)
     for site, total in spider.api_total.items():

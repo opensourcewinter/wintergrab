@@ -95,8 +95,12 @@ steam wand", "remote").
 `plan_goal(goal)` surveys each site: robots.txt, the sitemaps, and 30
 pages. Those are the start page, pages spread across the sitemaps, and the
 pages their links lead to. Pages in the part of the site the goal names come
-first, then pages that look like the goal's records, then their listings. It
-learns from the sample:
+first, then pages that look like the goal's records, then their listings;
+and a few pages of each URL pattern come before more of any one pattern, so
+a site that lists fifty categories before its products still has product
+pages in the sample; the records a listing lists, and more pages of a
+pattern once a sampled page of it holds one of the goal's records, come
+before the other patterns' next turn. It learns from the sample:
 
 - which pages hold the records: classified as the kind's pages (product,
   article, job...), or, for pages that list nothing, giving a record with its
@@ -123,7 +127,12 @@ CPU, storage) rest on the sample: its latency, page sizes, extraction time
 and the share of records meeting the conditions, robots.txt's crawl delay,
 and the spider's concurrency. `--explain` (or `plan.explain()`) prints what
 each rests on. Pages that need a browser are assumed to take 2 s each,
-eight at a time: that one is not measured.
+eight at a time: that one is not measured. When none of the sampled records
+meets the conditions, the plan does not promise none: it says "few if any"
+and the most the sample allows (a share never seen in n records is under
+3/n, the rule of three; `Estimate.records_at_most`). A `--max-pages` under
+the pages the plan needs is shown under the estimates, with the records it
+leaves, and the confirmation below counts the requests the crawl will make.
 
 A plan is JSON: save it, read it, edit it (the patterns, the start URLs,
 the conditions), and run it later:
@@ -214,6 +223,46 @@ When the API does not work out:
 
 `--no-api` reads the pages instead (`plan_goal(goal, api=False)`,
 `plan.run(use_api=False)`, `wg.plan(..., api=False)`).
+
+## The whole loop
+
+A goal is rarely collected once. Run with `--provenance --heal DIR`, a plan
+is the whole loop in one command, repeated on a schedule or by hand:
+
+```bash
+wintergrab goal --plan shop.plan.json --yes -o shop.jsonl --provenance --heal shop.extractor
+```
+
+- **Provenance.** Every record carries `_provenance`: for a record read
+  from a page, the page, when it was fetched, the extractor, and per field
+  the method, the confidence and the evidence
+  ([extraction](extraction.md#provenance)); for a record from the site's
+  API, the call, its page, and the field of the answer each value was read
+  from.
+- **Healing.** The records are read by a
+  [self-healing extractor](healing.md) kept in `DIR`: the plan's schema is
+  its first version, and the fields read with selectors (a
+  [generated scraper](generate.md)'s, or a schema of your own; the goal's
+  own fields need none) are watched. When the site changes and a field's
+  selectors stop matching, a replacement is found, tested and applied, or
+  put to you.
+- **Questions.** What the extractor cannot decide, and values it found
+  with little confidence, wait in `DIR/review.jsonl` (`--review FILE` puts
+  them elsewhere): `wintergrab review DIR/review.jsonl` lists them, your
+  decisions are applied the next time the plan runs. The summary says how
+  many questions wait.
+- **Fixtures.** The first complete record of each site is kept in `DIR` as
+  a regression fixture: the page and the values read from it. Every repair
+  is tested against the fixtures before it is applied, and `wintergrab heal
+  DIR --check` runs them against the active version at any time. Values
+  you confirm in the review queue become fixtures too.
+
+The summary of such a run ends with the extractor's version, the repairs
+made, the fixtures kept and the questions waiting. In code:
+`plan.run(output, provenance=True, heal="shop.extractor")`, then
+`result.counts["repairs"]`, `["questions"]`, `["fixtures"]`, and
+`result.review` (the queue's file). Add `--record` to keep the pages, and a
+goal that "tracks changes" keeps the pages' [history](history.md) as well.
 
 ## In code
 

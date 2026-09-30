@@ -205,6 +205,12 @@ class Spider:
     #: start requests with a priority of at least ``budget_soft_priority``.
     budget_soft_limit: float | None = None
     budget_soft_priority: int = 1
+    #: Pressure that holds new requests while others are in flight (``stats["held/bandwidth"]``,
+    #: ``held/memory``, ``held/cpu``): bytes downloaded per second over the last three seconds, the process's
+    #: resident memory (bytes), and the share of one core it used over the last three seconds.
+    max_bytes_per_second: float | None = None
+    hold_at_memory: int | None = None
+    hold_at_cpu: float | None = None
 
     # -- queue order -------------------------------------------------------- #
     #: ``"bfs"`` (breadth-first: oldest first among equal priorities) or ``"dfs"`` (depth-first).
@@ -285,6 +291,14 @@ class Spider:
     resource_filter: Any = None
     #: Drop requests for URLs already seen.
     dedupe: bool = True
+    #: Skip pages whose content was processed already under another URL: ``True`` (or ``"exact"``) the same
+    #: bytes, ``"near"`` nearly the same visible text (a SimHash within 3 bits). Counted in
+    #: ``stats["duplicate_pages"]``; the digests are kept in memory, 91 bytes a page (measured).
+    skip_duplicate_pages: bool | str = False
+    #: A page that names a canonical URL (``<link rel="canonical">``) counts as that page: it is skipped when
+    #: the canonical URL was seen already (``stats["canonical_skipped"]``), else it stands for it and the
+    #: canonical URL is not fetched.
+    canonical_dedupe: bool = False
     #: ``"memory"`` (fastest) or ``"disk"``: an SQLite queue + Bloom filter that keeps
     #: memory flat for crawls of millions of URLs and survives crashes (needs ``crawl_dir``);
     #: or a ``postgresql://`` URL: a queue several processes share (see :mod:`wintergrab.spider.shared`).

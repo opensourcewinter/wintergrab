@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 ### Responsible access (breaking)
 
@@ -55,6 +55,32 @@ an error that says so, not a setting silently ignored
   `Response.blocked_resources` reports what was blocked.
 - Spider settings can now hold callable values (a URL normalizer, a
   priority function); only methods are rejected as overrides.
+- **More inputs to the throttle** (§13). `RateLimit` headers (the IETF
+  `RateLimit: limit=, remaining=, reset=` and `RateLimit-*` fields, or
+  `X-RateLimit-*`; `wintergrab.utils.parse_rate_limit`) are honoured: a
+  used-up window pauses the domain until it resets (`stats["rate_limited"]`,
+  a `throttle_backoff` event), a low remainder spaces requests so the window
+  lasts. A domain whose last responses mostly failed (at least
+  `error_rate_backoff`, 0.5, of ten or more) has its concurrency halved.
+  `max_bytes_per_second`, `hold_at_memory` and `hold_at_cpu` hold new
+  requests while others are in flight when the download rate, the resident
+  memory or the CPU share is above them (`stats["held/..."]`). The domain
+  state has `error_rate` and `rate_limit`; `metrics.recent()` gives the
+  last seconds' download rate and CPU share.
+- **Live coverage and confidence.** `spider.metrics()` (and the run's
+  `metrics.json`, the dashboard's tiles) has `coverage`, the share of the
+  URLs known so far that were fetched, and `confidence`, the mean
+  `_confidence` of the last 1,024 records. `wintergrab dashboard` serves
+  `/metrics`: the running crawls' metrics in the Prometheus text format,
+  each labelled with its run (`to_prometheus(..., labels=)`).
+- **The same page under other URLs, once.** `skip_duplicate_pages = True`
+  skips a fetched page whose bytes were processed already, `"near"` one
+  whose visible text nearly was (a SimHash within 3 bits; 15 ms for a
+  25 KB page, measured); `stats["duplicate_pages"]`. `canonical_dedupe = True` makes a page that
+  names a canonical URL count as that page: skipped when the canonical URL
+  was seen, else standing for it, so the canonical URL is not fetched;
+  `stats["canonical_skipped"]`. `wintergrab.parser.structured.canonical_url`
+  reads the link.
 
 ### Extension points, budgets and observability
 
@@ -141,7 +167,30 @@ an error that says so, not a setting silently ignored
   pipeline about 4,200 records/s, near-duplicate checks 158 µs per record,
   expressions 1 µs.
 
+- `Deduplicator(near="simhash", distance=3)` (the `dedupe` stage too) finds
+  near-duplicate records by SimHash as well as by MinHash.
+- **Provenance you can trace.** A crawl stamps every record that carries
+  `_provenance` with `run` (its id in the run registry) and `output`; a
+  pipeline records under each field's `transforms` what every stage did to
+  it (the value before, the old name of a renamed field, whose evidence
+  follows it, added, dropped); records without provenance pay nothing.
+  `wintergrab data trace INPUT [FIELD...] --where FIELD=VALUE` (or
+  `describe_provenance(record)` and `find_records(path, where)` from
+  `wintergrab.data`) tells where a value came from: the page or API call,
+  when, the extractor, the run, the output, how it was read, what else was
+  found, and how it was changed.
+
 ### Extraction engine (`wintergrab.extraction`)
+
+- **RDFa.** `structured_data()["rdfa"]` reads RDFa (Lite, and the value
+  attributes of RDFa 1.1: `vocab`, `prefix`, `typeof`, `property`, `about`,
+  `resource`, `content`) into nested dicts of microdata's shape, terms
+  expanded with the vocabulary in effect and the prefixes declared (the
+  common ones are known); a property of another vocabulary keeps its CURIE
+  (`dc:creator`). The extractor reads it like JSON-LD and microdata
+  (method `rdfa`, `sources=["rdfa:Product.offers.price"]`), page
+  classification and the history's `types` count its types, and
+  `wintergrab get --sources` lists it.
 
 - `Extractor(schema).extract(page)` finds every field of a data schema
   without selectors: schema.org JSON-LD and microdata, OpenGraph/Twitter/meta
@@ -283,6 +332,18 @@ an error that says so, not a setting silently ignored
 - `plan.run(output)` collects the records with one spider: extraction,
   conditions and de-duplication as a data pipeline, adaptive fetching when
   some pages need JavaScript, the goal's limit, history when watching.
+- **The whole loop in one run**: `plan.run(output, provenance=True,
+  heal="DIR")` (`wintergrab goal --provenance --heal DIR [--review FILE]`).
+  Every record says where each value came from (`_provenance`; a record
+  from the site's API names the call, its page and the field each value was
+  read from). The records are read by a self-healing extractor kept in DIR:
+  the plan's schema is its first version, selectors are repaired when the
+  site changes, what it cannot decide and low-confidence values are
+  questions in `DIR/review.jsonl`, and the first complete record of each
+  site is kept as a regression fixture (`wintergrab heal DIR --check`). The
+  summary says the version, the repairs, the fixtures and the questions
+  waiting; `result.counts["repairs"]`, `["questions"]`, `["fixtures"]`.
+  `review` without `heal` is a `ConfigurationError`.
 - `wintergrab goal "..."` shows how the request was understood and the plan,
   asks before big crawls (`--yes`), and writes the records; `--plan-only`,
   `--save-plan`, `--plan`, `--explain`, `--json`.
@@ -337,7 +398,11 @@ an error that says so, not a setting silently ignored
   FIELD` (why a field is what it is on a page), `wintergrab heal DIR` (versions,
   health, `--log`, `--diff`, `--rollback`, `--activate`, `--import`,
   `--check`), and `wintergrab review FILE` (`--accept`, `--choice`,
-  `--reject`, `--correct`, `--note`).
+  `--reject`, `--correct`, `--note`). `--heal DIR` without `--review` keeps
+  the questions in `DIR/review.jsonl` (before, they were not asked);
+  `--review` without `--heal` is an error, not an option ignored.
+  `ExtractorVersions.add_fixture` keeps typed values (a price) as JSON
+  holds them.
 
 ### Crawl optimization (`wintergrab.spider.optimizer`)
 
@@ -1089,6 +1154,126 @@ an error that says so, not a setting silently ignored
   `add_cookies({name: value})` (see Fixes).
 
 ### Fixes
+
+- A PostgreSQL or MySQL output whose server hung up (a restart, a
+  failover, an idle timeout) lost every item after it: the rows waiting
+  were dropped, each write after failed, and the errors were the driver's
+  own (`OperationalError`, `InterfaceError (0, '')`), not an `ExportError`
+  saying how many items were not written. The output now connects again
+  and writes the batch, or adds the column, again, once; a server that does
+  not answer is an `ExportError` that says so and how many items. Tried with
+  the server ending the connection (`pg_terminate_backend`, `KILL`) between
+  writes, before a new column and before a flush: every item written.
+
+- An output that failed anywhere but on an item's write stopped the crawl or
+  its shutdown: at the flush a crawl with a disk or shared frontier makes
+  every second, at a checkpoint (the crawl ended with the error), or at its
+  close (the sessions, the cache and the rest of the shutdown were skipped).
+  Every write, flush and close of the output now goes one way: the error is
+  logged, `export_errors` and `items_not_written` (the items it lost, when
+  it says how many: `ExportError.items`) count it, and the crawl goes on.
+  `wintergrab crawl` and `wintergrab goal` say how many items were not
+  written, and exit with status 1. A flush that failed is no longer tried
+  again with each item after it. The output is closed before the crawl's
+  state and summary are saved, so a close that fails is in their counts too
+  (before, a paused crawl resumed without it).
+
+- **The survey spreads its sample across URL patterns.** On
+  books.toscrape.com, whose pages list fifty categories before their books,
+  a 15-page sample was the home page and 14 category pages: the URL
+  classifier saw every URL there as a category, and the goal's word "books"
+  matched every URL through the host name. The scraper generator then found
+  no book page and gave up (found by the live tests). The survey now follows
+  a few links of each URL pattern before more of any one (`survey_site(...,
+  per_pattern=)`, a fifth of the sample by default), and the goal's words
+  are looked for in the path, not the host. The test site's books section
+  has a category sidebar now, as the real one does.
+- **The cards of a page's other records are not its own values.** A book
+  page on books.toscrape.com lists six other books ("Products you recently
+  viewed") with their prices and ratings, and so do most shops ("customers
+  also bought"). The extractor took those as candidates for the page's own
+  price and rating: confidence fell to 0.35, a rating could be dropped, and
+  six of fourteen records raised questions for the reviewer (found by the
+  owner's sandbox run). The cards of a page's lists of repeated records (with
+  links, not holding the page's `<h1>`) are left out now, for every field
+  and whatever the list is called, by the DOM heuristics and the text
+  patterns alike; a model is not shown them (`PageContext.other_records`,
+  `Selector.markdown(skip=)`), the selector learner ranks matches inside them
+  last (a generated scraper read a related book's availability as the
+  page's), and a card is never taken for the page's main content. In the
+  visible text an amount of zero ("Tax £0.00") is no price: the real book
+  pages' information table had dragged the page's own price to 0.69, under
+  the confidence a generated scraper learns from, so no price selector was
+  learned. The page classifier reads such a page as a product too: one
+  price in the title's block says what the page is about, and so does the
+  page's own availability line next to it, however many prices the cards
+  below show (before, "many prices" made it a category, and the planner then
+  saw one product page in fifteen sampled); a related card's cart button is
+  not the page's, and a section name in the URL (`/catalogue/`, `/shop/`) is
+  weaker evidence of a listing than `/category/`. The test site's book pages
+  carry the cards and the information table the real ones have.
+- **The survey samples more of the pages the goal wants.** The links of a
+  page's record cards (what a listing lists) and, once a sampled page is one
+  of the goal's record pages, the links of its URL pattern are followed
+  before the other patterns' next turn, ranked with the best of the listings
+  (`survey_site(wanted=)`), so a category's own pagination found later does
+  not take their place; a page the classifier is unsure about says nothing
+  about its pattern. A 15-page sample of books.toscrape.com holds ten book
+  pages instead of one, and the plan's estimates rest on them.
+- **A plan starts from a page that exists.** The section a goal is about may
+  have no page of its own (`/catalogue/category/books` on books.toscrape.com
+  answers 403, its categories live below it): the crawl starts from a
+  sampled page under the section now, never from a URL made up from the path.
+- **A product's long description is no article.** books.toscrape.com keeps
+  a book's description, its information table and its "recently viewed"
+  cards in one `<article class="product_page">`. Past 1,500 characters the
+  classifier counted that as an article's text (3.0 against the book's 4.0,
+  confidence 0.16): in the owner's fourth sandbox run eight of the ten books
+  sampled were unsure, seven of them read as listings of their cards, and the
+  plan counted three books and expected "about 0" rated 4 or more (the crawl
+  found 21 in 54). A page that offers one thing (its own price and a stock
+  line in the title's block, a block shorter than an article) describes it at
+  length: "long article text" and "many paragraphs" do not count against it,
+  and the cards of the page's other records are no part of its article.
+- **A description is not its section's title.** On books.toscrape.com
+  `<div id="product_description"><h2>Product Description</h2></div>` comes
+  before the `<p>` that holds the description, and the DOM heuristics read
+  "Product Description" on every book page; the scraper generator learned
+  `#product_description` from it. An element marked as a description that
+  holds nothing but a heading titles the text after it now. The selector
+  learner does not look for texts longer than 300 characters: it says so,
+  and a generated scraper reads them from each page's own evidence. The test
+  site's book pages have the real ones' description, as long as many of
+  theirs.
+- **Estimates that say what the sample cannot.** A plan whose sampled
+  records all failed its conditions said "records: about 0" (three books on
+  books.toscrape.com, none rated 4 or more: the crawl found 21). It says
+  "few if any" now, with the most the sample allows by the rule of three
+  (`Estimate.records_at_most`). `wintergrab goal --max-pages` under the pages
+  the plan needs is shown with the records it leaves, and the confirmation
+  asked before a big crawl counts the requests the crawl will make.
+- **The DuckDB output waits for a held file on Windows too.** A file another
+  program has open is waited for a few seconds; on Windows the system's
+  message for it ("being used by another process") was not read as a hold,
+  so a crawl starting while a reader had the file open failed at once.
+- The disk frontier's volume test checks that the cost per request stays
+  flat over 200,000 requests, in place of a wall-clock bound a slow shared
+  CI runner cannot meet (the Windows job took 173 s for what takes 23 s on a
+  developer machine).
+- **A page's menus are not among its data sources.** `data_sources()`
+  (`wg.sources()`, `wintergrab get --sources`) listed every repeated group
+  `detect_records()` found as HTML records, and ranked them by records times
+  fields: a sidebar of twelve category links outranked four product cards as
+  the richest source. It lists the groups `auto_extract()` would trust now
+  (`RecordGroup.convincing`); menus, breadcrumbs and pagers score far below
+  that.
+- `mypy` passes on Windows and macOS too: the two uses of the Unix-only
+  `resource` module are behind a platform check the type checker
+  understands, and CI checks all three platforms' stubs.
+- PostgreSQL connections (outputs, and the shared frontier) give up after 10
+  seconds unless the URL says `connect_timeout` or `PGCONNECT_TIMEOUT` is
+  set. libpq's own default waited more than a minute for a host that had
+  vanished (measured), and the crawl waited with it.
 
 - A browser that crashed, or that the system killed, was never started
   again: every page after it failed ("Target page, context or browser has

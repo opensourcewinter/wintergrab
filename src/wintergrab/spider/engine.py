@@ -15,6 +15,7 @@ from collections.abc import AsyncIterable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..data.similarity import SimHashIndex, simhash
 from ..errors import (
     BrowserNotAvailable,
     CheckpointError,
@@ -33,12 +34,21 @@ from ..fetchers.cache import CacheMiss, HTTPCache
 from ..fetchers.http import PROXY_FAILURE_STATUSES, AsyncFetcher
 from ..fetchers.response import Response
 from ..fetchers.strategy import FetchStrategy
+from ..parser.structured import canonical_url
 from ..proxy import ProxyRotator, proxy_label
 from ..redact import redact_url
 from ..request import Request
 from ..runs import RunRecorder, RunRegistry
 from ..urls import URLNormalizer, URLRules
-from ..utils import configure_logging, domain_matches, ensure_scheme, host_of, maybe_await, parse_retry_after
+from ..utils import (
+    configure_logging,
+    domain_matches,
+    ensure_scheme,
+    host_of,
+    maybe_await,
+    parse_rate_limit,
+    parse_retry_after,
+)
 from ..webhooks import Webhook
 from .budget import BudgetMonitor, BudgetStatus
 from .checkpoint import Checkpoint
@@ -46,7 +56,7 @@ from .deadletters import DeadLetterQueue
 from .exporters import Exporter, open_exporter, to_dict
 from .failures import FailureTracker
 from .frontier import DiskScheduler
-from .metrics import CrawlMetrics
+from .metrics import CrawlMetrics, current_rss
 from .middleware import DropItem, IgnoreRequest
 from .optimizer import CrawlOptimizer
 from .progress import ProgressDisplay
@@ -61,6 +71,7 @@ if TYPE_CHECKING:
     from .spider import Spider
 
 log = logging.getLogger("wintergrab.spider")
+_DUPLICATE_TEXT = 50_000  # characters of visible text a near-duplicate fingerprint reads
 
 PUSHBACK_STATUSES = frozenset({429, 503})
 _HANDLED: Any = object()  # a middleware dealt with the request itself (dropped or replaced it)
@@ -117,6 +128,14 @@ class Engine:
             raise ConfigurationError(f"must be 'bfs' or 'dfs', not {spider.crawl_order!r}", key="crawl_order")
         self._lifo = CRAWL_ORDERS[order]
         self.scheduler: Scheduler | DiskScheduler | SharedScheduler = Scheduler(dedupe=spider.dedupe, lifo=self._lifo)
+        if spider.skip_duplicate_pages not in (False, True, "exact", "near"):
+            raise ConfigurationError(
+                f"skip_duplicate_pages: True, 'exact' or 'near', not {spider.skip_duplicate_pages!r}",
+                key="skip_duplicate_pages",
+            )
+        #: Digests of the pages processed (``skip_duplicate_pages``), and their text fingerprints (``"near"``).
+        self._page_digests: set[bytes] = set()
+        self._page_index = SimHashIndex(3) if spider.skip_duplicate_pages == "near" else None
         self._persistent = False  # True with the disk frontier, or a shared one
         self.throttle: AutoThrottle = spider.throttle or AutoThrottle(
             enabled=spider.autothrottle,
@@ -393,10 +412,33 @@ class Engine:
                     timer.cancel()
             self._wakeup.clear()
 
+    def _pressure(self) -> str | None:
+        """What holds new requests for the moment: ``"bandwidth"``, ``"memory"`` or ``"cpu"`` over the spider's
+        limit, else ``None``. Only while requests are in flight, which will free what is held."""
+        spider = self.spider
+        if not self._inflight:
+            return None
+        if spider.hold_at_memory is not None:
+            rss = current_rss()
+            if rss is not None and rss >= spider.hold_at_memory:
+                return "memory"
+        if spider.max_bytes_per_second is not None or spider.hold_at_cpu is not None:
+            recent = self.metrics.recent()
+            rate, cpu = recent["bytes_per_second"], recent["cpu_fraction"]
+            if spider.max_bytes_per_second is not None and rate is not None and rate > spider.max_bytes_per_second:
+                return "bandwidth"
+            if spider.hold_at_cpu is not None and cpu is not None and cpu >= spider.hold_at_cpu:
+                return "cpu"
+        return None
+
     def _dispatch(self) -> float | None:
         spider = self.spider
         now = time.monotonic()
         wait: float | None = None
+        held = self._pressure()
+        if held is not None:
+            self.stats.inc(f"held/{held}")
+            return 0.25
         while len(self._inflight) < spider.concurrency:
             if self.budget.active and self._counter_budget_hit():
                 break
@@ -765,6 +807,11 @@ class Engine:
             len(self.scheduler) + len(self._delayed) + len(self._inflight) if self._persistent else len(pending)
         )
         keep = status in ("paused", "limit") or self._fatal is not None
+        # The output first: closed, so what it took is on disk before the queue's state says so, and what it did
+        # not take (a flush or the close that failed) is in the stats the state and the summary keep.
+        if self.exporter is not None:
+            exporter, self.exporter = self.exporter, None
+            self._to_output(exporter.close)
         if self.checkpoint is not None and self._state_ready:
             try:
                 if keep and pending_count:
@@ -801,8 +848,6 @@ class Engine:
                 for suffix in ("", "-wal", "-shm"):
                     path.with_name(path.name + suffix).unlink(missing_ok=True)
         await self._close_pipelines()
-        if self.exporter is not None:
-            self.exporter.close()
         restarts = sum(int(getattr(self.sessions.get(name), "restarts", 0) or 0) for name in self.sessions)
         if restarts:  # (a browser that crashed, or was killed, and was started again)
             self.stats["browser_restarts"] = restarts
@@ -937,10 +982,24 @@ class Engine:
         if isinstance(self.scheduler, (DiskScheduler, SharedScheduler)):
             self.scheduler.ack(request)
 
+    def _to_output(self, action: Callable[[], None], *, item: bool = False) -> None:
+        """``action`` on the output (a write, a flush, its close): an error is counted and logged, and the crawl goes
+        on. ``items_not_written`` counts the items the error says it left unwritten (an item's own write: that one)."""
+        try:
+            action()
+        except Exception as exc:
+            lost = getattr(exc, "items", None)
+            lost = 1 if lost is None and item else lost
+            self.stats.inc("export_errors")
+            if lost:
+                self.stats.inc("items_not_written", lost)
+            output = redact_url(str(self.spider.output))
+            log.error("could not write %s to %s: %s", "item" if item else "items", output, describe(exc))
+
     def _save_state(self, pending: list[Request]) -> None:
         assert self.checkpoint is not None
         if self.exporter is not None:
-            self.exporter.flush()  # items on disk must match the saved queue
+            self._to_output(self.exporter.flush)  # items on disk must match the saved queue
         state: dict[str, Any] = {
             "spider": self.spider.name,
             "stats": dict(self.stats),
@@ -997,7 +1056,7 @@ class Engine:
         if isinstance(self.scheduler, (DiskScheduler, SharedScheduler)) and now - self._last_commit >= 1.0:
             # Output first, then the queue: a crash may redo work, never lose it.
             if self.exporter is not None:
-                self.exporter.flush()
+                self._to_output(self.exporter.flush)
             self.scheduler.commit()  # bounds what a crash can lose to about a second of work
             self._last_commit = now
         if self.checkpoint is not None and now - self._last_checkpoint >= spider.checkpoint_interval:
@@ -1193,6 +1252,14 @@ class Engine:
             if (blocked or response.status in spider.retry_statuses) and response.cache_status is not None:
                 self._uncache(fetcher, request)  # never replay a block page or an error from the cache
             retry_after = parse_retry_after(response.headers.get("retry-after"), cap=600)
+            _limit, remaining, reset = parse_rate_limit(response.headers, cap=600)
+            if (remaining is not None or reset is not None) and self.throttle.on_rate_limit(domain, remaining, reset):
+                self.stats.inc("rate_limited")
+                log.info("%s: its rate limit is used up (RateLimit headers); waiting %.0fs", domain, reset or 0)
+                self.events.emit(
+                    "throttle_backoff", domain=domain, delay=round(slot.delay, 3), concurrency=slot.concurrency,
+                    retry_after=reset,
+                )  # fmt: skip
             if blocked or response.status in PUSHBACK_STATUSES:
                 self.throttle.on_pushback(domain, retry_after)
                 self.stats.inc("backoffs")
@@ -1235,6 +1302,8 @@ class Engine:
                 await self._give_up(request, HTTPStatusError(response, detail), quiet=response.status == 404)
                 return
             self.failures.success(domain)
+            if (spider.skip_duplicate_pages or spider.canonical_dedupe) and self._duplicate_page(request, response):
+                return
             await self._run_callback(request, response)
         except asyncio.CancelledError:
             raise
@@ -1509,6 +1578,40 @@ class Engine:
     # ------------------------------------------------------------------ #
     # callbacks and outputs
     # ------------------------------------------------------------------ #
+    def _duplicate_page(self, request: Request, response: Response) -> bool:
+        """Whether ``response`` is a page processed already under another URL: one whose canonical URL was seen
+        (``canonical_dedupe``; a page that names one not seen stands for it, and marks it seen), the same body
+        (``skip_duplicate_pages``), or nearly the same text (``"near"``)."""
+        spider = self.spider
+        if spider.canonical_dedupe and response.is_html:
+            canonical = canonical_url(response.selector.root, response.url)
+            if canonical:
+                if self.url_normalizer is not None:
+                    canonical = self.url_normalizer(canonical)
+                if canonical not in (response.url, request.url):
+                    fingerprint = Request(canonical).fingerprint()
+                    if fingerprint in self.scheduler.seen:
+                        self.stats.inc("canonical_skipped")
+                        log.debug("skipped %s: its canonical page %s was seen already", request.url, canonical)
+                        return True
+                    self.scheduler.restore_seen([fingerprint])  # this page stands for it
+        if spider.skip_duplicate_pages and response.body:
+            digest = hashlib.blake2b(response.body, digest_size=16).digest()
+            if digest in self._page_digests:
+                self.stats.inc("duplicate_pages")
+                log.debug("skipped %s: the same content was processed already", request.url)
+                return True
+            self._page_digests.add(digest)
+            if self._page_index is not None and response.is_html:
+                text = " ".join(response.get_text().split())
+                if text:
+                    same = self._page_index.find_or_add(response.url, simhash(text[:_DUPLICATE_TEXT]))
+                    if same is not None:
+                        self.stats.inc("duplicate_pages")
+                        log.debug("skipped %s: nearly the same content as %s", request.url, same)
+                        return True
+        return False
+
     async def _run_callback(self, request: Request, response: Response) -> None:
         callback = request.callback or self.spider.parse
         if isinstance(callback, str):
@@ -1775,6 +1878,13 @@ class Engine:
         self.stats.inc(f"items_dropped/{pipeline}")
         self.events.emit("item_dropped", pipeline=pipeline, reason=reason)
 
+    def _stamp(self, where: dict[str, Any]) -> None:
+        """A record's provenance says the run it was collected in and the output it went to."""
+        if self.recorder is not None and self.recorder.run is not None:
+            where.setdefault("run", self.recorder.run.id)
+        if self.spider.output:
+            where.setdefault("output", redact_url(str(self.spider.output)))
+
     def _is_duplicate_item(self, item: Any) -> bool:
         data = to_dict(item)
         if not isinstance(data, dict) or data.get(self.spider.unique_key) is None:
@@ -1799,6 +1909,12 @@ class Engine:
             processed = await self._run_pipelines(processed)
             if processed is None:
                 return None
+        if isinstance(processed, dict):
+            if isinstance(processed.get("_provenance"), dict):
+                self._stamp(processed["_provenance"])
+            confidence = processed.get("_confidence")
+            if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
+                self.metrics.observe_confidence(float(confidence))
         if spider.unique_key and self._is_duplicate_item(processed):
             self.stats.inc("items_duplicate")
             return None
@@ -1806,11 +1922,8 @@ class Engine:
         if self.recorder is not None:
             self.recorder.item(processed)
         if self.exporter is not None:
-            try:
-                self.exporter.write(processed)
-            except Exception as exc:
-                self.stats.inc("export_errors")
-                log.error("could not write item to %s: %s", redact_url(str(self.spider.output)), describe(exc))
+            exporter = self.exporter
+            self._to_output(lambda: exporter.write(processed), item=True)
             if self._output_budget:
                 exhausted = self.budget.check_output()
                 if exhausted is not None:

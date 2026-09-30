@@ -96,6 +96,13 @@ async for item in QuotesSpider().stream():  # consume items live
 item (changed or not) to keep it, or `None` to drop it. This is the place for
 cleaning, validation or saving to a database.
 
+An output that fails does not stop the crawl: a full disk, or a database that
+stopped answering, whether on an item's write, a flush, a checkpoint or its
+close. The error is logged, `stats["export_errors"]` counts it, and
+`stats["items_not_written"]` counts the items it lost, when the error says
+how many (a database's batch). `wintergrab crawl` then says how many items
+were not written, and exits with status 1.
+
 ## Sessions
 
 A session is a fetcher with its own cookies and settings. By default a spider
@@ -207,8 +214,25 @@ between requests. AutoThrottle adjusts both from what the site tells it:
 - **Push-back** (429, 503, a detected block page): concurrency halves and the
   delay doubles (at least 1 s). A `Retry-After` header pauses the domain for
   that long.
-- **Timeouts and connection errors**: the delay grows by 50%.
+- **`RateLimit` headers** (the IETF `RateLimit: limit=, remaining=, reset=`
+  and `RateLimit-*` fields, or `X-RateLimit-*`) are the site's own limit: a
+  used-up window pauses the domain until it resets
+  (`stats["rate_limited"]`, a `throttle_backoff` event), and a low remainder
+  spaces requests so that the window lasts. Honoured with `autothrottle =
+  False` too, like `Retry-After`.
+- **Timeouts and connection errors**: the delay grows by 50%; when at least
+  half of a domain's last responses failed (ten or more seen), its
+  concurrency halves too (`AutoThrottle(error_rate_backoff=0.5)`).
 - A robots.txt `Crawl-delay` becomes a floor for the delay.
+
+Three more settings hold new requests, for the whole crawl, while others
+are in flight (those will free what is short; a crawl with nothing in
+flight always starts one): `max_bytes_per_second` when the download rate
+over the last three seconds is above it, `hold_at_memory` (bytes) while the
+process's resident memory is at least that, `hold_at_cpu` (a share of one
+core, e.g. `0.9`) while the process used at least that over the last three
+seconds. `stats["held/bandwidth"]`, `held/memory` and `held/cpu` count the
+holds. For stopping outright, see [budgets](#budgets).
 
 ```python
 class Gentle(Spider):
@@ -499,6 +523,25 @@ class Shop(Spider):
 `wintergrab.url_template(url)` turns a URL into its route pattern
 (`/product/123` -> `/product/{int}`), handy for grouping pages by template.
 
+Two more settings catch the same page under different URLs once it is
+fetched, when the URL alone cannot tell:
+
+- `skip_duplicate_pages = True` skips a page whose bytes were processed
+  already; `"near"` also skips one whose visible text is nearly the same
+  (a SimHash within 3 bits of an earlier page's, as
+  [near-duplicate records](data.md#duplicates) are found). The page is
+  fetched (it counts in `pages`) but no callback runs for it, and
+  `stats["duplicate_pages"]` counts it. The digests live in memory: 91
+  bytes a page (9.1 MB for 100,000, measured). `"near"` reads each page's
+  text and fingerprints it: 1.5 ms for a 2 KB page, 15 ms for 25 KB and
+  29 ms for 132 KB (the text is cut at 50,000 characters), on one core of
+  a 4-vCPU cloud VM.
+- `canonical_dedupe = True` makes a page that names a canonical URL
+  (`<link rel="canonical">`) count as that page: when the canonical URL was
+  seen already (fetched, or queued), the page is skipped and
+  `stats["canonical_skipped"]` counts it; otherwise the page stands for it,
+  and the canonical URL is not fetched.
+
 ## robots.txt
 
 `obey_robots_txt = True` (the default) fetches each site's robots.txt once
@@ -534,6 +577,7 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `max_pages` / `max_items` / `max_depth` | `None` | Stop after this many pages / items; don't follow deeper than this. With `max_pages`, retries of pages already started still finish. |
 | `max_requests`, `max_bytes`, `max_runtime`, `max_browser_pages`, `max_errors`, `max_error_rate`, `max_memory`, `max_cpu_seconds`, `max_output_bytes` | `None` | [Budgets](#budgets). |
 | `budget_soft_limit` / `budget_soft_priority` | `None` / `1` | Past this fraction of a budget, only start requests with at least this priority. |
+| `max_bytes_per_second`, `hold_at_memory`, `hold_at_cpu` | `None` | Hold new requests while the download rate, the resident memory or the CPU share is above this ([speed control](#speed-control-autothrottle)). |
 | `crawl_order` | `"bfs"` | `"bfs"` or `"dfs"` among equal priorities. |
 | `priority_fn` | `None` | `request -> int` priority for every queued request. |
 | `run_registry` / `record` | `None` / `False` | Keep a record of each run in a workspace (`True`: `.wintergrab`), and with `record` its pages and items too, to [replay](runs.md) it without the network. `result.run_id` names it. |
@@ -557,6 +601,8 @@ wintergrab crawl my_spider.py -o items.jsonl --crawl-dir .crawl/mine -s max_page
 | `obey_robots_txt` | `True` | Respect robots.txt. |
 | `robots_user_agent` | `"*"` | User agent used to match robots.txt rules. |
 | `dedupe` | `True` | Filter already-seen URLs. |
+| `skip_duplicate_pages` | `False` | Skip pages whose content was processed already: `True` the same bytes, `"near"` nearly the same text ([which URLs get crawled](#which-urls-get-crawled)). |
+| `canonical_dedupe` | `False` | A page that names a canonical URL counts as that page: skipped when it was seen, else it stands for it. |
 | `url_normalizer` | `None` | Rewrite queued URLs to one canonical spelling (`True`, a dict of options, or a function). |
 | `url_rules` | `None` | Filter discovered links: patterns, domains, extensions, crawler traps (`True`, a dict, or `URLRules`). |
 | `network_policy` | `None` | Where requests may go: `"public"`, `"private"`, a dict, or a `NetworkPolicy`. `None` = anywhere. |

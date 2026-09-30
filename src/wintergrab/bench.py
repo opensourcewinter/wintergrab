@@ -182,6 +182,8 @@ def _cpu_seconds() -> float:
 
 def _peak_rss_mb() -> float | None:
     """The process's peak memory, where the platform says (not on Windows)."""
+    if sys.platform == "win32":  # (no resource module; the type checker knows it too)
+        return None
     try:
         import resource
     except ImportError:

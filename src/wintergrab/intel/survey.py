@@ -10,12 +10,16 @@
 ``wintergrab inspect`` prints a survey's profile; the goal planner
 (:mod:`wintergrab.goals`) starts from one. The sample is the start page, pages
 spread across the sitemaps (the ones ``prefer`` likes first) and the pages they
-link to, fetched politely: robots.txt is obeyed unless told otherwise.
+link to, a few of each URL pattern before more of any one pattern, so that a
+site's record pages are sampled however many category or tag links come first
+on its pages; and once a sampled page is what the survey looks for (``wanted``),
+more of its pattern. Fetched politely: robots.txt is obeyed unless told otherwise.
 """
 
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,6 +30,7 @@ from ..fetchers.response import Response
 from ..request import Request
 from ..sitemaps import SitemapEntry, parse_sitemap, robots_sitemaps
 from ..spider import Spider
+from ..urls import url_template
 from ..utils import ensure_scheme, host_of
 from .profile import SiteProfile, SiteProfiler
 
@@ -140,33 +145,77 @@ class _SurveySpider(Spider):
     url_rules = True  # skip media, archives and crawler traps
     #: ``prefer(url) -> score``: links worth more are followed first.
     prefer: Any = None
+    #: Links of one URL pattern (:func:`~wintergrab.url_template`) followed before the other patterns get their
+    #: turn: the sample is spread across the patterns a site has, so its record pages are among the pages sampled
+    #: however many category or tag links come first on a page. ``0``: page order alone.
+    per_pattern: int = 3
+    #: ``wanted(response) -> bool | None``: ``True``, a sampled page that is what the survey looks for; ``False``,
+    #: one that is surely not; ``None``, unsure (nothing learned). Links of a wanted page's URL pattern are free
+    #: from then on: followed before the other patterns' next turn, ranked with the best of the listings; so are
+    #: the links of a page's record cards (what a listing lists), until a page of their pattern is surely not
+    #: wanted.
+    wanted: Any = None
 
     def __init__(self, **settings: Any) -> None:
         super().__init__(**settings)
         self.kept: list[Response] = []
+        self._patterns: Counter[str] = Counter()  # URLs queued so far, by pattern
+        self._queued: set[str] = set()
+        self._wanted_patterns: set[str] = set()
+        self._unwanted_patterns: set[str] = set()
+        self._top = 0  # the best ``prefer`` priority of the links that take turns: what a free link is worth
 
-    def _request(self, url: str) -> Request:
+    def _request(self, url: str, *, spread: bool = True, listed: bool = False) -> Request:
         request = Request(url, dont_filter=False)
         if self.capture_api:
             request.options["capture"] = True
-        if self.prefer is not None:
-            request.priority = int(10 * float(self.prefer(url)))
+        priority = int(10 * float(self.prefer(url))) if self.prefer is not None else 0
+        if self.per_pattern and url not in self._queued:
+            self._queued.add(url)
+            pattern = url_template(url)
+            free = pattern in self._wanted_patterns or (listed and pattern not in self._unwanted_patterns)
+            if spread and not free:
+                # the n-th link of a pattern waits for the first of every other: a tier lower each time
+                self._top = max(self._top, priority)
+                priority -= 100 * (self._patterns[pattern] // self.per_pattern)
+            elif spread:
+                # a free link is worth the best listing queued so far: before any pattern's next turn, and before
+                # the first turn of a listing found later (a category's own pagination) that prefer ranks higher
+                priority = max(priority, self._top)
+            self._patterns[pattern] += 1
+        request.priority = priority
         return request
 
     def start_requests(self) -> Any:
-        for url in self.start_urls:
-            yield self._request(str(url))
+        for url in self.start_urls:  # (the start page and the sitemaps' spread: sampled as given)
+            yield self._request(str(url), spread=False)
 
     def parse(self, response: Response) -> Any:
         if self.keep_pages and response.is_html:
             self.kept.append(response)
         if not response.is_html:
             return
+        listed: set[str] = set()
+        if self.wanted is not None:
+            verdict = self.wanted(response)
+            if verdict is not None:  # (unsure: nothing learned about the pattern)
+                (self._wanted_patterns if verdict else self._unwanted_patterns).add(url_template(response.url))
+            listed = _listed(response)
         for link in response.links(same_domain=True):
-            yield self._request(link)
+            yield self._request(link, listed=link in listed)
         next_url = response.next_page()
         if next_url:
             yield self._request(next_url)
+
+
+def _listed(response: Response) -> set[str]:
+    """The links of the page's lists of records (its cards' own links): what a listing lists, before it is
+    known what kind of page they lead to."""
+    found: set[str] = set()
+    for group in response.detect_records(min_records=2):  # (a small category lists two)
+        if group.convincing and "url" in group.fields:
+            found.update(url for record in group.extract(response.url) if isinstance(url := record.get("url"), str))
+    return found
 
 
 def _spread(urls: list[str], count: int) -> list[str]:
@@ -188,6 +237,8 @@ def survey_site(
     keep_pages: bool = False,
     prefer: Callable[[str], bool | float] | None = None,
     extra_urls: Iterable[str] = (),
+    per_pattern: int | None = None,
+    wanted: Callable[[Response], bool | None] | None = None,
     log_level: str | None = "WARNING",
     **spider_settings: Any,
 ) -> SiteSurvey:
@@ -202,6 +253,15 @@ def survey_site(
         prefer: How much a page is worth sampling (``prefer(url) -> score``, ``True``/``False`` too):
             the sitemaps' pages are sampled best first, and links are followed best first.
         extra_urls: Pages to visit besides the start page and the sitemap sample.
+        per_pattern: Links of one URL pattern followed before the other patterns get their turn (by default a
+            fifth of ``pages``, two at least), so the sample is spread across the site's patterns; ``0``: page
+            order alone.
+        wanted: ``wanted(page) -> bool | None``: whether a sampled page is what the survey looks for (a goal's
+            record page), ``None`` when unsure. Links of a wanted page's URL pattern are then free: followed
+            before the other patterns' next turn, ranked with the best of the listings; and so are the links of
+            a page's record cards (what a listing lists) until a page of their pattern is surely not wanted. A
+            site's fifty categories, and their own pagination, no longer crowd its record pages out of the
+            sample.
     """
     from ..fetchers import Fetcher
 
@@ -249,6 +309,8 @@ def survey_site(
         capture_api=browser,
         keep_pages=keep_pages,
         prefer=prefer,
+        per_pattern=max(2, pages // 5) if per_pattern is None else per_pattern,
+        wanted=wanted,
         timeout=timeout,
         output=None,
         keep_items=False,

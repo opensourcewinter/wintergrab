@@ -42,6 +42,21 @@ def test_markdown_main_content_only() -> None:
     assert "Home" not in md
 
 
+def test_main_content_is_not_one_of_the_cards() -> None:
+    """A product page's "recently viewed" cards are <article>s too: the main content is the page's, not the
+    longest card (as on books.toscrape.com, whose product page is one <article> holding the cards)."""
+    cards = "".join(
+        f'<li><article class="card"><h3><a href="/p/{i}">Other {i}</a></h3><p class="price">£{i}.00</p></article></li>'
+        for i in range(4)
+    )
+    html = f'<body><div class="main"><h1>Own title</h1><p>Own text.</p></div><ul>{cards}</ul></body>'
+    md = wg.parse(html).markdown(main_content=True)
+    assert md.startswith("# Own title") and "Other 1" in md  # the body: no card is the main content
+    parsed = wg.parse(html)
+    skipped = parsed.markdown(skip=[el.root for el in parsed.css("article")])
+    assert "Own text." in skipped and "Other" not in skipped and "£" not in skipped
+
+
 def test_get_text_is_block_aware() -> None:
     text = wg.parse(DOC).css("body").first.get_text()
     lines = text.splitlines()

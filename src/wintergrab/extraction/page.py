@@ -17,8 +17,14 @@ __all__ = ["PageContext", "schema_types"]
 _MAX_MODEL_TEXT = 24_000  # characters of page text handed to an extraction model
 
 
+#: The kinds of structured data that hold typed objects, and their key in :func:`~wintergrab.parser.structured_data`.
+STRUCTURED_KEYS = {"json-ld": "json_ld", "microdata": "microdata", "rdfa": "rdfa"}
+STRUCTURED_KINDS = tuple(STRUCTURED_KEYS)
+
+
 def schema_types(node: Any) -> list[str]:
-    """The schema.org type names of a JSON-LD/microdata node (``"https://schema.org/Product"`` -> ``"Product"``)."""
+    """The schema.org type names of a JSON-LD, microdata or RDFa node (``"https://schema.org/Product"`` ->
+    ``"Product"``)."""
     if not isinstance(node, dict):
         return []
     declared = node.get("@type")
@@ -94,13 +100,14 @@ class PageContext:
     # -- structured data ---------------------------------------------------- #
     @cached_property
     def structured(self) -> dict[str, Any]:
-        """JSON-LD, microdata, OpenGraph, Twitter and meta tags (see :func:`~wintergrab.parser.structured_data`)."""
+        """JSON-LD, microdata, RDFa, OpenGraph, Twitter and meta tags (see
+        :func:`~wintergrab.parser.structured_data`)."""
         if self.parent is not None:
             return self.parent.structured
         try:
             return self.selector.structured_data()
         except Exception:  # pragma: no cover - defensive: broken markup must not stop extraction
-            return {"json_ld": [], "microdata": [], "opengraph": {}, "twitter": {}, "meta": {}}
+            return {"json_ld": [], "microdata": [], "rdfa": [], "opengraph": {}, "twitter": {}, "meta": {}}
 
     def nodes(self, kind: str) -> list[tuple[str, dict[str, Any]]]:
         """:meth:`iter_nodes` as a list, computed once per page."""
@@ -110,12 +117,12 @@ class PageContext:
         return list(cache[kind])
 
     def iter_nodes(self, kind: str) -> Iterator[tuple[str, dict[str, Any]]]:
-        """``(path, node)`` for every typed object in the page's JSON-LD (``kind="json-ld"``) or microdata.
+        """``(path, node)`` for every typed object in the page's JSON-LD (``kind="json-ld"``), microdata or RDFa.
 
         Nested objects that carry their own ``@type`` (a ``WebPage``'s
         ``mainEntity``, an ``ItemList``'s items) are included with their path.
         """
-        roots = self.structured.get("json_ld" if kind == "json-ld" else "microdata") or []
+        roots = self.structured.get(STRUCTURED_KEYS.get(kind, kind)) or []
         stack: list[tuple[str, Any]] = [(f"[{i}]", node) for i, node in reversed(list(enumerate(roots)))]
         while stack:
             path, node = stack.pop()
@@ -153,12 +160,25 @@ class PageContext:
         return [line.strip() for line in self.root.get_text().splitlines() if line.strip()]
 
     @cached_property
+    def other_records(self) -> set[Any]:
+        """The cards of the page's lists of other records ("Products you recently viewed", "customers also
+        bought": see :func:`~wintergrab.parser.autoextract.other_records`), lxml elements. Their values are not
+        the page's own: the strategies, the model's text and the selector learner leave them out. Empty for a
+        record of a listing (its element holds nothing else)."""
+        if self.scope is not None or self.selector.root is None:
+            return set()
+        from ..parser.autoextract import other_records
+
+        return other_records(self.selector.root)
+
+    @cached_property
     def main_text(self) -> str:
-        """The main content as Markdown, trimmed for an extraction model."""
+        """The main content as Markdown, trimmed for an extraction model (the other records' cards left out)."""
         root = self.root
-        text = root.markdown(main_content=self.scope is None)
+        skip = self.other_records
+        text = root.markdown(main_content=self.scope is None, skip=skip)
         if len(text) < 200 and self.scope is None:  # the "main" element was a small part of the page
-            text = root.markdown()
+            text = root.markdown(skip=skip)
         return text[:_MAX_MODEL_TEXT]
 
     def __repr__(self) -> str:

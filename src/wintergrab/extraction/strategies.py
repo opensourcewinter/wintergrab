@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 from ..data.normalize import coordinates_in_url, iter_numbers, normalize_availability, normalize_phone, parse_rating
 from ..parser import Selector
 from ..parser.text import tag_name, text_content
-from .page import PageContext, schema_types
+from .page import STRUCTURED_KINDS, PageContext, schema_types
 from .schemaorg import FIELD_PATHS, META_KEYS, camel, candidate_names, field_key, read_path, target_types
 
 if TYPE_CHECKING:
@@ -220,17 +220,18 @@ def _paths_for(name: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
 
 
 class StructuredData(Strategy):
-    """JSON-LD and microdata (schema.org): what the site publishes for machines.
+    """JSON-LD, microdata and RDFa (schema.org): what the site publishes for machines.
 
     Records come from the objects whose ``@type`` fits the schema's name
     (``product`` -> ``Product``...). A field is read from the paths schema.org
     uses for it (``price`` -> ``offers.price``...), from its own name in
-    camelCase, or from explicit ``sources`` such as ``"jsonld:Product.offers.price"``.
+    camelCase, or from explicit ``sources`` such as ``"jsonld:Product.offers.price"``
+    (``microdata:``, ``rdfa:`` likewise).
     """
 
     method = "json-ld"
     page_level = True
-    kinds = ("json-ld", "microdata")
+    kinds = STRUCTURED_KINDS
 
     def __init__(self, node: tuple[str, dict[str, Any]] | None = None, kind: str | None = None) -> None:
         #: Restrict to one object (a record of a listing made of several JSON-LD objects).
@@ -240,7 +241,7 @@ class StructuredData(Strategy):
     @staticmethod
     def _explicit(f: SchemaField, kind: str) -> list[tuple[str | None, str]]:
         """``(type or None, path)`` from ``sources`` like ``jsonld:Product.offers.price`` / ``microdata:offers.price``."""
-        prefixes = ("jsonld:", "json-ld:") if kind == "json-ld" else ("microdata:",)
+        prefixes = ("jsonld:", "json-ld:") if kind == "json-ld" else (f"{kind}:",)
         out: list[tuple[str | None, str]] = []
         for source in f.sources:
             for prefix in prefixes:
@@ -515,9 +516,40 @@ def _markers(page: PageContext) -> list[tuple[Selector, str]]:
 
 
 def _marked(page: PageContext, kind: str) -> list[Selector]:
-    """Elements whose class, id, itemprop, data-testid or rel mentions one of ``kind``'s words, in page order."""
+    """Elements whose class, id, itemprop, data-testid or rel mentions one of ``kind``'s words, in page order;
+    on a whole page, those outside its lists of other records (related products, "recently viewed")."""
     words = _DOM_WORDS[kind]
-    return [el for el, marker in _markers(page) if any(word in marker for word in words)]
+    found = [el for el, marker in _markers(page) if any(word in marker for word in words)]
+    if found and page.scope is None:
+        cards = _cards(page)
+        if cards:
+            found = [el for el in found if not _inside(el.root, cards)]
+    return found
+
+
+_HEADINGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _section_title(node: Any) -> bool:
+    """Whether an element holds nothing but a heading: the title of the section that follows it
+    (``<div id="product_description"><h2>Product Description</h2></div>`` on books.toscrape.com)."""
+    if tag_name(node) in _HEADINGS:
+        return True
+    headings = list(node.iter(*_HEADINGS))
+    return len(headings) == 1 and text_content(node) == text_content(headings[0])
+
+
+def _next_text(node: Any) -> str:
+    """The text of the element after ``node``, unless that is another section's title."""
+    following = next((el for el in node.itersiblings() if isinstance(el.tag, str)), None)
+    if following is None or _section_title(following):
+        return ""
+    return text_content(following)
+
+
+def _inside(node: Any, nodes: set[Any]) -> bool:
+    """Whether ``node`` is one of ``nodes`` or inside one."""
+    return node is not None and (node in nodes or any(a in nodes for a in node.iterancestors()))
 
 
 def _asides(page: PageContext) -> set[Any]:
@@ -536,8 +568,27 @@ def _asides(page: PageContext) -> set[Any]:
                 for header in root.iter("header")
                 if not any(tag_name(a) in ("main", "article") for a in header.iterancestors())
             )
+            found.update(_cards(page))
         cache[key] = found
     return cache[key]  # type: ignore[no-any-return]
+
+
+def _cards(page: PageContext) -> set[Any]:
+    """The cards of the page's lists of other records ("Products you recently viewed", "customers also bought":
+    :attr:`PageContext.other_records`): about other records than the page's own."""
+    return page.other_records
+
+
+def _text_outside_cards(page: PageContext) -> str:
+    """The page's visible text without its lists of other records (a record's element has none)."""
+    if page.scope is not None:
+        return page.text
+    cache = page.__dict__
+    if "_text_outside_cards" not in cache:
+        cards = _cards(page)
+        root = page.root.root
+        cache["_text_outside_cards"] = page.text if not cards or root is None else text_content(root, skip_nodes=cards)
+    return cache["_text_outside_cards"]  # type: ignore[no-any-return]
 
 
 _CART_BUTTON = re.compile(
@@ -674,8 +725,11 @@ class DomHeuristics(Strategy):
             "main img, article img",
             "img",
         )
+        cards = _cards(page) if page.scope is None else set()  # (related products' pictures are not this page's)
         for query in queries if page.scope is None else ("img",):
             for match in page.root.css(query):
+                if cards and _inside(match.root, cards):
+                    continue
                 value = _element_value(match, "image")
                 if value and not value.startswith("data:"):
                     out.append((value, f"dom:{query.split(',')[0]}"))
@@ -736,7 +790,14 @@ class DomHeuristics(Strategy):
         return [(f"{lat}, {lon}", source) for (lat, lon), source in _map_points(page)]
 
     def _description(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
-        found = self._texts(page, "description", "[class*=description]", max_len=20_000)
+        found = []
+        for match in _marked(page, "description"):
+            text = match.text
+            if text and match.root is not None and _section_title(match.root):
+                # <div id="product_description"><h2>Product Description</h2></div><p>...</p>: the text follows
+                text = _next_text(match.root)
+            if text and len(text) <= 20_000:
+                found.append((text, "dom:[class*=description]"))
         return sorted(found, key=lambda pair: -len(pair[0]))[:1]
 
     def _sku(self, page: PageContext, f: SchemaField) -> list[tuple[Any, str]]:
@@ -860,6 +921,9 @@ _AVAILABILITY_TEXT = re.compile(
 )
 
 
+_ZERO_AMOUNT = re.compile(r"^\D*0+(?:[.,]0+)?\D*$")
+
+
 class Patterns(Strategy):
     """Regular expressions over the visible text, for values with a recognisable shape.
 
@@ -873,13 +937,13 @@ class Patterns(Strategy):
 
     def candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]:
         kind = field_kind(f)
-        text = page.text
+        text = _text_outside_cards(page)  # (a related product's price is not this page's)
         if not text:
             return []
         found: list[str] = []
         label = kind
-        if kind == "price":
-            found = [m.group(0).strip() for m in _MONEY_TEXT.finditer(text)]
+        if kind == "price":  # (an amount of zero is a tax or a shipping line, not the record's price)
+            found = [m.group(0).strip() for m in _MONEY_TEXT.finditer(text) if not _ZERO_AMOUNT.match(m.group(0))]
         elif kind == "email":
             found = _EMAIL_TEXT.findall(text) if "@" in text else []
         elif kind == "phone":

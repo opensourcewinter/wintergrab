@@ -1,5 +1,10 @@
 # wintergrab
 
+[![PyPI](https://img.shields.io/pypi/v/wintergrab)](https://pypi.org/project/wintergrab/)
+[![Python](https://img.shields.io/pypi/pyversions/wintergrab)](https://pypi.org/project/wintergrab/)
+[![CI](https://github.com/opensourcewinter/wintergrab/actions/workflows/ci.yml/badge.svg)](https://github.com/opensourcewinter/wintergrab/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/opensourcewinter/wintergrab/blob/main/LICENSE)
+
 **Friendly web scraping that scales from one page to big crawls.**
 
 ```python
@@ -11,14 +16,45 @@ for quote in page.css(".quote"):
 ```
 
 wintergrab is a Python toolkit for grabbing data from websites. Simple things
-are one line. When a site is harder (JavaScript, bot checks, rate limits,
-thousands of pages), the same API scales up.
+are one line. When a site is harder (JavaScript, rate limits, thousands of
+pages), the same API scales up.
+
+## Why wintergrab
+
+- **Say what you want, get clean records.** No selectors to write:
+
+  ```bash
+  wintergrab goal "Find all books rated 4 stars or more with title, price and rating" \
+      --site https://books.toscrape.com/ -o books.jsonl
+  ```
+
+  It surveys the site, shows you a plan with what it will cost, then
+  collects typed, validated, de-duplicated records.
+- **Fast and light.** About 1,000 pages/s on one core in a
+  [reproducible benchmark](https://github.com/opensourcewinter/wintergrab/blob/main/benchmarks/README.md):
+  1.8× Crawlee and 3.8× Scrapy at the same concurrency, with under half
+  their memory.
+- **Keeps working when sites change.** Selectors that find their elements
+  again after a redesign, and extractors that repair themselves, with
+  versions you can roll back and a review queue when they are not sure.
+- **One API from one page to millions.** `wg.get()` for a page, a `Spider`
+  for a site, a disk-backed queue that survives `kill -9` for millions of
+  URLs, and a cache that replays whole crawls offline.
+- **Polite by default.** robots.txt, per-site throttling that backs off
+  when asked, and an honest browser: a refusal is reported, never worked
+  around.
+- **Tested everywhere it runs.** Over 1,200 tests on Linux, macOS and
+  Windows with Python 3.10 to 3.14, against a local test site, so they need
+  no internet.
+
+## Everything it does
 
 - **Fetch like a real browser.** HTTP requests carry Chrome/Firefox/Safari
   TLS and HTTP/2 fingerprints (via [curl_cffi](https://github.com/lexiforest/curl_cffi)).
   A headless Chromium (via [Playwright](https://playwright.dev/python/)) is
-  one flag away for JavaScript pages. It hides common automation tells and
-  waits out "checking your browser" interstitials.
+  one flag away for JavaScript pages. It is Chromium as it is: nothing hides
+  that it is automated, and a "checking your browser" page that clears by
+  itself is waited for.
 - **Parse with CSS or XPath.** Scrapy-style `::text` / `::attr(href)`,
   extraction schemas, search by text, "find similar elements", and
   HTML → Markdown/text conversion.
@@ -29,7 +65,7 @@ thousands of pages), the same API scales up.
   sessions (HTTP + browser, several accounts…), proxy rotation with health
   checks, **AutoThrottle** that backs off when a site pushes back,
   robots.txt support, and **pause/resume** (Ctrl+C, then run again).
-- **Scrape without selectors.** Pull JSON-LD/microdata/OpenGraph, the JSON
+- **Scrape without selectors.** Pull JSON-LD/microdata/RDFa/OpenGraph, the JSON
   state that React/Next/Vue apps embed in their HTML, and every table.
   `auto_extract()` finds a page's product grid or result list and names the
   fields. `learn({"title": "…", "price": "…"})` writes the selectors for you
@@ -57,6 +93,9 @@ thousands of pages), the same API scales up.
   to a browser, the others stay on fast HTTP; when the pages call a JSON API
   that holds the records, it is read instead, page by page. No site in mind?
   `--find-sites` asks a search API (with your key) which sites rank for it.
+  Run it again and again with `--provenance --heal DIR` and it is the whole
+  loop: where each value came from, selectors repaired when the site
+  changes, questions for you, a regression fixture per site.
 - **Click to build.** `wintergrab build URL -o FILE` shows the page without
   its scripts. Click a field, a repeated card, a table or the next-page
   link, and get a schema you can read, edit and test on the page. It
@@ -102,7 +141,9 @@ playwright install chromium            # one-time browser download (browser extr
 wintergrab doctor                      # check what is installed
 ```
 
-Python 3.10+ on Linux, macOS and Windows. On a fresh Linux machine, use
+wintergrab is in beta: until 1.0 an API may still change between minor
+versions, and [Upgrading from 0.2](https://github.com/opensourcewinter/wintergrab/blob/main/docs/migration.md)
+lists each change. Python 3.10+ on Linux, macOS and Windows. On a fresh Linux machine, use
 `playwright install --with-deps chromium` to get the browser's system
 libraries too. The development version installs straight from GitHub:
 `pip install "wintergrab @ git+https://github.com/opensourcewinter/wintergrab"`.

@@ -24,14 +24,17 @@ def test_selectors_learned_from_sample_pages(site) -> None:
     generated = generate_schema(_books(site, 1, 2, 3, 5), "product")
     fields = generated.fields
     assert fields["name"].selector == "h1" and fields["name"].found_by == "meta" and fields["name"].reproduced == 4
-    assert fields["price"].selector == "p.price_color"
-    assert fields["availability"].selector == "p.availability"  # not "p.instock": the class naming the field
-    assert fields["rating"].selector == "p.star-rating::attr(class)"  # "star-rating Three" reads as 3
+    assert fields["price"].selector == "div.product_main > p.price_color"  # the book's, not a related book's
+    assert fields["availability"].selector == "div.product_main > p.availability"  # not "p.instock": the class
+    assert fields["rating"].selector == "div.product_main > p.star-rating::attr(class)"  # naming the field; the
     assert fields["category"].selector == "ul.breadcrumb > li:nth-of-type(3) > a"
     assert fields["url"].status == "skipped" and fields["url"].note == "the page's own address"
     assert fields["currency"].status == "skipped" and fields["currency"].note == "read from price"
     assert fields["brand"].status == "not found"
-    assert generated.schema["price"].selectors == ["p.price_color"] and not generated.base["price"].selectors
+    # not "#product_description", the title of the description's section: the text, too long to look for
+    assert fields["description"].status == "not learned" and "longer than 300 characters" in fields["description"].note
+    assert generated.schema["price"].selectors == ["div.product_main > p.price_color"]  # class "Three" reads as 3
+    assert not generated.base["price"].selectors
     assert generated.values[0]["category"] == "Poetry" and generated.methods[0]["price"] == "dom"
     assert "selectors learned for 5 of 14 fields, from 4 pages" in generated.describe()
     # a page it was not generated from, read without anything else: the selectors agree with the page's
@@ -39,6 +42,7 @@ def test_selectors_learned_from_sample_pages(site) -> None:
     [other] = _books(site, 11)
     record = Extractor(generated.schema).extract(other)
     assert record.data["name"] == "Book number 11" and record.data["price"] == 26.5 and record.data["rating"] == 2
+    assert record.data["description"].startswith("Book number 11 is the story")  # read from the page's evidence
     assert record.fields["price"].method == "selector" and "dom" in record.fields["price"].agreed
     assert record.confidence > Extractor("product").extract(other).confidence
 
@@ -88,9 +92,11 @@ def test_a_scraper_generated_tested_and_accepted(site, tmp_path) -> None:
                               sites=[site.url + "/books/"], sample=15, on_stage=seen.append)  # fmt: skip
     assert result.accepted, result.describe()
     assert [s.name for s in seen] == ["plan", "generate", "lint", "test", "sample", "validate", "benchmark"]
-    assert result.stage("test").summary.startswith("5/5 pages give the expected values")
+    trained = min(5, result.stage("plan").details["record_pages"])  # generated from the sampled books, 5 at most
+    assert trained >= 3  # (the sample is spread over the site's URL patterns: category pages are in it too)
+    assert result.stage("test").summary.startswith(f"{trained}/{trained} pages give the expected values")
     sample = result.stage("sample").details
-    assert sample["unseen"] == 7 and sample["record_pages"] == 12  # the 12 books, 5 of them the samples
+    assert sample["record_pages"] == 12 and sample["unseen"] == 12 - trained  # all 12 books, less the samples
     validate = result.stage("validate")
     assert validate.details["agreed"] == validate.details["compared"] > 0
     benchmark = result.stage("benchmark").details
@@ -104,13 +110,17 @@ def test_a_scraper_generated_tested_and_accepted(site, tmp_path) -> None:
     # the plan names its schema, beside it; its records are read with it
     plan = GoalPlan.load(directory / "plan.json")
     assert plan.schema == "schema.json" and plan.extraction_schema()["name"].selectors == ["h1"]
+    rating = result.generated.fields["rating"].selector  # learned on books rated differently: the class they
+    assert rating.endswith("p.star-rating::attr(class)"), rating  # share, not one book's "Three"
     records = plan.run(max_pages=4, log_level=None).records
     assert records and all(r["_confidence"] > 0.9 for r in records)
     # the samples are extraction tests of the scraper
     assert FixtureSuite(directory / "fixtures").run().ok
     # again in the same directory: its own files replaced, the tests too
     again = generate_scraper("books with title and price", directory, sites=[site.url + "/books/"], sample=15)
-    assert again.accepted and len(FixtureSuite(directory / "fixtures").fixtures()) == 5
+    trained_again = min(5, again.stage("plan").details["record_pages"])  # (its own survey: fetched concurrently,
+    assert again.accepted and len(FixtureSuite(directory / "fixtures").fixtures()) == trained_again  # its sample
+    assert trained_again >= 3  # can hold a book more or less than the first one's)
 
 
 def test_a_model_while_generating_and_none_after(site, tmp_path) -> None:

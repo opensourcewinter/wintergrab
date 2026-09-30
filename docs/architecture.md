@@ -9,7 +9,7 @@ where something happens. Users start with [getting started](getting-started.md).
   fingerprint. A browser renders only the pages that need one. A page that
   is blocked or behind a bot check is never a reason to switch to a browser.
 - **Evidence before guesses.** Extraction reads what a page publishes for
-  machines first (JSON-LD, microdata, meta tags), then your selectors, then
+  machines first (JSON-LD, microdata, RDFa, meta tags), then your selectors, then
   labels, layout and text patterns. Every value keeps where it came from
   and how sure wintergrab is. A language model, when you name one, only
   fills gaps, and its answers are checked against the page.

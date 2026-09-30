@@ -217,7 +217,7 @@ Done for 0.2, guided by the "before" profile. Each shortcut is tested to return 
 Tried and rejected:
 - **Large LRU caches (65,536 entries) on the URL functions.** They gave a little more throughput but pushed the disk frontier's flat-memory test over its 16 MB budget. The regex fast paths get the win and hold no memory.
 - **One regex for the block-page markers.** An alternation was 5× slower than the 14 substring scans, and a case-insensitive one was 35× slower. The scans already run at memory speed (≈6 GB/s).
-- **Scanning only the `<title>` and the first 2 KB for the phrase markers.** It is faster, but it would miss challenge pages whose text sits further down. Detection wins here. A spider that only crawls sites known never to serve challenge pages can override `is_blocked` (see [anti-blocking](../docs/anti-blocking.md#6-detecting-blocks)).
+- **Scanning only the `<title>` and the first 2 KB for the phrase markers.** It is faster, but it would miss challenge pages whose text sits further down. Detection wins here. A spider that only crawls sites known never to serve challenge pages can override `is_blocked` (see [responsible access](../docs/responsible-access.md#blocked-pages)).
 
 Remaining ideas, ranked by expected gain:
 1. **Stop paying for curl_cffi's `requests` layer on the crawl path** (`fetchers/http.py`). Drive `curl_cffi.AsyncCurl` with a pool of `Curl` handles directly:

@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 __all__ = ["FieldDiagnosis", "diagnose"]
 
 _SURE_TYPE = 0.5  # page classifications at least this sure are named as causes
-_NAMES = {"json-ld": "JSON-LD", "microdata": "microdata", "opengraph": "OpenGraph", "meta": "meta tags",
+_NAMES = {"json-ld": "JSON-LD", "microdata": "microdata", "rdfa": "RDFa", "opengraph": "OpenGraph", "meta": "meta tags",
           "twitter": "Twitter cards", "selector": "the field's selectors", "embedded-json": "embedded JSON",
           "label": "labels", "records": "the page's records", "dom": "the page's layout", "pattern": "text patterns",
           "model": "the model"}  # fmt: skip

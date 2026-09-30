@@ -109,6 +109,17 @@ def test_provenance_and_to_dict(extractor: Extractor) -> None:
     assert record["price"] == 299.99 and record.get("nope", 1) == 1
 
 
+def test_rdfa() -> None:
+    page = """<div vocab="https://schema.org/" typeof="Product"><h1 property="name">Phone R</h1>
+    <div property="offers" typeof="Offer"><span property="price" content="149">$149</span>
+    <meta property="priceCurrency" content="USD"></div></div>"""
+    record = Extractor(PRODUCT).extract(page)
+    assert (record.data["name"], record.data["price"]) == ("Phone R", 149)
+    assert record.fields["price"].method == "rdfa" and record.fields["price"].source == "rdfa:Product.offers.price"
+    explicit = {"name": "product", "fields": {"amount": {"type": "number", "sources": ["rdfa:Product.offers.price"]}}}
+    assert Extractor(explicit).extract(page).data["amount"] == 149
+
+
 def test_microdata_and_opengraph() -> None:
     microdata = """<div itemscope itemtype="https://schema.org/Product"><h1 itemprop="name">Phone Y</h1>
     <div itemprop="offers" itemscope itemtype="https://schema.org/Offer"><span itemprop="price" content="199.00">$199</span>
@@ -388,6 +399,54 @@ def test_page_context_accepts_pages_and_rejects_others() -> None:
 # --------------------------------------------------------------------------- #
 # command line and crawls
 # --------------------------------------------------------------------------- #
+def test_other_records_cards_are_not_the_pages_own_values(site) -> None:
+    """A book page lists six other books with their prices and ratings ("Products you recently viewed", as on
+    books.toscrape.com). The book's own price and rating are read as surely as on a page without them, and the
+    other books' values are no alternatives (on the real site they were: prices at 0.35 confidence, a rating
+    dropped, six questions for the reviewer in fourteen records)."""
+    import wintergrab
+
+    page = wintergrab.get(site.url + "/books/catalogue/book-3/index.html")
+    extractor = Extractor("product", provenance=True)
+    record = extractor.extract(page).to_dict()
+    assert (record["name"], record["price"], record["rating"]) == ("Book number 3", 14.5, 4)
+    fields = record["_provenance"]["fields"]
+    assert fields["price"]["confidence"] >= 0.85 and "alternatives" not in fields["price"]
+    assert fields["rating"]["confidence"] >= 0.7 and "alternatives" not in fields["rating"]
+    candidates = extractor.candidates(page)
+    assert {c.raw for c in candidates["price"]} == {"£14.50"}  # the cards' prices are not even candidates
+    assert {c.raw for c in candidates["rating"]} == {"four"}
+    ctx = PageContext(page)  # a model is shown the page without them, and the product's own details
+    assert len(ctx.other_records) == 6
+    assert "UPC" in ctx.main_text and "Book number 3" in ctx.main_text and "Book number 4" not in ctx.main_text
+    # a listing page read record by record still reads each card
+    listing = wintergrab.get(site.url + "/books/")
+    assert len(Extractor("product").extract_all(listing)) == 4
+
+
+def test_a_description_under_its_section_title(site) -> None:
+    """books.toscrape.com titles a book's description in an element of its own (<div id="product_description">
+    <h2>Product Description</h2></div>) and writes it in the <p> after that: the description is the text, not
+    its title (read from the real markup, the generator learned #product_description, "Product Description" on
+    every page)."""
+    import wintergrab
+
+    page = wintergrab.get(site.url + "/books/catalogue/book-3/index.html")
+    description = Extractor("product").extract(page).data["description"]
+    assert description.startswith("Book number 3 is the story of a town") and len(description) > 300
+
+    def read(body: str) -> object:
+        doc = wintergrab.parse(f"<html><body><h1>Lamp</h1>{body}</body></html>")
+        return Extractor("product").extract(doc).data["description"]
+
+    assert read('<h2 class="description">Description</h2><div>A brass lamp with a linen shade.</div>') == (
+        "A brass lamp with a linen shade."
+    )
+    assert read('<div class="description"><h2>About</h2><p>A brass lamp.</p></div>') == "About A brass lamp."
+    # a section's title followed by another section's: no text of its own
+    assert read('<div id="product_description"><h2>Product Description</h2></div><div><h2>Details</h2></div>') is None
+
+
 def test_cli_get_extract(site, tmp_path, capsys) -> None:
     schema = tmp_path / "product.json"
     schema.write_text(

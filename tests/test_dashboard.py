@@ -82,6 +82,9 @@ def test_runs_and_what_lies_under_them(shop, tmp_path, dashboard_server) -> None
     assert data["metrics"]["pages"] == 5 and data["events"]["counts"]["record_deleted"] == 1
     assert data["quality"][0]["dataset"] == "products" and data["quality"][0]["records"] == 3
 
+    status, headers, text = fetch(server, "/metrics")  # for Prometheus: the last run's, as none is running
+    assert status == 200 and headers["Content-Type"].startswith("text/plain")
+    assert 'wintergrab_pages_total{run="run-2"} 5' in text and 'run="run-1"' not in text
     assert fetch(server, "/runs/run-9")[0] == 404 and fetch(server, "/nothing")[0] == 404
     assert fetch(server, "/", host="evil.example:8710")[0] == 403  # DNS rebinding: not for this host
     assert fetch(server, "/", method="POST")[0] == 405  # it changes nothing
@@ -137,6 +140,8 @@ def test_a_live_crawl(fresh_site, tmp_path, dashboard_server) -> None:
     assert '<div class="label">Queued</div>' in page
     live = json.loads(fetch(server, "/api/runs/run-1")[2])
     assert live["state"] == "running" and 0 < live["metrics"]["pages"] < 12
+    assert 0 < live["metrics"]["coverage"] <= 1 and '<div class="label">Coverage</div>' in page
+    assert 'wintergrab_coverage{run="run-1"}' in fetch(server, "/metrics")[2]  # (a running crawl's)
     crawl.join(20)
     assert json.loads(fetch(server, "/api/runs/run-1")[2])["metrics"]["pages"] == 12
 

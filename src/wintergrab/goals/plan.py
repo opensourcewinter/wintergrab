@@ -56,6 +56,7 @@ from .api import ApiSource, find_api
 from .goal import Goal
 
 if TYPE_CHECKING:
+    from ..fetchers.response import Response
     from ..intel.survey import SiteSurvey
     from .run import GoalResult
 
@@ -143,6 +144,9 @@ class Estimate:
         records: Records expected after the conditions.
         cpu_seconds: Processor time for parsing and extraction.
         storage_bytes: Size of the records as JSON Lines.
+        records_at_most: When none of the sampled records met the conditions, the most records the sample
+            allows (a share never seen in n records is under 3/n, 95 times in 100: the rule of three);
+            else ``None``. ``records`` is 0 then, and says less than this.
     """
 
     pages: int = 0
@@ -156,6 +160,7 @@ class Estimate:
     cpu_seconds: float = 0.0
     storage_bytes: int = 0
     basis: list[str] = field(default_factory=list)
+    records_at_most: int | None = None
 
     def __add__(self, other: Estimate) -> Estimate:
         return Estimate(
@@ -170,6 +175,11 @@ class Estimate:
             cpu_seconds=self.cpu_seconds + other.cpu_seconds,
             storage_bytes=self.storage_bytes + other.storage_bytes,
             basis=self.basis + other.basis,
+            records_at_most=(
+                None
+                if self.records_at_most is None and other.records_at_most is None
+                else _at_most(self) + _at_most(other)
+            ),
         )
 
     def describe(self) -> str:
@@ -180,9 +190,16 @@ class Estimate:
             f"requests: {self.requests:,}"
             + (f" ({self.browser_pages:,} in a browser)" if self.browser_pages else " (none in a browser)"),
             f"download: {_size(self.bytes)}; time: {_duration(self.seconds)}; CPU: {_duration(self.cpu_seconds)}",
-            f"records: about {self.records:,} ({_size(self.storage_bytes)} as JSON Lines)",
+            f"records: few if any (none of the sampled records meet the conditions): at most about "
+            f"{self.records_at_most:,}"
+            if self.records_at_most is not None
+            else f"records: about {self.records:,} ({_size(self.storage_bytes)} as JSON Lines)",
         ]
         return "\n".join(lines)
+
+
+def _at_most(estimate: Estimate) -> int:
+    return estimate.records if estimate.records_at_most is None else estimate.records_at_most
 
 
 def _size(n: float) -> str:
@@ -465,7 +482,19 @@ def survey_for(
         score = 2 if section and (path == section or path.startswith(section + "/")) else 0
         seen_as = classify_url(url).type
         score += 2 if seen_as in kind.page_types else 1 if seen_as in kind.listing_types else 0
-        return score + (1 if any(w in url.lower() for w in words) else 0)
+        where = urlsplit(url)
+        text = f"{where.path}?{where.query}".lower()  # (not the host: books.example names every page "books")
+        return score + (1 if any(w in text for w in words) else 0)
+
+    def wanted(page: Response) -> bool | None:
+        """Whether a sampled page is one of the goal's record pages (as :func:`plan_goal` will see it), or
+        ``None`` when the classifier is unsure: the URLs of its pattern can look like anything
+        (``/catalogue/{slug}_{id}/index.html`` reads as a category), so more of them are sampled before the
+        other patterns get their next turn."""
+        classified = classify_page(PageContext(page))
+        if classified.confidence < _SURE:
+            return None
+        return classified.type in kind.page_types
 
     return survey_site(
         site,
@@ -475,6 +504,7 @@ def survey_for(
         timeout=timeout,
         keep_pages=True,
         prefer=prefer,
+        wanted=wanted,
         log_level=log_level,
         **dict(settings or {}),
     )
@@ -522,11 +552,15 @@ def _plan_site(goal: Goal, survey: SiteSurvey, rendered: list[Any] | None = None
         ctx = PageContext(page)
         classified = classify_page(ctx)
         page_type = classified.type if classified.confidence >= _SURE else "unknown"  # a weak verdict decides nothing
-        # A list of records: classified as one, or a grid of cards (a strong repeating group; a
-        # breadcrumb or a small table repeats too, weakly). The classifier's record verdict wins.
+        # A list of records: classified as one, or a grid of record cards (a repeating group whose records link
+        # somewhere; a breadcrumb or a menu repeats too, weakly, and a table of properties links nowhere). The
+        # classifier's record verdict wins.
         lists = page_type in kind.listing_types or (
             page_type not in kind.page_types
-            and any(len(g.elements) >= 3 and g.score >= _GRID_SCORE for g in ctx.selector.detect_records())
+            and any(
+                len(g.elements) >= 3 and g.score >= _GRID_SCORE and "url" in g.fields
+                for g in ctx.selector.detect_records()
+            )
         )
         parse_seconds.append(time.perf_counter() - started)
         if page.source != "browser" and needs_javascript(page):
@@ -714,16 +748,24 @@ def _api_estimate(goal: Goal, plan: SitePlan, source: ApiSource, survey: SiteSur
 
 
 def _section_url(survey: SiteSurvey, path: str) -> str:
-    """A real URL for a section path (``/books`` may only answer as ``/books/``): the start URL, or one
-    of the sampled pages or their links, when their path is the section's."""
+    """A URL that exists for a section path: the start URL, a sampled page or one of their links whose path is
+    the section's (``/books`` may only answer as ``/books/`` or ``/books/index.html``); else the first sampled
+    page under the section, or one of the links, from which the crawl follows the section's own links; else
+    the start URL. Never a URL made up from the path: a site whose products live under ``/catalogue/category/
+    books/`` has no page at ``/catalogue/category/books`` (a 403 the crawl would give up on)."""
+    section = path.rstrip("/") or "/"
     candidates = [survey.url, *(page.url for page in survey.pages)]
     for page in survey.pages:
         if page.is_html:
             candidates.extend(page.links(same_domain=True))
     for url in candidates:
-        if (urlsplit(url).path.rstrip("/") or "/") == path.rstrip("/"):
+        page_path = urlsplit(url).path.rstrip("/") or "/"
+        if page_path == section or page_path in (f"{section}/index.html", f"{section}/index.htm"):
             return url.split("#")[0]
-    return survey.origin + path
+    for url in candidates:
+        if _under(urlsplit(url).path, [section]):
+            return url.split("#")[0]
+    return survey.url
 
 
 def _holds(condition: Expression, record: dict[str, Any]) -> bool:
@@ -819,7 +861,16 @@ def _estimate(
     expected = round(pages * min(1.0, record_rate) * pass_rate)
     if goal.limit:
         expected = min(expected, goal.limit)
-    if records:
+    at_most = None
+    if records and not pass_rate:  # a share the sample never saw can still be up to 3 in its size
+        at_most = round(pages * min(1.0, record_rate) * min(1.0, 3 / len(records)))
+        if goal.limit:
+            at_most = min(at_most, goal.limit)
+        basis.append(
+            f"records: none of the {len(records)} sampled records meet the goal's conditions, so at most "
+            f"{min(1.0, 3 / len(records)):.0%} of the record pages should (the rule of three)"
+        )
+    elif records:
         basis.append(f"records: {pass_rate:.0%} of the sampled records meet the goal's conditions")
     record_size = statistics.fmean(len(json.dumps(r, default=str)) for r in records) if records else 300.0
     return Estimate(
@@ -834,6 +885,7 @@ def _estimate(
         cpu_seconds=round((pages + listing) * per_page, 1),
         storage_bytes=int(expected * (record_size + 1)),
         basis=basis,
+        records_at_most=at_most,
     )
 
 

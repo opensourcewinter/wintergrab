@@ -91,7 +91,7 @@ reliable ones come first:
 
 | Method | Looks at |
 |---|---|
-| `json-ld`, `microdata` | schema.org data (`Product.offers.price`, `aggregateRating.ratingValue`...), picked by the schema's name (`product` -> `Product`) |
+| `json-ld`, `microdata`, `rdfa` | schema.org data (`Product.offers.price`, `aggregateRating.ratingValue`...), picked by the schema's name (`product` -> `Product`) |
 | `opengraph`, `twitter`, `meta` | `og:title`, `product:price:amount`, `<meta name=description>`, the `<title>` without the site name |
 | `selector` | the field's own `selectors` (CSS or XPath, `::text`, `::attr()`) |
 | `embedded-json` | state embedded by JavaScript apps (`__NEXT_DATA__`, `window.__STATE__`), by key name |
@@ -109,7 +109,15 @@ names a structured-data path explicitly.
 The heuristics avoid the usual traps: a struck-through price is the old
 price (a field named `list_price`, `old_price` or `was_price` takes it, `price`
 does not), and prices inside related-product blocks, carts, headers and
-footers are ignored.
+footers are ignored. The cards of a page's lists of other records ("Products
+you recently viewed", "customers also bought": a list of repeated cards with
+links that does not hold the page's `<h1>`) are left out for every field,
+whatever the list is called: their prices, ratings and pictures are not the
+page's own, and a model is not shown them either. In the visible text, an
+amount of zero ("Tax £0.00", free shipping) is no price. An element marked
+as the description that holds nothing but a heading (`<div
+id="product_description"><h2>Product Description</h2></div>`) is the title
+of the text after it, and that text is the description.
 
 ## Confidence
 
@@ -161,6 +169,16 @@ fv.notes, fv.validation                     # [], 'ok'
 the schema's name and version), each field's method, source, raw value,
 confidence, agreement, alternatives, notes and validation, and the record's
 validation issues. [Quality monitoring](data.md#quality) reads `_confidence`.
+
+A crawl (`crawl`/`goal --provenance`) adds `run`, the run's id in the
+[run registry](runs.md), and `output`, where the record went; a record from
+a site's API names the call, its page and the field of the answer each
+value was read from. A [pipeline](data.md#pipelines) adds `transforms` to
+each field it touched: the stage, the value before, the name a renamed
+field had, or that it was added or dropped. `wintergrab data trace
+items.jsonl price --where url=URL` (or `describe_provenance(record)`) reads
+it all back as lines: where the record came from, and how each value was
+read and changed ([data.md](data.md#where-a-value-came-from)).
 
 ## Why is this field empty?
 

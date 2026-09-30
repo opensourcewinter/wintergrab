@@ -4,6 +4,7 @@ import asyncio
 import csv
 import itertools
 import json
+import time
 from dataclasses import dataclass
 
 import pytest
@@ -51,6 +52,89 @@ def test_crawl_follows_pagination_and_details(site) -> None:
     assert result.stats["pages"] == 25
     assert result.stats["duplicates_filtered"] >= 20
     assert result.stats["status/200"] == 25
+
+
+class Section(Spider):
+    """Follows the links into the given sections of the site, and yields each page's title."""
+
+    log_level = None
+    obey_robots_txt = False
+    sections: tuple[str, ...] = ()
+
+    def parse(self, response):
+        yield {"url": response.url, "title": response.title}
+        for link in response.css("a::attr(href)").getall():
+            if link.startswith(self.sections):
+                yield response.follow(link)
+
+
+def test_pages_with_the_same_content_are_processed_once(site) -> None:
+    same = dict(start_urls=[site.url + "/same/1"], sections=("/same/",))
+    plain = Section(**same).run()
+    assert len(plain.items) == 3 and plain.stats["pages"] == 3  # three URLs, one page: read three times
+    exact = Section(skip_duplicate_pages=True, **same).run()
+    assert len(exact.items) == 1 and exact.stats["pages"] == 3 and exact.stats["duplicate_pages"] == 2
+    near = dict(start_urls=[site.url + "/near/1"], sections=("/near/",))
+    assert len(Section(skip_duplicate_pages="exact", **near).run().items) == 3  # (a number differs: not the same)
+    nearly = Section(skip_duplicate_pages="near", **near).run()
+    assert len(nearly.items) == 1 and nearly.stats["duplicate_pages"] == 2
+    with pytest.raises(ConfigurationError, match="skip_duplicate_pages"):
+        Section(skip_duplicate_pages="fuzzy", **same).run()
+
+
+def test_a_page_counts_as_its_canonical_page(site) -> None:
+    settings = dict(start_urls=[site.url + "/canonical/1"], sections=("/canonical/", "/product/1"), url_normalizer=True)
+    plain = Section(**settings).run()  # /canonical/1, /canonical/1?ref=again and /product/1: the product three times
+    assert sorted(i["url"] for i in plain.items) == sorted(
+        [site.url + "/canonical/1", site.url + "/canonical/1?ref=again", site.url + "/product/1"]
+    )
+    canonical = Section(canonical_dedupe=True, **settings).run()
+    assert [i["url"] for i in canonical.items] == [site.url + "/canonical/1"]  # it stands for /product/1
+    assert canonical.stats["pages"] == 2 and canonical.stats["canonical_skipped"] == 1  # (/product/1: not fetched)
+
+
+def test_rate_limit_headers_pause_the_crawl_of_a_domain(fresh_site) -> None:
+    class Limited(Spider):
+        log_level = None
+        obey_robots_txt = False
+        concurrency = 1
+        events_seen: list[dict] = []
+
+        def parse(self, response):
+            yield {"url": response.url}
+
+    urls = [
+        fresh_site.url + "/ratelimit?remaining=0&reset=1",
+        fresh_site.url + "/ratelimit?remaining=5&reset=10&style=x",
+    ]
+    spider = Limited(start_urls=urls)
+    spider.events.subscribe(lambda event: Limited.events_seen.append(event), "throttle_backoff")
+    started = time.monotonic()
+    result = spider.run()
+    assert result.stats["pages"] == 2 and result.stats["rate_limited"] == 1
+    assert time.monotonic() - started >= 0.9  # the second page waited for the window to reset
+    assert Limited.events_seen and Limited.events_seen[0]["retry_after"] == 1.0
+    domain = result.metrics["domains"][0]
+    assert domain["rate_limit"] == {"remaining": 5, "reset": 10.0, "pauses": 1} and domain["error_rate"] == 0.0
+
+
+def test_pressure_holds_new_requests_while_others_are_in_flight(fresh_site) -> None:
+    class Held(Spider):
+        log_level = None
+        obey_robots_txt = False
+        concurrency = 4
+
+        def parse(self, response):
+            yield {"url": response.url}
+
+    urls = [fresh_site.url + f"/slow?delay=0.2&n={i}" for i in range(6)]
+    result = Held(start_urls=urls, hold_at_memory=1).run()  # (any process is over one byte)
+    assert result.stats["pages"] == 6 and result.stats["held/memory"] > 0  # held, and still done
+    started = time.monotonic()
+    slow = [fresh_site.url + f"/slow?delay=0.4&n={i}" for i in range(10)]
+    result = Held(start_urls=slow, max_bytes_per_second=1).run()  # (a byte a second: over it at once)
+    assert result.stats["pages"] == 10 and result.stats["held/bandwidth"] > 0
+    assert time.monotonic() - started > 1.0
 
 
 def test_callback_styles(site) -> None:

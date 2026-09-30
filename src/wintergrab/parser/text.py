@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Container
 from urllib.parse import urljoin
 
 from lxml import etree
@@ -78,8 +79,14 @@ def tag_name(el: etree._Element) -> str:
     return tag.lower()
 
 
-def iter_text(el: etree._Element, skip: frozenset[str] = SKIP_TAGS, block_separator: str = "") -> list[str]:
-    """All text fragments inside ``el`` in document order, skipping invisible elements.
+def iter_text(
+    el: etree._Element,
+    skip: frozenset[str] = SKIP_TAGS,
+    block_separator: str = "",
+    skip_nodes: Container[etree._Element] = (),
+) -> list[str]:
+    """All text fragments inside ``el`` in document order, skipping invisible elements and the subtrees of
+    ``skip_nodes``.
 
     ``block_separator`` is inserted around block-level elements (and ``<br>``,
     table cells) so that text from different blocks does not run together.
@@ -94,7 +101,7 @@ def iter_text(el: etree._Element, skip: frozenset[str] = SKIP_TAGS, block_separa
         if not isinstance(node.tag, str):
             continue
         name = tag_name(node)
-        if node is not el and name in skip:
+        if node is not el and (name in skip or node in skip_nodes):
             continue
         is_block = block_separator and (name in BLOCK_TAGS or name in ("br", "td", "th"))
         if is_block:
@@ -109,9 +116,10 @@ def iter_text(el: etree._Element, skip: frozenset[str] = SKIP_TAGS, block_separa
     return out
 
 
-def text_content(el: etree._Element) -> str:
-    """Visible text of ``el`` with whitespace normalized (blocks separated by spaces)."""
-    return normalize_space("".join(iter_text(el, block_separator=" ")))
+def text_content(el: etree._Element, *, skip_nodes: Container[etree._Element] = ()) -> str:
+    """Visible text of ``el`` with whitespace normalized (blocks separated by spaces), the subtrees of
+    ``skip_nodes`` left out."""
+    return normalize_space("".join(iter_text(el, block_separator=" ", skip_nodes=skip_nodes)))
 
 
 def own_text(el: etree._Element) -> str:
@@ -122,12 +130,31 @@ def own_text(el: etree._Element) -> str:
 
 
 def find_main_content(root: etree._Element) -> etree._Element:
-    """Best guess at the element holding a page's main content."""
-    candidates = root.xpath("//main | //*[@role='main'] | //article")
+    """Best guess at the element holding a page's main content: the longest ``<main>``, ``role="main"`` or
+    ``<article>``, one of a row of repeated cards (``<li><article class="product">``, the related products)
+    aside; else the body."""
+    candidates = [e for e in root.xpath("//main | //*[@role='main'] | //article") if not _repeated(e)]
     if candidates:
         return max(candidates, key=lambda e: len(text_content(e)))
     body = root.find(".//body") if tag_name(root) != "body" else root
     return body if body is not None else root
+
+
+def _repeated(el: etree._Element) -> bool:
+    """Whether ``el`` is one of two or more siblings with the same tag and class (a card in a list), looking
+    through a wrapper that holds nothing else (``<li><article>``)."""
+    node = el
+    for _ in range(2):
+        parent = node.getparent()
+        if parent is None:
+            return False
+        key = (node.tag, node.get("class"))
+        if sum(1 for s in parent if isinstance(s.tag, str) and (s.tag, s.get("class")) == key) >= 2:
+            return True
+        if sum(1 for s in parent if isinstance(s.tag, str)) != 1:
+            return False
+        node = parent
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -181,8 +208,9 @@ def to_text(el: etree._Element) -> str:
 
 
 class _MarkdownRenderer:
-    def __init__(self, base_url: str | None) -> None:
+    def __init__(self, base_url: str | None, skip: Container[etree._Element] = ()) -> None:
         self.base_url = base_url
+        self.skip = skip  # subtrees left out
         self.code_blocks: list[str] = []
 
     # -- helpers ---------------------------------------------------------- #
@@ -210,7 +238,7 @@ class _MarkdownRenderer:
     # -- dispatch --------------------------------------------------------- #
     def node(self, el: etree._Element) -> str:
         name = tag_name(el)
-        if not name or name in SKIP_TAGS:
+        if not name or name in SKIP_TAGS or el in self.skip:
             return ""
         if name in ("h1", "h2", "h3", "h4", "h5", "h6"):
             text = normalize_space(self.inline(el))
@@ -279,7 +307,7 @@ class _MarkdownRenderer:
         lines: list[str] = []
         number = int(el.get("start", "1")) if (el.get("start") or "").isdigit() else 1
         for li in el:
-            if tag_name(li) != "li":
+            if tag_name(li) != "li" or li in self.skip:
                 continue
             marker = f"{number}. " if ordered else "- "
             number += 1
@@ -323,9 +351,9 @@ def _clean(text: str) -> str:
     return "\n".join(out).strip("\n")
 
 
-def to_markdown(el: etree._Element, base_url: str | None = None) -> str:
-    """Convert an element (usually ``<body>`` or ``<main>``) to Markdown."""
+def to_markdown(el: etree._Element, base_url: str | None = None, *, skip: Container[etree._Element] = ()) -> str:
+    """Convert an element (usually ``<body>`` or ``<main>``) to Markdown, the subtrees in ``skip`` left out."""
     try:
-        return _MarkdownRenderer(base_url).render(el)
+        return _MarkdownRenderer(base_url, skip).render(el)
     except RecursionError:  # absurdly deep documents
         return to_text(el)

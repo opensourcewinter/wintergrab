@@ -25,10 +25,12 @@ are left out.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, unquote, urlsplit
@@ -39,6 +41,8 @@ from ..spider.exporters import Exporter, _json_default, _size, dumps, to_dict
 from .common import column_name, kind_of, require
 
 __all__ = ["MySQLExporter", "read_mysql"]
+
+log = logging.getLogger(__name__)
 
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 _META = "_wintergrab_columns"
@@ -230,6 +234,42 @@ class MySQLExporter(Exporter):
         self._kinds: dict[str, str] = {col: kind for key, col, kind in rows if key}
         self._used = set(self._kinds) | {_ROWID}
 
+    def _rollback(self) -> None:
+        """Undo the transaction, and forget the columns it added. On a connection the server hung up, there is
+        nothing to undo: the transaction went with it."""
+        if self._conn.open:
+            with contextlib.suppress(self._pymysql.MySQLError):
+                self._conn.rollback()
+                self._load_columns()
+
+    def _reconnect(self) -> None:
+        """Connect again (the server hung up: a restart, a failover, an idle timeout), to the table as it is."""
+        with contextlib.suppress(Exception):
+            self._conn.close()
+        self._conn, _ = _connect(self.url)
+        self._load_columns()
+        log.warning("%s: the database hung up; connected again", self.table_name)
+
+    def _run(self, action: Callable[[], None], failed: str, items: int) -> None:
+        """Do ``action``, one transaction; when the server hung up, connect again and do it once more (``failed``
+        begins the error that says it could not be done, the ``items`` it leaves unwritten)."""
+        for attempt in (1, 2):
+            try:
+                action()
+                return
+            except self._pymysql.MySQLError as exc:
+                lost = not self._conn.open
+                self._rollback()
+                if not lost or attempt == 2:
+                    raise ExportError(f"{self.table_name}: {failed}{_message(exc)}", items=items) from None
+                try:
+                    self._reconnect()
+                except ConfigurationError as gone:
+                    raise ExportError(
+                        f"{self.table_name}: {failed}the database hung up, and does not answer again ({gone})",
+                        items=items,
+                    ) from None
+
     def _key_columns(self) -> list[str]:
         rows = self._execute(
             "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s"
@@ -304,7 +344,8 @@ class MySQLExporter(Exporter):
         text = dumps(row)
         self.bytes_written += _size(text) + 1  # type: ignore[operator]
         record = json.loads(text)  # JSON values, as every output gets them
-        try:
+
+        def columns() -> None:
             for key, value in record.items():
                 kind = kind_of(value)
                 if kind == "null" and key not in self._columns:
@@ -312,10 +353,8 @@ class MySQLExporter(Exporter):
                 if len(key.encode()) > 2048:
                     raise ExportError(f"{self.table_name}: a field name longer than 2,048 bytes: {key[:40]}...")
                 self._column(key, kind)
-        except self._pymysql.MySQLError as exc:
-            self._conn.rollback()
-            self._load_columns()
-            raise ExportError(f"{self.table_name}: {_message(exc)}") from None
+
+        self._run(columns, "", 1)
         self._rows.append(record)
         self.count += 1
         self._maybe_flush()
@@ -334,50 +373,50 @@ class MySQLExporter(Exporter):
 
     def flush(self) -> None:
         if not self._rows:
-            self._conn.commit()
+            if self._conn.open:
+                self._conn.commit()
             return
+        rows, self._rows = self._rows, []  # (written, or said not to be)
+        self._run(lambda: self._insert(rows), f"{len(rows)} item(s) not written: ", len(rows))
+
+    def _insert(self, rows: list[dict[str, Any]]) -> None:
         keyed = bool(self.unique_key and self._columns.get(self.unique_key))
         groups: dict[tuple[str, ...], list[list[Any]]] = {}
-        for record in self._rows:
+        for record in rows:
             fields = [k for k in record if k in self._columns]  # (a field only ever null has no column)
             columns = tuple(self._columns[k] for k in fields)
             groups.setdefault(columns, []).append([self._value(self._columns[k], record[k]) for k in fields])
-        try:
-            with self._conn.cursor() as cursor:
-                for columns, values in groups.items():
-                    head = f"INSERT INTO {self._table} ({', '.join(map(_quote, columns))}) VALUES "
-                    tail = ""
-                    if keyed and columns:
-                        if self._alias:
-                            updates = ", ".join(f"{_quote(c)} = _wg_new.{_quote(c)}" for c in columns)
-                            tail = f" AS _wg_new ON DUPLICATE KEY UPDATE {updates}"
-                        else:
-                            tail = " ON DUPLICATE KEY UPDATE " + ", ".join(
-                                f"{_quote(c)} = VALUES({_quote(c)})" for c in columns
-                            )
-                    placeholders = "(" + ", ".join(["%s"] * len(columns)) + ")"
-                    chunk: list[str] = []
-                    size = 0
-                    for row in values:
-                        text = cursor.mogrify(placeholders, row)  # escaped as execute() escapes
-                        if chunk and size + len(text) > _STATEMENT:
-                            cursor.execute(head + ", ".join(chunk) + tail)
-                            chunk, size = [], 0
-                        chunk.append(text)
-                        size += len(text) + 2
-                    cursor.execute(head + ", ".join(chunk) + tail)
-            self._conn.commit()
-        except self._pymysql.MySQLError as exc:
-            self._conn.rollback()
-            raise ExportError(f"{self.table_name}: {len(self._rows)} item(s) not written: {_message(exc)}") from None
-        finally:
-            self._rows.clear()
+        with self._conn.cursor() as cursor:
+            for columns, values in groups.items():
+                head = f"INSERT INTO {self._table} ({', '.join(map(_quote, columns))}) VALUES "
+                tail = ""
+                if keyed and columns:
+                    if self._alias:
+                        updates = ", ".join(f"{_quote(c)} = _wg_new.{_quote(c)}" for c in columns)
+                        tail = f" AS _wg_new ON DUPLICATE KEY UPDATE {updates}"
+                    else:
+                        tail = " ON DUPLICATE KEY UPDATE " + ", ".join(
+                            f"{_quote(c)} = VALUES({_quote(c)})" for c in columns
+                        )
+                placeholders = "(" + ", ".join(["%s"] * len(columns)) + ")"
+                chunk: list[str] = []
+                size = 0
+                for row in values:
+                    text = cursor.mogrify(placeholders, row)  # escaped as execute() escapes
+                    if chunk and size + len(text) > _STATEMENT:
+                        cursor.execute(head + ", ".join(chunk) + tail)
+                        chunk, size = [], 0
+                    chunk.append(text)
+                    size += len(text) + 2
+                cursor.execute(head + ", ".join(chunk) + tail)
+        self._conn.commit()
 
     def close(self) -> None:
         try:
             self.flush()
         finally:
-            self._conn.close()
+            if self._conn.open:  # (one the server hung up is closed already: closing it again is an error)
+                self._conn.close()
 
 
 def read_mysql(url: str) -> Iterator[dict[str, Any]]:

@@ -675,10 +675,12 @@ class DataSources:
 
     Attributes:
         url: The page.
-        html: Its repeated records in the HTML, the most convincing first.
+        html: Its repeated records in the HTML (the groups :func:`~wintergrab.auto_extract` would trust: not
+            its menus, breadcrumbs or pagers), the most convincing first.
         tables: Its ``<table>`` elements: rows and column names.
         json_ld: JSON-LD objects by ``@type``, and how many.
         microdata: Microdata items by type, and how many.
+        rdfa: RDFa items by type, and how many.
         meta: The OpenGraph, Twitter and meta fields it declares.
         embedded: The JSON an app embeds, by name, with the records in each.
         api: The API calls it made as it rendered (a browser fetch with ``capture=True``).
@@ -693,6 +695,7 @@ class DataSources:
     tables: list[dict[str, Any]] = field(default_factory=list)
     json_ld: dict[str, int] = field(default_factory=dict)
     microdata: dict[str, int] = field(default_factory=dict)
+    rdfa: dict[str, int] = field(default_factory=dict)
     meta: list[str] = field(default_factory=list)
     embedded: dict[str, list[Collection]] = field(default_factory=dict)
     api: list[ApiCall] = field(default_factory=list)
@@ -745,6 +748,8 @@ class DataSources:
             lines.append(_line("tables", "; ".join(tables[:3]) or "none"))
             lines.append(_line("JSON-LD", _counts(self.json_ld)))
             lines.append(_line("microdata", _counts(self.microdata)))
+            if self.rdfa:
+                lines.append(_line("RDFa", _counts(self.rdfa)))
             lines.append(_line("meta", _names(self.meta)))
             embedded = [
                 f"{name}: " + (collections[0].describe() if collections else "no list of records")
@@ -793,6 +798,7 @@ class DataSources:
                     "tables": self.tables,
                     "json_ld": self.json_ld,
                     "microdata": self.microdata,
+                    "rdfa": self.rdfa,
                     "meta": self.meta,
                     "embedded": {name: [c.to_dict() for c in cs] for name, cs in self.embedded.items()},
                     "api": [call.to_dict() for call in self.api] if self.recorded else None,
@@ -860,12 +866,15 @@ def data_sources(response: Any, *, recorded: bool | None = None) -> DataSources:
         if len(items) >= 2:
             json_ld_collections.append((kind, _collection("[]", items)))
     microdata = Counter(_type_name((item.get("@type") or "").split()) for item in structured.get("microdata") or [])
+    rdfa = Counter(_type_name(item.get("@type")) for item in structured.get("rdfa") or [])  # (several: a list)
     meta = [f"og:{k}" for k in structured.get("opengraph") or {}]
     meta += [f"twitter:{k}" for k in structured.get("twitter") or {}]
     meta += [str(k) for k in structured.get("meta") or {}]
-    html = []
-    for group in response.detect_records()[:3]:
-        html.append(HtmlRecords(group.container_selector, len(group.elements), list(group.fields)))
+    html = [  # the groups that look like records: a page's menus, breadcrumbs and pagers repeat elements too
+        HtmlRecords(group.container_selector, len(group.elements), list(group.fields))
+        for group in response.detect_records()
+        if group.convincing
+    ][:3]
     tables = [
         {"rows": len(table.get("rows") or []), "columns": [str(c) for c in table.get("headers") or []]}
         for table in response.tables()
@@ -879,6 +888,7 @@ def data_sources(response: Any, *, recorded: bool | None = None) -> DataSources:
         tables=tables,
         json_ld=dict(json_ld),
         microdata=dict(microdata),
+        rdfa=dict(rdfa),
         meta=meta,
         embedded=embedded,
         api=calls,

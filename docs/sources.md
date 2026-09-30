@@ -36,9 +36,11 @@ https://shop.example/catalog
 (The test suite's page, `tests/data/sources/catalog.html`, and its API.)
 
 - **HTML**: repeated elements with the same fields (cards, rows), as
-  [`auto_extract`](power-features.md) finds them.
-- **tables**, **JSON-LD**, **microdata**, **meta**: what `--tables` and
-  `--structured` read, counted.
+  [`auto_extract`](power-features.md) finds them: the groups it would trust,
+  so a page's menus, breadcrumbs and pagers, which repeat elements too, are
+  not listed as records.
+- **tables**, **JSON-LD**, **microdata**, **RDFa**, **meta**: what `--tables`
+  and `--structured` read, counted (RDFa is listed when the page has some).
 - **embedded JSON**: the lists of records in each blob `--json-data` reads.
 - **API calls**: with `--browser`, the calls the page made as it rendered,
   and the lists of records in their answers. Calls that differ only in

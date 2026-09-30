@@ -45,7 +45,7 @@ from ..data.similarity import content_hash, normalize_for_hash
 from ..errors import ConfigurationError
 from ..parser import Selector
 from .model import Image, ModelField, ModelRequest, call_model, grounding, model_name, parse_answer
-from .page import PageContext, schema_types
+from .page import STRUCTURED_KINDS, PageContext, schema_types
 from .schemaorg import target_types
 from .strategies import STRATEGIES, Candidate, DomHeuristics, RecordFields, Strategy, StructuredData, field_kind
 
@@ -60,6 +60,7 @@ log = logging.getLogger("wintergrab.extraction")
 DEFAULT_PRIORS: dict[str, float] = {
     "json-ld": 0.95,  # published by the site for machines (search engines check it)
     "microdata": 0.93,
+    "rdfa": 0.93,
     "selector": 0.92,  # written by you for this site
     "opengraph": 0.88,  # published for link previews: titles and images are reliable, prices less often present
     "twitter": 0.85,
@@ -620,7 +621,7 @@ class Extractor:
         container = container or self.schema.container
         wanted = target_types(self.schema.name)
         if wanted and container is None:
-            for kind in ("json-ld", "microdata"):
+            for kind in STRUCTURED_KINDS:
                 nodes = [(p, n) for p, n in ctx.nodes(kind) if wanted & set(schema_types(n))]
                 if len(nodes) >= min_records:
                     records = []

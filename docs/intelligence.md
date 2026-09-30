@@ -31,12 +31,12 @@ It adds up evidence. Each rule that applies gives its type a weight:
 
 | Evidence | Examples | Weight |
 |---|---|---:|
-| schema.org types in JSON-LD or microdata | `Product`, `NewsArticle`, `JobPosting`, `SearchResultsPage` (`Organization`: 1) | 1-6 |
+| schema.org types in JSON-LD, microdata or RDFa | `Product`, `NewsArticle`, `JobPosting`, `SearchResultsPage` (`Organization`: 1) | 1-6 |
 | `og:type` | `product`, `article`, `profile` | 3 |
 | a 404 status, "Page not found" in the title | | 8, 5 |
 | a password field in a small form | | 6 |
-| the URL | `/p/...`, `/category/`, `/blog/...`, `/careers/`, `?q=`, the site root | 2-4 |
-| layout | an add-to-cart button, many repeated cards with prices, pagination, a long `<article>`, a byline and a date, code blocks | 1-3 |
+| the URL | `/p/...`, `/category/` (`/shop/`, `/catalogue/`: a section that holds the products too, weaker), `/blog/...`, `/careers/`, `?q=`, the site root | 1-4 |
+| layout | an add-to-cart button of the page's own, one price in the title's block and an availability line next to it (a product, whatever the related-product cards below it list), many repeated cards with prices, pagination, a long `<article>` (not on a page offering one thing by its title, price and stock line: its long text is that thing's description), a byline and a date, code blocks | 1-3 |
 | wording | "Results for", "Sign in", "Apply now", "Get tickets" | 1.5-3 |
 
 The weights are evidence strengths chosen by hand, not trained
@@ -198,8 +198,9 @@ crawlability: robots.txt allows crawling, crawl-delay 1; 8 page(s) with a canoni
 ```
 
 (The profile of eleven generated pages of a WordPress shop, with a
-robots.txt and sitemaps. On a live site, `inspect` visits the start page and
-a sample spread across the sitemaps, so that more templates show up.)
+robots.txt and sitemaps. On a live site, `inspect` visits the start page, a
+sample spread across the sitemaps, and the pages their links lead to, a few
+of each URL pattern before more of any one, so that more templates show up.)
 
 | Part | From |
 |---|---|

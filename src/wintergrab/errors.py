@@ -321,7 +321,17 @@ class CheckpointError(StorageError):
 
 
 class ExportError(StorageError):
-    """Items could not be written to an output."""
+    """Items could not be written to an output.
+
+    Attributes:
+        items: How many items the error left unwritten, when it is known (a batch a database refused), else ``None``.
+    """
+
+    def __init__(self, message: str, *, items: int | None = None, context: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message, context=context)
+        self.items = items
+        if items is not None:
+            self.context.setdefault("items", items)
 
 
 class BudgetExceeded(WintergrabError):

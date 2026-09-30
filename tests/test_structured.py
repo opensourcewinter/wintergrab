@@ -135,7 +135,8 @@ def product_data() -> dict[str, Any]:
 
 
 def test_structured_data_shape(product_data: dict[str, Any]) -> None:
-    assert list(product_data) == ["json_ld", "microdata", "opengraph", "twitter", "meta"]
+    assert list(product_data) == ["json_ld", "microdata", "rdfa", "opengraph", "twitter", "meta"]
+    assert product_data["rdfa"] == []  # (the page has none)
 
 
 def test_json_ld_graph_list_and_lenient_parsing(product_data: dict[str, Any]) -> None:
@@ -220,6 +221,71 @@ def test_microdata_value_fallbacks() -> None:
     }
 
 
+RDFA_PAGE = """<!DOCTYPE html>
+<html vocab="https://schema.org/" prefix="dc: http://purl.org/dc/terms/ ex: https://example.org/ns#">
+<body>
+  <div typeof="Product" about="/products/widget#it">
+    <h1 property="name alternateName">Acme Widget</h1>
+    <img property="image" src="/img/widget.jpg" alt="">
+    <a property="url" href="/products/widget?color=red">buy</a>
+    <span property="dc:creator">Acme Ltd</span>
+    <span property="ex:tag">tools</span><span property="ex:tag">gadgets</span>
+    <meta property="sku" content="W-1">
+    <div property="offers" typeof="Offer" resource="#offer">
+      <span property="price" content="19.99">€19.99</span>
+      <meta property="priceCurrency" content="EUR">
+      <link property="availability" href="https://schema.org/InStock">
+      <time property="priceValidUntil" datetime="2026-12-31">end of the year</time>
+    </div>
+    <div property="review" typeof="Review"><span property="author">Bob</span></div>
+    <div property="review" typeof="Review"><span property="author">Eve</span></div>
+    <div typeof="Thing"><span property="name">Independent thing</span></div>
+  </div>
+  <section vocab="http://purl.org/dc/terms/" typeof="schema:Article">
+    <span property="title">A note</span>
+    <span property="schema:headline">Headline</span>
+  </section>
+  <p typeof="">no type</p>
+</body></html>"""
+
+
+def test_rdfa_items(product_data: dict[str, Any]) -> None:
+    product, thing, article, blank = structured_data(root_of(RDFA_PAGE), URL)["rdfa"]
+    assert product["@type"] == "https://schema.org/Product" and product["@id"] == "https://shop.test/products/widget#it"
+    assert product["name"] == product["alternateName"] == "Acme Widget"  # (two property names on one element)
+    assert product["image"] == "https://shop.test/img/widget.jpg"
+    assert product["url"] == "https://shop.test/products/widget?color=red"
+    assert product["dc:creator"] == "Acme Ltd"  # another vocabulary: its CURIE, as written
+    assert product["ex:tag"] == ["tools", "gadgets"]
+    assert product["sku"] == "W-1"
+    assert product["offers"] == {
+        "@type": "https://schema.org/Offer",
+        "@id": "https://shop.test/products/widget#offer",
+        "price": "19.99",  # (content= over the text)
+        "priceCurrency": "EUR",
+        "availability": "https://schema.org/InStock",
+        "priceValidUntil": "2026-12-31",
+    }
+    assert product["review"] == [
+        {"@type": "https://schema.org/Review", "author": "Bob"},
+        {"@type": "https://schema.org/Review", "author": "Eve"},
+    ]
+    assert "author" not in product and "price" not in product  # nested items keep their properties
+    assert thing == {"@type": "https://schema.org/Thing", "name": "Independent thing"}  # (not a property: its own)
+    # a vocabulary of its own; a schema.org type and property by CURIE (schema.org's always get short names)
+    assert article == {"@type": "https://schema.org/Article", "title": "A note", "headline": "Headline"}
+    assert blank == {}  # typeof="": an item of no type
+
+
+def test_rdfa_terms_without_a_vocabulary_and_the_known_prefixes() -> None:
+    html = """<div typeof="Product"><span property="name">Bare</span>
+      <span property="gr:hasCurrency">EUR</span></div>
+      <div typeof="schema:Person" prefix="s: https://schema.org/"><span property="s:name">Ann</span></div>"""
+    bare, person = structured_data(root_of(html), "https://x.test/")["rdfa"]
+    assert bare == {"@type": "Product", "name": "Bare", "gr:hasCurrency": "EUR"}  # (no vocab: terms as written)
+    assert person == {"@type": "https://schema.org/Person", "name": "Ann"}  # (schema.org by any prefix: short names)
+
+
 def test_opengraph_and_twitter(product_data: dict[str, Any]) -> None:
     assert product_data["opengraph"] == {
         "type": "product",
@@ -254,7 +320,7 @@ def test_meta(product_data: dict[str, Any]) -> None:
 
 def test_structured_data_on_a_bare_page() -> None:
     data = structured_data(root_of("<p>nothing to see</p>"))
-    assert data == {"json_ld": [], "microdata": [], "opengraph": {}, "twitter": {}, "meta": {}}
+    assert data == {"json_ld": [], "microdata": [], "rdfa": [], "opengraph": {}, "twitter": {}, "meta": {}}
     only_touch = structured_data(root_of('<link rel="apple-touch-icon" href="/t.png"><title></title>'))
     assert only_touch["meta"] == {"favicon": "/t.png"}  # no base URL: left relative
 

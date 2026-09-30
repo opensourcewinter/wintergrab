@@ -105,9 +105,11 @@ class Exporter:
         self._unflushed += 1
         now = time.monotonic()
         if self._unflushed >= FLUSH_EVERY or now - self._last_flush >= FLUSH_INTERVAL:
-            self.flush()
-            self._unflushed = 0
-            self._last_flush = now
+            try:
+                self.flush()
+            finally:  # (a flush that failed is not tried again with each item after it)
+                self._unflushed = 0
+                self._last_flush = now
 
     def close(self) -> None:  # pragma: no cover - interface
         raise NotImplementedError
@@ -569,6 +571,17 @@ def open_exporter(path: str | os.PathLike[str], *, append: bool = False, unique_
     cls = _resolve(found)
     target.parent.mkdir(parents=True, exist_ok=True)
     return cls(target, append=append, **({"unique_key": unique_key} if cls.supports_unique_key else {}))
+
+
+def output_failures(errors: int, not_written: int, output: str | os.PathLike[str]) -> str:
+    """The line that says a crawl's output failed (``export_errors``, ``items_not_written``): how many items it did
+    not take, when known."""
+    from ..redact import redact_url
+
+    where = "standard output" if os.fspath(output) == "-" else redact_url(os.fspath(output))
+    if not_written:
+        return f"{not_written:,} item(s) not written to {where} ({errors:,} error(s), logged above)"
+    return f"{errors:,} error(s) writing to {where} (logged above): items may be missing from it"
 
 
 def write_items(path: str | os.PathLike[str], items: list[Any]) -> Path:

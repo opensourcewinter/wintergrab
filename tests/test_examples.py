@@ -158,7 +158,7 @@ def test_13_record_and_replay(fresh_site, tmp_path) -> None:
 
 def test_14_generate_scraper(site, tmp_path, capsys) -> None:
     result = load("14_generate_scraper").main(site.url + "/books/", directory=str(tmp_path / "books"))
-    assert result.accepted and result.generated.fields["price"].selector == "p.price_color"
+    assert result.accepted and result.generated.fields["price"].selector == "div.product_main > p.price_color"
     printed = capsys.readouterr().out
     assert "accepted:" in printed and "record(s); the first:" in printed
 

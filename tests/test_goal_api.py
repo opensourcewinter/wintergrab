@@ -286,6 +286,18 @@ def test_a_recorded_run_replays_its_api(shop, modes, tmp_path) -> None:
     assert again.same and Shop.hits["api"] == 3
 
 
+def test_api_records_say_where_they_came_from(shop, modes) -> None:
+    result = _api_plan(shop).run(log_level=None, provenance=True)
+    first = next(r for r in result.records if r["name"] == "Laptop 1")
+    where = first["_provenance"]
+    assert where["url"] == f"{shop}/api/laptops?page=1&per_page={PER_PAGE}" and "fetched_at" in where
+    assert where["extractor"] == "product@1" and where["api"]["page"] == 1 and where["api"]["records"] == "items[]"
+    assert where["api"]["fields"]["price"] == "price" and where["api"]["method"] == "GET"
+    last = next(r for r in result.records if r["name"] == f"Laptop {TOTAL}")
+    assert last["_provenance"]["api"]["page"] == 3 and last["_provenance"]["url"].endswith("page=3&per_page=4")
+    assert all("_provenance" not in r for r in _api_plan(shop).run(log_level=None).records)  # (only when asked)
+
+
 def test_the_pages_when_asked(shop, modes, tmp_path) -> None:
     result = _api_plan(shop).run(log_level=None, use_api=False)
     assert len(result.records) == TOTAL and Shop.hits["api"] == 0 and result.notes == []

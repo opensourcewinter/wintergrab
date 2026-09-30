@@ -161,6 +161,44 @@ class RecordContext:
     reason: str = ""
 
 
+def _traced(before: Mapping[str, Any], after: dict[str, Any], stage: Stage) -> None:
+    """What ``stage`` did to a record that carries provenance, under ``_provenance["fields"][name]["transforms"]``:
+    the value before it changed it, the name a renamed field had (its provenance follows it), or that the stage
+    added or dropped the field."""
+    where = after.get("_provenance")
+    if not isinstance(where, dict) or stage.kind == "pipeline":  # (a nested pipeline's stages say it themselves)
+        return
+    fields = where.setdefault("fields", {})
+    if not isinstance(fields, dict):
+        return
+    step = {"stage": stage.name, "kind": stage.kind}
+    gone = [k for k in before if k not in after and not k.startswith("_")]
+    for name, value in after.items():
+        if name.startswith("_"):
+            continue
+        if name in before:
+            old = before[name]
+            if old is value or old == value:
+                continue
+            note = {**step, "before": old}
+        else:
+            source = next((k for k in gone if before[k] == value), None)
+            if source is None:
+                note = {**step, "added": True}
+            else:
+                gone.remove(source)
+                note = {**step, "from": source}
+                if source in fields and name not in fields:
+                    fields[name] = fields.pop(source)
+        evidence = fields.setdefault(name, {})
+        if isinstance(evidence, dict):
+            evidence.setdefault("transforms", []).append(note)
+    for name in gone:
+        evidence = fields.setdefault(name, {})
+        if isinstance(evidence, dict):
+            evidence.setdefault("transforms", []).append({**step, "dropped": True})
+
+
 def _item_result(record: dict[str, Any] | None, ctx: RecordContext) -> dict[str, Any]:
     if record is None:
         from ..spider.middleware import DropItem
@@ -1380,7 +1418,8 @@ class Deduplicate(Stage):
 
     ``Deduplicate(key="url")`` drops records whose URL was seen; without a key,
     records with the same content; ``near=True`` also catches lightly edited
-    copies (``similarity``: the share of shared word 3-grams, default 0.8).
+    copies (``similarity``: the share of shared word 3-grams, default 0.8), and
+    ``near="simhash"`` those whose SimHash is within ``distance`` bits (3).
     """
 
     kind = "dedupe"
@@ -1390,23 +1429,29 @@ class Deduplicate(Stage):
         key: str | Sequence[str] | None = None,
         *,
         fields: Sequence[str] | None = None,
-        near: bool = False,
+        near: bool | str = False,
         text_fields: Sequence[str] | None = None,
         similarity: float = 0.8,
+        distance: int = 3,
         mark: bool = False,
         name: str | None = None,
     ) -> None:
         super().__init__(name=name)
         if not 0 < similarity < 1:
             raise ConfigurationError("similarity must be between 0 and 1", key=self.name)
+        if near not in (False, True, "minhash", "simhash"):
+            raise ConfigurationError(f"near: true, 'minhash' or 'simhash', not {near!r}", key=self.name)
+        if not 0 <= distance < 16:
+            raise ConfigurationError("distance must be between 0 and 15 bits", key=self.name)
         self.deduplicator = Deduplicator(
-            key, fields=fields, near=near, text_fields=text_fields, similarity=similarity, mark=mark
+            key, fields=fields, near=near, text_fields=text_fields, similarity=similarity, distance=distance, mark=mark
         )
         self._options = {
             "fields": fields,
             "near": near,
             "text_fields": text_fields,
             "similarity": similarity,
+            "distance": distance,
             "mark": mark,
         }
 
@@ -1432,7 +1477,7 @@ class Deduplicate(Stage):
     def from_config(cls, options: Any, loader: ConfigLoader) -> Deduplicate:
         if isinstance(options, (str, list, tuple)):
             return cls(options)
-        allowed = {"key", "fields", "near", "text_fields", "similarity", "mark", "name"}
+        allowed = {"key", "fields", "near", "text_fields", "similarity", "distance", "mark", "name"}
         return cls(**_options(options, allowed, cls.kind))
 
     def to_config(self) -> dict[str, Any]:
@@ -2385,10 +2430,13 @@ class Pipeline:
         ctx = ctx if ctx is not None else RecordContext()
         current = record
         for stage in self.stages:
+            before = dict(current) if "_provenance" in current else None  # (a record with provenance: traced)
             result = stage.process(current, ctx)
             if result is None:
                 return None
             current = result
+            if before is not None:
+                _traced(before, current, stage)
         return current
 
     async def aprocess(self, record: dict[str, Any], ctx: RecordContext | None = None) -> dict[str, Any] | None:
@@ -2396,10 +2444,13 @@ class Pipeline:
         ctx = ctx if ctx is not None else RecordContext()
         current = record
         for stage in self.stages:
+            before = dict(current) if "_provenance" in current else None
             result = await stage.aprocess(current, ctx) if stage.is_async else stage.process(current, ctx)
             if result is None:
                 return None
             current = result
+            if before is not None:
+                _traced(before, current, stage)
         return current
 
     def __call__(self, record: Mapping[str, Any]) -> dict[str, Any] | None:

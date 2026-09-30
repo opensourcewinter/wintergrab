@@ -27,13 +27,15 @@ checks that it is up to date.
   - `post(self, url: str, **kwargs: Any) -> Response`
   - `put(self, url: str, **kwargs: Any) -> Response`
   - `request(self, method: str, url: str, *, params: Mapping[str, Any] | None = None, headers: Mapping[str, str] | None = None, cookies: Mapping[str, str] | None = None, data: Any = None, json: Any = None, proxy: str | None = None, timeout: float | None = None, retries: int | None = None, allow_redirects: bool | None = None, request: Request | None = None, **extra: Any) -> Response`: Async version of :meth:`Fetcher.request`.
-- **`AutoThrottle(*, enabled: bool = True, base_delay: float = 0.0, max_delay: float = 60.0, max_concurrency: int = 4, target_concurrency: float | None = None, backoff_factor: float = 2.0, min_backoff_delay: float = 1.0, recovery: float = 0.85, increase_every: int = 10, randomize: bool = True)`** (class). Adaptive, per-domain request pacing (AIMD - like TCP congestion control).
+- **`AutoThrottle(*, enabled: bool = True, base_delay: float = 0.0, max_delay: float = 60.0, max_concurrency: int = 4, target_concurrency: float | None = None, backoff_factor: float = 2.0, min_backoff_delay: float = 1.0, recovery: float = 0.85, increase_every: int = 10, randomize: bool = True, error_rate_backoff: float = 0.5)`** (class). Adaptive, per-domain request pacing (AIMD - like TCP congestion control).
   - `can_start(self, slot: DomainSlot, now: float) -> bool`
   - `describe(self, domain: str) -> str`: One line for reports, e.g.
+  - `error_rate(slot: DomainSlot) -> float | None`: The share of the last responses (at most 20) that failed; ``None`` before any.
   - `mode(self, slot: DomainSlot, now: float | None = None) -> str`: ``"paused"`` (honouring Retry-After), ``"backing off"`` (push-back in the last 30 s), ``"recovering"`` (slower than the target after a push-back) or ``"normal"``.
-  - `on_error(self, domain: str)`: A timeout or connection error: back off gently.
+  - `on_error(self, domain: str)`: A timeout or connection error: back off gently; errors that keep coming halve concurrency too.
   - `on_finish(self, slot: DomainSlot)`
   - `on_pushback(self, domain: str, retry_after: float | None = None)`: The site said "slow down" (429/503/block page).
+  - `on_rate_limit(self, domain: str, remaining: int | None, reset: float | None) -> bool`: The site's ``RateLimit`` headers: ``remaining`` requests in the window that ends in ``reset`` seconds.
   - `on_start(self, slot: DomainSlot, now: float)`
   - `on_success(self, domain: str, latency: float)`
   - `restore(self, data: dict[str, dict[str, Any]])`
@@ -173,7 +175,7 @@ checks that it is up to date.
   - `re_first(self, pattern: str | Pattern[str], default: str | None = None, flags: int = 0) -> str | None`
   - `save(self, path: str | Path) -> Path`: Write the raw body to a file and return its path.
   - `select(self, query: str, **kwargs: Any) -> SelectorList`: CSS or XPath, guessed from the query.
-  - `structured_data(self) -> dict[str, Any]`: JSON-LD, microdata, OpenGraph, Twitter cards and meta tags of the page.
+  - `structured_data(self) -> dict[str, Any]`: JSON-LD, microdata, RDFa, OpenGraph, Twitter cards and meta tags of the page.
   - `tables(self) -> list[dict[str, Any]]`: Every HTML table as records.
   - `urljoin(self, url: str) -> str`: Resolve a relative URL against this page.
   - `xpath(self, query: str, **kwargs: Any) -> SelectorList`: XPath query on the page.
@@ -203,13 +205,13 @@ checks that it is up to date.
   - `getall(self) -> list[str]`
   - `learn(self, examples: Mapping[str, str] | list[Mapping[str, str]]) -> Any`: Learn an extraction schema from example values ("scraping by example").
   - `links(self, css: str | None = None, *, allow: str | Iterable[str] | None = None, deny: str | Iterable[str] | None = None, domains: str | Iterable[str] | None = None, same_domain: bool = False, unique: bool = True) -> list[str]`: Absolute http(s) URLs of the links on the page (fragments removed).
-  - `markdown(self, *, main_content: bool = False) -> str`: Convert the element to Markdown (links and images made absolute).
+  - `markdown(self, *, main_content: bool = False, skip: Collection[Any] = ()) -> str`: Convert the element to Markdown (links and images made absolute).
   - `next_page(self) -> str | None`: URL of the "next page" link (rel=next, "Next", arrows, numbered pagination...), if any.
   - `re(self, pattern: str | Pattern[str], flags: int = 0) -> list[str]`: Apply a regex to the text and return every match.
   - `re_first(self, pattern: str | Pattern[str], default: str | None = None, flags: int = 0) -> str | None`
   - `remove_namespaces(self)`: Strip XML namespaces so ``//loc`` works on sitemaps and feeds.
   - `select(self, query: str, **kwargs: Any) -> SelectorList`: CSS or XPath, guessed from the query (XPath starts with ``/``, ``./`` or ``(``).
-  - `structured_data(self) -> dict[str, Any]`: Machine-readable data the page publishes: JSON-LD, microdata, OpenGraph, Twitter cards, meta tags.
+  - `structured_data(self) -> dict[str, Any]`: Machine-readable data the page publishes: JSON-LD, microdata, RDFa, OpenGraph, Twitter cards, meta tags.
   - `tables(self) -> list[dict[str, Any]]`: Every ``<table>`` as ``{"headers", "rows": [{header: value}], "caption"}`` (colspan/rowspan handled).
   - `urljoin(self, url: str) -> str`: Resolve a (possibly relative) URL against the page URL / ``<base>``.
   - `xpath(self, query: str, *, namespaces: Mapping[str, str] | None = None, adaptive: bool = False, auto_save: bool = False, identifier: str | None = None, min_score: float = 0.55, **variables: Any) -> SelectorList`: Select with XPath 1.0.
@@ -269,7 +271,7 @@ checks that it is up to date.
   - `search(self, query: str, *, provider: str = 'brave', pages: int = 1, **options: Any) -> SearchAnswer`: A search API's results for ``query`` (:func:`~wintergrab.intel.serp.search`: Brave's, Google's or your SearXNG, with your key from the environment), asked under this WinterGrab's network policy.
   - `sources(self, page: str | Response) -> DataSources`: Where a page's data is (:func:`~wintergrab.intel.sources.data_sources`): its HTML records, JSON-LD, embedded JSON and, in a browser, the API calls it makes.
 - **`WintergrabError`** (exception). Base class for every error raised by wintergrab.
-- **`__version__`** = `'0.2.0'`
+- **`__version__`** = `'0.3.0'`
 - **`aget(url: str, **kwargs: Any) -> Response`**. Async :func:`get`.
 - **`apost(url: str, **kwargs: Any) -> Response`**. Async :func:`post`.
 - **`arender(url: str, **kwargs: Any) -> Response`**. Async :func:`render`.
@@ -414,7 +416,7 @@ checks that it is up to date.
 - **`ModelRequest(fields: list[ModelField], text: str, url: str | None = None, schema_name: str = 'record', known: dict[str, Any] = ..., images: list[Image] = ...)`** (class). What an extraction model gets: the fields wanted and the page's content (Markdown), and a screenshot of the page when the extractor was asked to send one (``Extractor(vision=True)``).
   - `prompt(self) -> str`: A ready-made instruction for chat models (use it or build your own from the attributes).
 - **`PageContext(source: Any, *, url: str | None = None, fetched_at: float | None = None, scope: Selector | None = None, parent: PageContext | None = None)`** (class). A page (a :class:`~wintergrab.Response`, a :class:`~wintergrab.Selector` or HTML) ready for extraction.
-  - `iter_nodes(self, kind: str) -> Iterator[tuple[str, dict[str, Any]]]`: ``(path, node)`` for every typed object in the page's JSON-LD (``kind="json-ld"``) or microdata.
+  - `iter_nodes(self, kind: str) -> Iterator[tuple[str, dict[str, Any]]]`: ``(path, node)`` for every typed object in the page's JSON-LD (``kind="json-ld"``), microdata or RDFa.
   - `nodes(self, kind: str) -> list[tuple[str, dict[str, Any]]]`: :meth:`iter_nodes` as a list, computed once per page.
   - `scoped(self, element: Selector) -> PageContext`: The same page, looking only at ``element`` (one record of a listing).
 - **`Patterns()`** (class). Regular expressions over the visible text, for values with a recognisable shape.
@@ -435,7 +437,7 @@ checks that it is up to date.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`Strategy()`** (class). Base class: ``candidates(page, field, schema)`` returns what this strategy finds for one field.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
-- **`StructuredData(node: tuple[str, dict[str, Any]] | None = None, kind: str | None = None)`** (class). JSON-LD and microdata (schema.org): what the site publishes for machines.
+- **`StructuredData(node: tuple[str, dict[str, Any]] | None = None, kind: str | None = None)`** (class). JSON-LD, microdata and RDFa (schema.org): what the site publishes for machines.
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
 - **`VisualLayout()`** (class). Values beside, under or over a label named like the field, where the page draws them (a page fetched in a browser with ``layout=True``; see the module docs).
   - `candidates(self, page: PageContext, f: SchemaField, schema: Schema) -> list[Candidate]`
@@ -448,7 +450,7 @@ checks that it is up to date.
 - **`layout_pairs(layout: Layout) -> list[LabelledPair]`**. The labelled values drawn on the page (see the module docs).
 - **`layout_tables(layout: Layout, *, min_rows: int = 3, min_columns: int = 2) -> list[VisualTable]`**. The tables drawn on the page (see the module docs), in the order they are drawn.
 - **`register_strategy(strategy: type[Strategy], *, before: str | None = None)`**. Add a strategy extractors use by default: last, or before the one whose ``method`` is ``before``.
-- **`schema_types(node: Any) -> list[str]`**. The schema.org type names of a JSON-LD/microdata node (``"https://schema.org/Product"`` -> ``"Product"``).
+- **`schema_types(node: Any) -> list[str]`**. The schema.org type names of a JSON-LD, microdata or RDFa node (``"https://schema.org/Product"`` -> ``"Product"``).
 - **`value_key(value: Any) -> Any`**. What two values must share to count as the same (``$299.99`` = ``299.99``; case and spacing ignored).
 
 ## `wintergrab.extraction.templates`: Ready-made schemas
@@ -523,12 +525,12 @@ checks that it is up to date.
   - `diff(self, a: int | str = 'previous', b: int | str = 'latest', **options: Any) -> DatasetDiff`: The differences between two versions (by default the last two).
   - `get(self, ref: int | str) -> Version`: A version by number (``3``), name (``"v3"``), ``"latest"`` or ``"previous"``.
   - `load(self, ref: int | str = 'latest') -> list[dict[str, Any]]`: The records of a version.
-- **`Deduplicate(key: str | Sequence[str] | None = None, *, fields: Sequence[str] | None = None, near: bool = False, text_fields: Sequence[str] | None = None, similarity: float = 0.8, mark: bool = False, name: str | None = None)`** (class). Drop (or mark) duplicate records; see :class:`~wintergrab.data.dedupe.Deduplicator`.
+- **`Deduplicate(key: str | Sequence[str] | None = None, *, fields: Sequence[str] | None = None, near: bool | str = False, text_fields: Sequence[str] | None = None, similarity: float = 0.8, distance: int = 3, mark: bool = False, name: str | None = None)`** (class). Drop (or mark) duplicate records; see :class:`~wintergrab.data.dedupe.Deduplicator`.
   - `apply(self, record: dict[str, Any], ctx: RecordContext) -> dict[str, Any] | None`: Return the record (changed in place, or a new dict), or ``None`` to drop it (set ``ctx.reason``).
   - `details(self) -> str`: A short note for :meth:`Pipeline.describe`.
   - `classmethod from_config(cls, options: Any, loader: ConfigLoader) -> Deduplicate`
   - `to_config(self) -> dict[str, Any]`: The stage's configuration-file form: ``{kind: options}``.
-- **`Deduplicator(key: str | Sequence[str] | None = None, *, fields: Sequence[str] | None = None, near: bool = False, text_fields: Sequence[str] | None = None, similarity: float = 0.8, mark: bool = False)`** (class). Drop (or mark) duplicate records.
+- **`Deduplicator(key: str | Sequence[str] | None = None, *, fields: Sequence[str] | None = None, near: bool | str = False, text_fields: Sequence[str] | None = None, similarity: float = 0.8, distance: int = 3, mark: bool = False)`** (class). Drop (or mark) duplicate records.
   - `check(self, record: Mapping[str, Any]) -> tuple[str, int] | None`: ``(kind, index of the first record it duplicates)`` or ``None``; remembers new records.
   - `process_item(self, item: Any, spider: Any = None) -> Any`
   - `run(self, records: Iterable[Mapping[str, Any]]) -> list[Any]`: De-duplicate a list (the first occurrence is kept).
@@ -692,9 +694,11 @@ checks that it is up to date.
   - `to_config(self) -> dict[str, Any]`: The stage's configuration-file form: ``{kind: options}``.
 - **`compile_expression(source: str) -> Expression`**. :class:`Expression` with a cache (the same source compiles once).
 - **`content_hash(value: Any) -> str`**. A stable hex digest of ``value``'s normalized text (dicts and lists: of their sorted items).
+- **`describe_provenance(record: Mapping[str, Any], fields: Sequence[str] | None = None) -> str`**. Where the values of ``fields`` (every field by default) came from, as lines: the page or API call, the fetch time, the extractor, the run and the output; then per field how it was read, what else was found, and what the pipeline did to it.
 - **`diff_records(old: Iterable[Mapping[str, Any]], new: Iterable[Mapping[str, Any]], key: str | Sequence[str] | None = None, *, ignore: Iterable[str] = (), private: bool = False) -> DatasetDiff`**. The differences between two datasets.
 - **`distance_km(a: Any, b: Any) -> float | None`**. The great-circle distance between two points, in kilometres (to 0.1 km); ``None`` when either has no coordinates.
 - **`explain_inference(records: Iterable[Mapping[str, Any]], **options: Any) -> list[TypeGuess]`**. Why each field got its type (share of values the type could read, presence...).
+- **`find_records(path: str | Path, where: Mapping[str, Any] | None = None, *, limit: int | None = None) -> Iterator[dict[str, Any]]`**. The records of ``path`` (see :func:`~wintergrab.data.io.read_records`) whose fields have the values ``where`` gives, compared as text (``{"url": "https://shop.example/p/1"}``); all of them without ``where``.
 - **`get_path(record: Any, path: str, default: Any = None) -> Any`**. The value at a dotted ``path`` (``"offers.0.price"``); a key with that exact name wins.
 - **`group_records(records: Iterable[Mapping[str, Any]], by: str | Callable[[Mapping[str, Any]], Any], *, stats: Sequence[str] = (), country: str | None = None, fields: Mapping[str, str | Sequence[str]] | None = None, places: Sequence[Place] | None = None) -> list[Group]`**. Group ``records`` by a place part (``"country"``, ``"region"``, ``"city"``, ``"postal_code"``, ``"remote"``: read with :func:`places_of`, so ``"Germany"``, ``"DE"`` and ``"Deutschland"`` are one group), by another field (a dotted path), or by a function of the record.
 - **`hamming(a: int, b: int) -> int`**. Number of differing bits.
@@ -766,7 +770,7 @@ checks that it is up to date.
 - **`ENTITIES`**: a dict
 - **`EntityKind(name: str, words: tuple[str, ...], page_types: tuple[str, ...], listing_types: tuple[str, ...], fields: Mapping[str, Any], default_fields: tuple[str, ...], date_field: str | None = None)`** (class). A kind of record a goal can ask for.
   - `schema(self, fields: list[str]) -> Schema`: An extraction schema for these fields (types from :attr:`fields`, strings otherwise).
-- **`Estimate(pages: int = 0, exact: bool = False, listing_pages: int = 0, requests: int = 0, browser_pages: int = 0, bytes: int = 0, seconds: float = 0.0, records: int = 0, cpu_seconds: float = 0.0, storage_bytes: int = 0, basis: list[str] = ...)`** (class). What a plan will cost, and what the numbers rest on (``basis``).
+- **`Estimate(pages: int = 0, exact: bool = False, listing_pages: int = 0, requests: int = 0, browser_pages: int = 0, bytes: int = 0, seconds: float = 0.0, records: int = 0, cpu_seconds: float = 0.0, storage_bytes: int = 0, basis: list[str] = ..., records_at_most: int | None = None)`** (class). What a plan will cost, and what the numbers rest on (``basis``).
   - `describe(self) -> str`
 - **`GenerationResult(directory: Path, goal: Goal, stages: list[Stage] = ..., accepted: bool = False, reasons: list[str] = ..., plan: GoalPlan | None = None, generated: GeneratedSchema | None = None)`** (class). What :func:`generate_scraper` made, each step, and the verdict.
   - `describe(self) -> str`: Each step in a line (its problems and warnings under it), then the verdict.
@@ -787,10 +791,11 @@ checks that it is up to date.
   - `run(self, output: str | None = None, **options: Any) -> GoalResult`: Collect the records (see :func:`~wintergrab.goals.run.run_plan`).
   - `save(self, path: str | Path)`: Write the plan as JSON (edit it, and run it with :meth:`load` and :meth:`run`).
   - `to_dict(self, *, embed_schema: bool = False) -> dict[str, Any]`: The plan as JSON holds it; ``embed_schema``: a schema file's content rather than its name.
-- **`GoalResult(plan: GoalPlan, crawl: CrawlResult | None = None, records: list[dict[str, Any]] = ..., output: str | None = None, counts: Counter[str] = ..., found: Counter[str] = ..., pages: list[Response] = ..., notes: list[str] = ...)`** (class). What running a plan gave: the records (when kept), the crawl's result, and counts.
+- **`GoalResult(plan: GoalPlan, crawl: CrawlResult | None = None, records: list[dict[str, Any]] = ..., output: str | None = None, counts: Counter[str] = ..., found: Counter[str] = ..., pages: list[Response] = ..., notes: list[str] = ..., extractor: str | None = None, extractor_version: int | None = None, review: str | None = None)`** (class). What running a plan gave: the records (when kept), the crawl's result, and counts.
   - `summary(self) -> str`: The records, the fields they have, and what was left out and why.
-- **`GoalSpider(goal: Goal, plans: list[SitePlan], *, schema: Schema | None = None, keep_pages: bool = False, use_api: bool = True, **settings: Any)`** (class). Collects a goal's records, following a plan per site (see the module docs).
+- **`GoalSpider(goal: Goal, plans: list[SitePlan], *, schema: Schema | None = None, keep_pages: bool = False, use_api: bool = True, provenance: bool = False, heal: str | os.PathLike[str] | None = None, review: ReviewQueue | str | os.PathLike[str] | None = None, **settings: Any)`** (class). Collects a goal's records, following a plan per site (see the module docs).
   - `api_failed(self, request: Request, error: BaseException) -> Any`: An API request that failed: a refusal is reported; another failure on the first page leaves the site to its pages.
+  - `on_close(self, result: CrawlResult)`: A self-healing extractor keeps what it learned for the next run.
   - `parse(self, response: Response) -> Any`: A page of a ``follow`` plan: its record if it has one, and the links that lead to more.
   - `parse_api(self, response: Response) -> Any`: A page of a site's API: its records, and the next page.
   - `parse_record(self, response: Response) -> Any`: A page that holds a record: extract it.
@@ -806,7 +811,7 @@ checks that it is up to date.
 - **`parse_goal(text: str, *, sites: list[str] | None = None, parser: Callable[[str], Mapping[str, Any]] | None = None, now: datetime | None = None) -> Goal`**. A :class:`Goal` from a request in plain words (see the module docs).
 - **`path_pattern(urls: list[str]) -> str`**. A path pattern covering ``urls``: segments they share stay, the others become ``*``.
 - **`plan_goal(goal: Goal, *, sample: int = 30, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, surveys: dict[str, SiteSurvey] | None = None, log_level: str | None = 'WARNING', settings: Mapping[str, Any] | None = None, api: bool = True, probe: int = 3) -> GoalPlan`**. Plan ``goal`` for each of its sites (see the module docs).
-- **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, keep_pages: bool = False, use_api: bool = True, log_level: str | None = 'INFO', progress: bool | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
+- **`run_plan(plan: GoalPlan, output: str | None = None, *, max_pages: int | None = None, keep_items: bool | None = None, keep_pages: bool = False, use_api: bool = True, log_level: str | None = 'INFO', progress: bool | None = None, provenance: bool = False, heal: str | os.PathLike[str] | None = None, review: ReviewQueue | str | os.PathLike[str] | None = None, **settings: Any) -> GoalResult`**. Collect ``plan``'s records into ``output`` (``.jsonl``, ``.csv``, ``.json``...; see the module docs).
 
 ## `wintergrab.goals.api`: Records from the API a site's pages call
 
@@ -836,7 +841,7 @@ checks that it is up to date.
   - `describe(self, fields: int = 6) -> str`
   - `schema(self, name: str = 'records') -> Schema`: A data schema for these records (:func:`~wintergrab.data.inference.infer_schema`): a start to review.
   - `to_dict(self) -> dict[str, Any]`
-- **`DataSources(url: str, html: list[HtmlRecords] = ..., tables: list[dict[str, Any]] = ..., json_ld: dict[str, int] = ..., microdata: dict[str, int] = ..., meta: list[str] = ..., embedded: dict[str, list[Collection]] = ..., api: list[ApiCall] = ..., recorded: bool = False, endpoints: list[tuple[str | None, str]] = ..., document: list[Collection] | None = None, pagination: Pagination | None = None, _json_ld_collections: list[tuple[str, Collection]] = ...)`** (class). Where a page's data is (see the module docs).
+- **`DataSources(url: str, html: list[HtmlRecords] = ..., tables: list[dict[str, Any]] = ..., json_ld: dict[str, int] = ..., microdata: dict[str, int] = ..., rdfa: dict[str, int] = ..., meta: list[str] = ..., embedded: dict[str, list[Collection]] = ..., api: list[ApiCall] = ..., recorded: bool = False, endpoints: list[tuple[str | None, str]] = ..., document: list[Collection] | None = None, pagination: Pagination | None = None, _json_ld_collections: list[tuple[str, Collection]] = ...)`** (class). Where a page's data is (see the module docs).
   - `describe(self) -> str`
   - `richest(self) -> Source | None`: The place holding the most values (records x fields): often the one to read.
   - `sources(self) -> list[Source]`: Every place holding at least two records, those holding the most values (records x fields) first.
@@ -901,7 +906,7 @@ checks that it is up to date.
 - **`pagination_of(url: str, answer: Any = None, *, request: Mapping[str, Any] | None = None, records: int | None = None) -> Pagination | None`**. How the pages of the API ``url`` go, from its query parameters (or ``request``: a GraphQL call's variables, a JSON request body) and its ``answer``, or ``None`` when neither says.
 - **`read_sitemaps(origin: str, robots_text: str | None = None, *, max_sitemaps: int = 10, max_entries: int = 50000, **fetch_options: Any) -> SitemapRead`**. The pages a site's sitemaps list: those named in robots.txt, or ``/sitemap.xml``, following sitemap indexes, up to ``max_sitemaps`` sitemaps and ``max_entries`` pages.
 - **`script_endpoints(selector: Any, url: str) -> list[tuple[str | None, str]]`**. The API endpoints a page's inline scripts and ``data-`` attributes name, as ``(method, endpoint)``: calls (``fetch("/api/...")``, axios, jQuery, ``xhr.open``) and API-looking paths (``/api/``, ``/graphql``), query values left out (``https://shop.example/api/products?page=``).
-- **`survey_site(url: str, *, pages: int = 30, sitemaps: bool = True, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, keep_pages: bool = False, prefer: Callable[[str], bool | float] | None = None, extra_urls: Iterable[str] = (), log_level: str | None = 'WARNING', **spider_settings: Any) -> SiteSurvey`**. Read ``url``'s site: robots.txt, sitemaps, and ``pages`` pages, into a :class:`SiteSurvey`.
+- **`survey_site(url: str, *, pages: int = 30, sitemaps: bool = True, obey_robots: bool = True, browser: bool = False, timeout: float = 20.0, keep_pages: bool = False, prefer: Callable[[str], bool | float] | None = None, extra_urls: Iterable[str] = (), per_pattern: int | None = None, wanted: Callable[[Response], bool | None] | None = None, log_level: str | None = 'WARNING', **spider_settings: Any) -> SiteSurvey`**. Read ``url``'s site: robots.txt, sitemaps, and ``pages`` pages, into a :class:`SiteSurvey`.
 
 ## `wintergrab.intel.serp`: Search results
 
@@ -1183,6 +1188,7 @@ checks that it is up to date.
 - **`Dashboard(workspace: str | Path = '.wintergrab', project: Any = None)`** (class). What the dashboard shows: a workspace's runs, and a project's jobs.
   - `items(self, run: Run, *, offset: int = 0, limit: int = 100) -> dict[str, Any]`: A page of the records ``run`` collected, read from its output file (``/api/runs/RUN/items``): ``{"run", "offset", "limit", "items", "next"}``, ``next`` the next page's offset (``None``: the last page), and a ``note`` when the rest could not be read (a crawl still writing it).
   - `jobs(self) -> list[dict[str, Any]]`: The project's jobs: what each does, its schedule, when it runs next, and its last run.
+  - `prometheus(self) -> str`: The running crawls' metrics in the Prometheus text format (``/metrics``), each metric labelled with its ``run``; the last run's when none is running.
   - `run(self, ref: str) -> Run`
   - `run_data(self, run: Run) -> dict[str, Any]`: Everything about a run, as JSON values (the run page, and ``/api/runs/RUN``).
   - `runs(self, limit: int = 200) -> list[Run]`

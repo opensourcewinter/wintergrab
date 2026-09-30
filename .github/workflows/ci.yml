@@ -23,6 +23,8 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy
+      - run: mypy --platform win32   # the stubs differ by platform (no resource module on Windows)
+      - run: mypy --platform darwin
 
   audit:
     name: dependency audit

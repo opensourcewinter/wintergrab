@@ -305,6 +305,7 @@ def test_detect_records_prefers_products_over_menus() -> None:
     assert best.container_selector == "article.product_pod"
     assert len(page.css(best.container_selector)) == len(best.elements)
     assert [g.score for g in groups] == sorted((g.score for g in groups), reverse=True)
+    assert best.convincing and not any(g.convincing for g in groups[1:])  # the menus are candidates, scored low
     assert {"title", "url", "image", "price", "rating", "availability"} <= set(best.fields)
     _selectors_are_valid(page, best.container_selector, best.fields)
     assert "RecordGroup('article.product_pod', 6 records" in repr(best)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -220,6 +221,144 @@ def test_plans_run_and_replay(site, tmp_path) -> None:
     assert limited.run(log_level=None).counts["records"] == 2
 
 
+def test_the_survey_samples_every_url_pattern(site) -> None:
+    """The books index links its twelve categories before its books, as books.toscrape.com lists fifty. A sample
+    is not spent on the first pattern seen: a few pages of each pattern come before more of any, so the record
+    pages are among them, and the plan knows their pattern (found by the live tests: the scraper generator saw 15
+    category pages and no book)."""
+    from collections import Counter
+
+    from wintergrab import url_template
+    from wintergrab.goals.plan import survey_for
+
+    goal = read("books with title and price", sites=[site.url + "/books/"])
+    survey = survey_for(goal, site.url + "/books/", sample=8, log_level=None)
+    patterns = Counter(url_template(p.url, include_host=False) for p in survey.pages)
+    assert len(survey.pages) == 8
+    assert patterns["/books/catalogue/{slug}/index.html"] >= 2  # the books
+    assert patterns["/books/catalogue/category/books/{slug}/index.html"] >= 2  # and the categories
+    plan = plan_goal(goal, sample=8)
+    assert plan.sites[0].target == ["/books/catalogue/*/index.html"]
+    assert not any("looked like a product page" in w for w in plan.sites[0].warnings)
+
+
+def test_the_survey_samples_more_of_the_pages_the_goal_wants(site) -> None:
+    """Once a sampled page is one of the goal's record pages, more links of its URL pattern are followed before
+    the other patterns' next turn, so a site's many categories do not crowd its record pages out of the sample
+    (on books.toscrape.com a 15-page sample held one book page; the plan's estimates rested on it)."""
+    from collections import Counter
+
+    from wintergrab import url_template
+    from wintergrab.goals.plan import survey_for
+
+    goal = read("Find all books rated 4 stars or more with title, price and rating", sites=[site.url + "/books/"])
+    # (without the site's sitemap: a third of the sample would come from it, other sections included)
+    survey = survey_for(goal, site.url + "/books/", sample=15, log_level=None, settings={"sitemaps": False})
+    patterns = Counter(url_template(p.url, include_host=False) for p in survey.pages)
+    assert len(survey.pages) == 15, patterns
+    assert patterns["/books/catalogue/{slug}/index.html"] >= 6  # the books: more than a pattern's share
+    assert patterns["/books/catalogue/category/books/{slug}/index.html"] == 3  # the categories: their share
+    plan = plan_goal(goal, surveys={site.url + "/books/": survey})
+    assert plan.sites[0].sample["record_pages"] >= 6
+    # the books rated 4 or more among them: 4 of the site's 12 (a book's long description had made every book
+    # page an unsure one, read as a listing of its six other books: "records: about 0")
+    assert plan.sites[0].sample["passing"] >= 1 and plan.sites[0].estimate.records >= 2
+
+
+def test_the_survey_learns_nothing_from_an_unsure_page(site) -> None:
+    """A page the classifier is unsure about says nothing about its URL pattern: what the listings list stays
+    followed freely. Only a page surely not wanted puts its pattern back into the queue's turns (on
+    books.toscrape.com the first book page sampled was unsure, and a 15-page sample fell back to three books)."""
+    from collections import Counter
+
+    from wintergrab import url_template
+    from wintergrab.intel.survey import _SurveySpider, survey_site
+
+    def categories_first(url: str) -> int:  # the goal's order: the listings rank, the site's other pages last
+        return 2 if "/category/" in url else 1 if "/books/" in url else 0
+
+    survey = survey_site(site.url + "/books/", pages=15, sitemaps=False, keep_pages=True, prefer=categories_first,
+                         wanted=lambda page: None, log_level=None)  # fmt: skip
+    patterns = Counter(url_template(p.url, include_host=False) for p in survey.pages)
+    assert patterns["/books/catalogue/{slug}/index.html"] >= 6, patterns
+    spider = _SurveySpider(start_urls=["https://s.example/"], per_pattern=2, wanted=lambda page: None)
+    assert [spider._request(f"https://s.example/p/{i}", listed=True).priority for i in range(3)] == [0, 0, 0]
+    spider._unwanted_patterns.add(url_template("https://s.example/p/9"))  # surely not wanted: turns again
+    assert [spider._request(f"https://s.example/p/{i}", listed=True).priority for i in range(3, 6)] == [
+        -100,
+        -200,
+        -200,
+    ]
+
+
+def test_a_plan_starts_from_a_page_that_exists(site) -> None:
+    """The part of a site a goal is about may have no page of its own: on books.toscrape.com the categories
+    live under /catalogue/category/books/, and /catalogue/category/books answers 403. The crawl starts from a
+    page under the section then, never from a URL made up from the path."""
+    from wintergrab.goals.plan import _section_url
+    from wintergrab.intel.survey import survey_site
+
+    survey = survey_site(site.url + "/books/", pages=6, keep_pages=True, log_level=None)
+    start = _section_url(survey, "/books/catalogue/category/books")
+    assert start.startswith(site.url + "/books/catalogue/category/books/") and start.endswith("/index.html")
+    assert _section_url(survey, "/books/catalogue/category/books_1") == (
+        site.url + "/books/catalogue/category/books_1/index.html"
+    )
+    assert _section_url(survey, "/books") == site.url + "/books/"  # the start page itself
+    assert _section_url(survey, "/nowhere") == site.url + "/books/"  # not origin + path
+
+
+def test_the_whole_loop_in_one_run(site, tmp_path, capsys) -> None:
+    """provenance=True, heal=DIR: records say where each value came from, the plan's schema is read by a
+    self-healing extractor kept in DIR (a fixture per site, questions in DIR/review.jsonl), and a redesign is
+    repaired the next time the plan runs."""
+    from wintergrab.cli import main
+    from wintergrab.extraction.healing import ExtractorVersions
+    from wintergrab.extraction.review import ReviewQueue
+
+    schema = tmp_path / "product.schema.json"
+    fields = {"name": {"type": "string", "selectors": ["h1"]}, "price": {"type": "money", "selectors": ["p.price"]}}
+    schema.write_text(json.dumps({"name": "product", "fields": {**fields, "url": "url"}}), encoding="utf-8")
+    heal = tmp_path / "ext"
+    products = plan_goal(read("products with name and price", sites=[site.url + "/products/page/1"]), sample=15)
+    products.schema = str(schema)
+    out = tmp_path / "products.jsonl"
+    result = products.run(str(out), log_level=None, provenance=True, heal=str(heal))
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert result.counts["records"] == len(rows) == 20
+    where = rows[0]["_provenance"]
+    assert where["url"] == rows[0]["url"] and where["extractor"] == "product@1" and "fetched_at" in where
+    assert where["fields"]["price"]["method"] == "selector"  # (the evidence per field, as the extractor keeps it)
+    versions = ExtractorVersions(heal)
+    assert versions.active_number == 1 and versions.load_state()["fields"]["price"]["baseline"] == 1.0
+    fixtures = versions.fixtures()  # the site's first complete record, as later versions must read it
+    assert len(fixtures) == 1 and fixtures[0].by == "goal" and "/product/" in fixtures[0].url
+    assert fixtures[0].expected["name"].startswith("Product") and fixtures[0].expected["price"]["currency"] == "USD"
+    assert versions.check_fixtures() == []
+    assert (result.extractor, result.extractor_version, result.review) == (str(heal), 1, str(heal / "review.jsonl"))
+    assert result.counts["fixtures"] == 1 and result.counts["repairs"] == 0 and result.counts["questions"] == 0
+    assert f"self-healing extractor {heal}: version 1, 1 regression fixture(s) kept" in result.summary()
+
+    # "the redesign": the books section, whose prices are p.price_color; the plan runs again, on the same extractor
+    books = plan_goal(read("books with title and price", sites=[site.url + "/books/"]), sample=15)
+    books.schema = str(schema)
+    books.save(tmp_path / "books.plan.json")
+    again = books.run(str(tmp_path / "books.jsonl"), log_level=None, provenance=True, heal=str(heal))
+    assert again.counts["records"] > 10 and again.counts["repairs"] == 1 and again.counts["fixtures"] == 0
+    assert ExtractorVersions(heal).active.reason == "repair of price: p.price -> .price_color (anchored)"
+    assert ", 1 repair(s) this run" in again.summary() and "question(s)" not in again.summary()
+    assert ReviewQueue(heal / "review.jsonl").pending() == []  # (nothing it could not decide)
+    # the command: the same, and the summary says what the extractor did
+    assert main(["goal", "--plan", str(tmp_path / "books.plan.json"), "--yes", "-o", str(tmp_path / "b.jsonl"),
+                 "--provenance", "--heal", str(heal)]) == 0  # fmt: skip
+    err = capsys.readouterr().err
+    assert f"self-healing extractor {heal}: version 2" in err
+    assert main(["goal", "--plan", str(tmp_path / "books.plan.json"), "--yes", "--review", "r.jsonl"]) == 2
+    assert "--review needs --heal" in capsys.readouterr().err
+    with pytest.raises(ConfigurationError, match="review needs heal"):
+        books.run(log_level=None, review=str(tmp_path / "r.jsonl"))
+
+
 def test_goal_command(site, tmp_path, capsys) -> None:
     from wintergrab.cli import main
 
@@ -260,3 +399,28 @@ def test_goal_command(site, tmp_path, capsys) -> None:
     assert len(capsys.readouterr().out.splitlines()) == 4
     assert main(["goal", "products with name and price"]) == 2  # no site
     assert "which site?" in capsys.readouterr().err
+
+
+def test_estimates_say_what_the_sample_cannot(site, tmp_path, capsys) -> None:
+    """A condition none of the sampled records met is no proof that none will: on books.toscrape.com a
+    sample of three books, none rated 4 or more, made the plan expect "about 0" records, and the crawl found
+    21. The estimate says "few if any" then, with the most the sample allows (the rule of three). And a
+    --max-pages under the pages the plan needs says where the crawl will stop, and the confirmation counts
+    the requests it will make."""
+    from wintergrab.cli import main
+
+    goal = read("books costing more than £500 with title and price", sites=[site.url + "/books/"])
+    estimate = plan_goal(goal, sample=15).sites[0].estimate
+    assert estimate.records == 0 and estimate.records_at_most is not None and estimate.records_at_most >= 1
+    assert "few if any" in estimate.describe() and "about 0" not in estimate.describe()
+
+    request = ["goal", "books rated 4 stars or more with title and price", "--site", site.url + "/books/"]
+    assert main([*request, "--sample", "15", "--plan-only", "--max-pages", "5"]) == 0
+    # (the pages the plan needs depend on the sample, which the survey fetches concurrently)
+    note = r"--max-pages 5 stops the crawl before the \d+ or more pages the plan needs: about \d+ of the \d+ records"
+    assert re.search(note, capsys.readouterr().out)
+    out = tmp_path / "books.jsonl"
+    assert main([*request, "--sample", "15", "--confirm-over", "8", "-o", str(out)]) == 0
+    assert "add --yes to run it" in capsys.readouterr().err and not out.exists()  # the whole plan: over the bar
+    assert main([*request, "--sample", "15", "--max-pages", "5", "--confirm-over", "8", "-o", str(out)]) == 0
+    assert "add --yes to run it" not in capsys.readouterr().err and out.exists()  # 5 requests: under it

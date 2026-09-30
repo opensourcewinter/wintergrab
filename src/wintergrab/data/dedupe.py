@@ -23,7 +23,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from ..urls import normalize_url
-from .similarity import MinHashLSH, content_hash, minhash, normalize_for_hash
+from .similarity import MinHashLSH, SimHashIndex, content_hash, minhash, normalize_for_hash, simhash
 
 __all__ = ["Deduplicator", "normalize_key"]
 
@@ -47,8 +47,11 @@ class Deduplicator:
     Args:
         key: Fields forming the record's identity. Records missing any of them are not key-checked.
         fields: Fields compared for content duplicates (default: all non-metadata fields).
-        near: Also catch near duplicates, comparing ``text_fields`` (default ``fields``).
+        near: Also catch near duplicates, comparing ``text_fields`` (default ``fields``): ``True`` (or
+            ``"minhash"``) by the Jaccard similarity of their word 3-grams, ``"simhash"`` by the Hamming
+            distance of their SimHash fingerprints (cheaper on long texts, and exact within ``distance``).
         similarity: The Jaccard similarity (0-1) from which texts count as near duplicates.
+        distance: With ``near="simhash"``: the bits (of 64) within which fingerprints count as the same.
         mark: Keep duplicates and set ``_duplicate_of`` (and ``_duplicate_kind``) instead of dropping them.
     """
 
@@ -57,11 +60,14 @@ class Deduplicator:
         key: str | Sequence[str] | None = None,
         *,
         fields: Sequence[str] | None = None,
-        near: bool = False,
+        near: bool | str = False,
         text_fields: Sequence[str] | None = None,
         similarity: float = 0.8,
+        distance: int = 3,
         mark: bool = False,
     ) -> None:
+        if near not in (False, True, "minhash", "simhash"):
+            raise ValueError(f"near: True, 'minhash' or 'simhash', not {near!r}")
         self.key = [key] if isinstance(key, str) else list(key or [])
         self.fields = list(fields) if fields is not None else None
         self.near = near
@@ -70,7 +76,9 @@ class Deduplicator:
         self._keys: dict[tuple[str, ...], int] = {}
         self._hashes: dict[str, int] = {}
         self.similarity = similarity
-        self._lsh = MinHashLSH(threshold=similarity, num_perm=_NUM_PERM) if near else None
+        self.distance = distance
+        self._lsh = MinHashLSH(threshold=similarity, num_perm=_NUM_PERM) if near in (True, "minhash") else None
+        self._index = SimHashIndex(distance) if near == "simhash" else None
         self.seen = 0
         self.duplicates: dict[str, int] = {"key": 0, "content": 0, "near": 0}
 
@@ -106,7 +114,7 @@ class Deduplicator:
         digest = content_hash(self._content(record))
         if digest in self._hashes:
             return "content", self._hashes[digest]
-        signature = None
+        signature = fingerprint = None
         if self._lsh is not None:
             text = self._text(record)
             if text.strip():
@@ -114,11 +122,20 @@ class Deduplicator:
                 matches = self._lsh.query(signature)
                 if matches:
                     return "near", int(matches[0][0])  # type: ignore[call-overload]
+        elif self._index is not None:
+            text = self._text(record)
+            if text.strip():
+                fingerprint = simhash(text)
+                within = self._index.query(fingerprint)
+                if within:
+                    return "near", int(within[0][0])  # type: ignore[call-overload]
         if key is not None:
             self._keys[key] = index
         self._hashes[digest] = index
         if signature is not None and self._lsh is not None:
             self._lsh.insert(index, signature)
+        if fingerprint is not None and self._index is not None:
+            self._index.add(index, fingerprint)
         self.seen += 1
         return None
 

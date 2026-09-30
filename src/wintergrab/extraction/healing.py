@@ -280,10 +280,11 @@ class ExtractorVersions:
         folder.mkdir(exist_ok=True)
         raw = html.encode("utf-8") if isinstance(html, str) else html
         number = len(list(folder.glob("*.json.gz"))) + 1
-        payload = {"url": url, "expected": dict(expected), "by": by, "html": raw.decode("utf-8", "replace")}
+        values = {str(k): _plain(v) for k, v in expected.items()}  # (typed values, a Money, as JSON holds them)
+        payload = {"url": url, "expected": values, "by": by, "html": raw.decode("utf-8", "replace")}
         (folder / f"{number:04d}.json.gz").write_bytes(gzip.compress(json.dumps(payload).encode("utf-8")))
-        self.log({"event": "fixture", "url": url, "fields": sorted(expected), "by": by})
-        return Fixture(url, dict(expected), raw, by)
+        self.log({"event": "fixture", "url": url, "fields": sorted(values), "by": by})
+        return Fixture(url, values, raw, by)
 
     def fixtures(self) -> list[Fixture]:
         folder = self.directory / "fixtures"

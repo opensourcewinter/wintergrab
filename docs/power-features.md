@@ -31,6 +31,7 @@ page = wg.get("https://shop.example/product/42")
 data = page.structured_data()
 data["json_ld"]        # [{"@type": "Product", "name": ..., "offers": {"price": ...}}]
 data["microdata"]      # itemscope/itemprop trees as dicts
+data["rdfa"]           # vocab/typeof/property trees, the same shape
 data["opengraph"]      # {"title": ..., "image": [...], "product:price:amount": ...}
 data["twitter"], data["meta"]   # twitter cards; title, description, canonical, language, feeds...
 ```
@@ -71,7 +72,9 @@ page.auto_extract()
 wintergrab finds the page's main repeating structure (a product grid, search
 results, table rows) and ignores menus, footers and tag clouds. It then names
 the fields it finds. `page.detect_records()` returns the candidate groups
-with their generated CSS selectors if you want to take it from there.
+with their generated CSS selectors if you want to take it from there; a
+group's `convincing` says whether `auto_extract` would trust it (a menu or a
+breadcrumb trail is a candidate too, scored low).
 
 ### Learning by example
 
