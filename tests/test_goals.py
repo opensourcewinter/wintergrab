@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -415,7 +416,11 @@ def test_estimates_say_what_the_sample_cannot(site, tmp_path, capsys) -> None:
 
     request = ["goal", "books rated 4 stars or more with title and price", "--site", site.url + "/books/"]
     assert main([*request, "--sample", "15", "--plan-only", "--max-pages", "5"]) == 0
-    assert "--max-pages 5 stops the crawl before the 15 or more pages the plan needs" in capsys.readouterr().out
+    # (the pages the plan needs depend on the sample, which the survey fetches concurrently)
+    note = r"--max-pages 5 stops the crawl before the \d+ or more pages the plan needs: about \d+ of the \d+ records"
+    assert re.search(note, capsys.readouterr().out)
     out = tmp_path / "books.jsonl"
+    assert main([*request, "--sample", "15", "--confirm-over", "8", "-o", str(out)]) == 0
+    assert "add --yes to run it" in capsys.readouterr().err and not out.exists()  # the whole plan: over the bar
     assert main([*request, "--sample", "15", "--max-pages", "5", "--confirm-over", "8", "-o", str(out)]) == 0
-    assert "add --yes to run it" not in capsys.readouterr().err and out.exists()  # 5 requests: under the bar
+    assert "add --yes to run it" not in capsys.readouterr().err and out.exists()  # 5 requests: under it
