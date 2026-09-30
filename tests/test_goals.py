@@ -398,3 +398,24 @@ def test_goal_command(site, tmp_path, capsys) -> None:
     assert len(capsys.readouterr().out.splitlines()) == 4
     assert main(["goal", "products with name and price"]) == 2  # no site
     assert "which site?" in capsys.readouterr().err
+
+
+def test_estimates_say_what_the_sample_cannot(site, tmp_path, capsys) -> None:
+    """A condition none of the sampled records met is no proof that none will: on books.toscrape.com a
+    sample of three books, none rated 4 or more, made the plan expect "about 0" records, and the crawl found
+    21. The estimate says "few if any" then, with the most the sample allows (the rule of three). And a
+    --max-pages under the pages the plan needs says where the crawl will stop, and the confirmation counts
+    the requests it will make."""
+    from wintergrab.cli import main
+
+    goal = read("books costing more than £500 with title and price", sites=[site.url + "/books/"])
+    estimate = plan_goal(goal, sample=15).sites[0].estimate
+    assert estimate.records == 0 and estimate.records_at_most is not None and estimate.records_at_most >= 1
+    assert "few if any" in estimate.describe() and "about 0" not in estimate.describe()
+
+    request = ["goal", "books rated 4 stars or more with title and price", "--site", site.url + "/books/"]
+    assert main([*request, "--sample", "15", "--plan-only", "--max-pages", "5"]) == 0
+    assert "--max-pages 5 stops the crawl before the 15 or more pages the plan needs" in capsys.readouterr().out
+    out = tmp_path / "books.jsonl"
+    assert main([*request, "--sample", "15", "--max-pages", "5", "--confirm-over", "8", "-o", str(out)]) == 0
+    assert "add --yes to run it" not in capsys.readouterr().err and out.exists()  # 5 requests: under the bar

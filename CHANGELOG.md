@@ -1245,6 +1245,13 @@ an error that says so, not a setting silently ignored
   and a generated scraper reads them from each page's own evidence. The test
   site's book pages have the real ones' description, as long as many of
   theirs.
+- **Estimates that say what the sample cannot.** A plan whose sampled
+  records all failed its conditions said "records: about 0" (three books on
+  books.toscrape.com, none rated 4 or more: the crawl found 21). It says
+  "few if any" now, with the most the sample allows by the rule of three
+  (`Estimate.records_at_most`). `wintergrab goal --max-pages` under the pages
+  the plan needs is shown with the records it leaves, and the confirmation
+  asked before a big crawl counts the requests the crawl will make.
 - **The DuckDB output waits for a held file on Windows too.** A file another
   program has open is waited for a few seconds; on Windows the system's
   message for it ("being used by another process") was not read as a hold,

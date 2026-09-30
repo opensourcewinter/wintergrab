@@ -127,7 +127,12 @@ CPU, storage) rest on the sample: its latency, page sizes, extraction time
 and the share of records meeting the conditions, robots.txt's crawl delay,
 and the spider's concurrency. `--explain` (or `plan.explain()`) prints what
 each rests on. Pages that need a browser are assumed to take 2 s each,
-eight at a time: that one is not measured.
+eight at a time: that one is not measured. When none of the sampled records
+meets the conditions, the plan does not promise none: it says "few if any"
+and the most the sample allows (a share never seen in n records is under
+3/n, the rule of three; `Estimate.records_at_most`). A `--max-pages` under
+the pages the plan needs is shown under the estimates, with the records it
+leaves, and the confirmation below counts the requests the crawl will make.
 
 A plan is JSON: save it, read it, edit it (the patterns, the start URLs,
 the conditions), and run it later:

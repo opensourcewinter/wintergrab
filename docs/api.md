@@ -770,7 +770,7 @@ checks that it is up to date.
 - **`ENTITIES`**: a dict
 - **`EntityKind(name: str, words: tuple[str, ...], page_types: tuple[str, ...], listing_types: tuple[str, ...], fields: Mapping[str, Any], default_fields: tuple[str, ...], date_field: str | None = None)`** (class). A kind of record a goal can ask for.
   - `schema(self, fields: list[str]) -> Schema`: An extraction schema for these fields (types from :attr:`fields`, strings otherwise).
-- **`Estimate(pages: int = 0, exact: bool = False, listing_pages: int = 0, requests: int = 0, browser_pages: int = 0, bytes: int = 0, seconds: float = 0.0, records: int = 0, cpu_seconds: float = 0.0, storage_bytes: int = 0, basis: list[str] = ...)`** (class). What a plan will cost, and what the numbers rest on (``basis``).
+- **`Estimate(pages: int = 0, exact: bool = False, listing_pages: int = 0, requests: int = 0, browser_pages: int = 0, bytes: int = 0, seconds: float = 0.0, records: int = 0, cpu_seconds: float = 0.0, storage_bytes: int = 0, basis: list[str] = ..., records_at_most: int | None = None)`** (class). What a plan will cost, and what the numbers rest on (``basis``).
   - `describe(self) -> str`
 - **`GenerationResult(directory: Path, goal: Goal, stages: list[Stage] = ..., accepted: bool = False, reasons: list[str] = ..., plan: GoalPlan | None = None, generated: GeneratedSchema | None = None)`** (class). What :func:`generate_scraper` made, each step, and the verdict.
   - `describe(self) -> str`: Each step in a line (its problems and warnings under it), then the verdict.

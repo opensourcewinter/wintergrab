@@ -720,6 +720,21 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _max_pages_note(estimate: Any, max_pages: int | None) -> str:
+    """What ``--max-pages`` leaves of a plan that needs more pages than that ("" when it needs fewer)."""
+    planned = estimate.pages + estimate.listing_pages
+    if not max_pages or max_pages >= planned:
+        return ""
+    share = max_pages / planned
+    more = "" if estimate.exact else " or more"
+    records = (
+        ""
+        if estimate.records_at_most is not None
+        else f": about {round(estimate.records * share):,} of the {estimate.records:,} records"
+    )
+    return f"  --max-pages {max_pages:,} stops the crawl before the {planned:,}{more} pages the plan needs{records}"
+
+
 def cmd_goal(args: argparse.Namespace) -> int:
     from .goals import GoalPlan, parse_goal, plan_goal
 
@@ -776,6 +791,9 @@ def cmd_goal(args: argparse.Namespace) -> int:
     if args.plan_only or args.verbose >= 0:
         whole = bool(args.plan) or args.plan_only  # else "Understood:" said what the goal is
         print(plan.describe() if whole else "\n" + plan.describe(goal=False), file=shown)
+        cut = _max_pages_note(plan.estimate, args.max_pages)
+        if cut:
+            print(cut, file=shown)
         if args.explain:
             print("\nWhat the estimates rest on:\n" + plan.explain(), file=shown)
     if args.plan_only:
@@ -784,14 +802,15 @@ def cmd_goal(args: argparse.Namespace) -> int:
     if not any(site.allowed for site in plan.sites):
         print("robots.txt keeps crawlers out: nothing to collect", file=sys.stderr)
         return 1
-    big = estimate.requests > args.confirm_over or estimate.browser_pages > 50
+    requests = min(estimate.requests, args.max_pages) if args.max_pages else estimate.requests
+    big = requests > args.confirm_over or min(estimate.browser_pages, requests) > 50
     if big and not args.yes:
         if sys.stdin.isatty():
-            answer = input(f"Run it? About {estimate.requests:,} requests. [y/N] ")
+            answer = input(f"Run it? About {requests:,} requests. [y/N] ")
             if answer.strip().lower() not in ("y", "yes"):
                 return 0
         else:
-            print(f"the plan makes about {estimate.requests:,} requests: add --yes to run it", file=sys.stderr)
+            print(f"the plan makes about {requests:,} requests: add --yes to run it", file=sys.stderr)
             return 0
     output = args.output or "-"
     if args.review and not args.heal:

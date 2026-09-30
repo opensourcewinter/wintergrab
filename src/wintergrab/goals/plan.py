@@ -144,6 +144,9 @@ class Estimate:
         records: Records expected after the conditions.
         cpu_seconds: Processor time for parsing and extraction.
         storage_bytes: Size of the records as JSON Lines.
+        records_at_most: When none of the sampled records met the conditions, the most records the sample
+            allows (a share never seen in n records is under 3/n, 95 times in 100: the rule of three);
+            else ``None``. ``records`` is 0 then, and says less than this.
     """
 
     pages: int = 0
@@ -157,6 +160,7 @@ class Estimate:
     cpu_seconds: float = 0.0
     storage_bytes: int = 0
     basis: list[str] = field(default_factory=list)
+    records_at_most: int | None = None
 
     def __add__(self, other: Estimate) -> Estimate:
         return Estimate(
@@ -171,6 +175,11 @@ class Estimate:
             cpu_seconds=self.cpu_seconds + other.cpu_seconds,
             storage_bytes=self.storage_bytes + other.storage_bytes,
             basis=self.basis + other.basis,
+            records_at_most=(
+                None
+                if self.records_at_most is None and other.records_at_most is None
+                else _at_most(self) + _at_most(other)
+            ),
         )
 
     def describe(self) -> str:
@@ -181,9 +190,16 @@ class Estimate:
             f"requests: {self.requests:,}"
             + (f" ({self.browser_pages:,} in a browser)" if self.browser_pages else " (none in a browser)"),
             f"download: {_size(self.bytes)}; time: {_duration(self.seconds)}; CPU: {_duration(self.cpu_seconds)}",
-            f"records: about {self.records:,} ({_size(self.storage_bytes)} as JSON Lines)",
+            f"records: few if any (none of the sampled records meet the conditions): at most about "
+            f"{self.records_at_most:,}"
+            if self.records_at_most is not None
+            else f"records: about {self.records:,} ({_size(self.storage_bytes)} as JSON Lines)",
         ]
         return "\n".join(lines)
+
+
+def _at_most(estimate: Estimate) -> int:
+    return estimate.records if estimate.records_at_most is None else estimate.records_at_most
 
 
 def _size(n: float) -> str:
@@ -845,7 +861,16 @@ def _estimate(
     expected = round(pages * min(1.0, record_rate) * pass_rate)
     if goal.limit:
         expected = min(expected, goal.limit)
-    if records:
+    at_most = None
+    if records and not pass_rate:  # a share the sample never saw can still be up to 3 in its size
+        at_most = round(pages * min(1.0, record_rate) * min(1.0, 3 / len(records)))
+        if goal.limit:
+            at_most = min(at_most, goal.limit)
+        basis.append(
+            f"records: none of the {len(records)} sampled records meet the goal's conditions, so at most "
+            f"{min(1.0, 3 / len(records)):.0%} of the record pages should (the rule of three)"
+        )
+    elif records:
         basis.append(f"records: {pass_rate:.0%} of the sampled records meet the goal's conditions")
     record_size = statistics.fmean(len(json.dumps(r, default=str)) for r in records) if records else 300.0
     return Estimate(
@@ -860,6 +885,7 @@ def _estimate(
         cpu_seconds=round((pages + listing) * per_page, 1),
         storage_bytes=int(expected * (record_size + 1)),
         basis=basis,
+        records_at_most=at_most,
     )
 
 
