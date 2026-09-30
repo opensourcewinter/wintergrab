@@ -465,26 +465,31 @@ def _traced_peak(run: Callable[[], object]) -> int:
         tracemalloc.stop()
 
 
-def _quarters(n: int, step: Callable[[int], None]) -> list[float]:
-    """How long each quarter of ``n`` calls of ``step`` took."""
-    out: list[float] = []
-    start = time.perf_counter()
+def _quarters(n: int, step: Callable[[int], None]) -> tuple[list[float], list[float]]:
+    """How long each quarter of ``n`` calls of ``step`` took: the wall-clock seconds, and the processor seconds
+    this process spent (what grows when a step's own cost does; not the time spent waiting for a slow disk)."""
+    wall: list[float] = []
+    cpu: list[float] = []
+    start, start_cpu = time.perf_counter(), time.process_time()
     for i in range(n):
         step(i)
         if (i + 1) % (n // 4) == 0:
-            out.append(time.perf_counter() - start)
-            start = time.perf_counter()
-    return out
+            wall.append(time.perf_counter() - start)
+            cpu.append(time.process_time() - start_cpu)
+            start, start_cpu = time.perf_counter(), time.process_time()
+    return wall, cpu
 
 
 def test_volume_throughput_and_flat_memory(db: Path) -> None:
     """200,000 requests over 20 domains: the cost of a push, and of a pop with its ack, stays flat as the queue
-    grows (the last quarter of the run costs no more than twice the first), and the memory stays small. No
-    wall-clock bound: a shared CI runner can be three times slower one day than the next (the Windows job took
-    173 s for what takes 23 s here, and failed a 120 s bound)."""
+    grows (the last quarter of the run costs no more processor time than twice the first), and the memory stays
+    small. No wall-clock bound: a shared CI runner can be three times slower one day than the next (the Windows
+    job took 173 s for what takes 23 s here, and failed a 120 s bound), and its disk can slow down while the test
+    writes (a Windows job's last quarter of pushes took 16.7 s against 4.2 s for the first, on a commit whose
+    Windows job had passed minutes before). A cost that grows with the queue shows in the processor time."""
     n = 200_000
     disk = DiskScheduler(db, FakeSpider())
-    push_quarters = _quarters(
+    push_wall, push_quarters = _quarters(
         n, lambda i: disk.push(Request(f"https://site{i % 20}.test/item/{i}?page={i // 20}", meta={"depth": 1}))
     )
     assert len(disk) == n
@@ -496,12 +501,15 @@ def test_volume_throughput_and_flat_memory(db: Path) -> None:
         assert request is not None
         disk.ack(request)
 
-    pop_quarters = _quarters(n, pop)
+    pop_wall, pop_quarters = _quarters(n, pop)
     assert disk.pop_ready(throttle, now)[0] is None and len(disk) == 0
     disk.close()
-    push_s, pop_s = sum(push_quarters), sum(pop_quarters)
+    push_s, pop_s = sum(push_wall), sum(pop_wall)
     print(f"\nDiskScheduler, {n:,} requests: push {n / push_s:,.0f}/s, pop+ack {n / pop_s:,.0f}/s")
-    print(f"quarters: push {[round(q, 2) for q in push_quarters]} s, pop+ack {[round(q, 2) for q in pop_quarters]} s")
+    print(f"quarters (wall): push {[round(q, 2) for q in push_wall]} s, pop+ack {[round(q, 2) for q in pop_wall]} s")
+    print(
+        f"quarters (CPU): push {[round(q, 2) for q in push_quarters]} s, pop+ack {[round(q, 2) for q in pop_quarters]} s"
+    )
     assert push_quarters[-1] < 2 * push_quarters[0], push_quarters
     assert pop_quarters[-1] < 2 * pop_quarters[0], pop_quarters
 
