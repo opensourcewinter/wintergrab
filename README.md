@@ -7,17 +7,35 @@
 
 **Friendly web scraping that scales from one page to big crawls.**
 
+## Quickstart
+
+WinterGrab reads and extracts data from pages you're allowed to fetch. This example uses a public practice site and needs no browser, account, or API key.
+
+Use Python 3.10 or newer. To reproduce this example with the 0.3.0 release:
+
+```sh
+python -m pip install "wintergrab==0.3.0"
+```
+
 ```python
 import wintergrab as wg
 
 page = wg.get("https://quotes.toscrape.com/")
-for quote in page.css(".quote"):
-    print(quote.css(".text::text").get(), "-", quote.css(".author::text").get())
+for quote in page.css(".quote")[:2]:
+    text = quote.css(".text::text").get()
+    author = quote.css(".author::text").get()
+    print(f"{author}: {text}")
 ```
 
-wintergrab is a Python toolkit for grabbing data from websites. Simple things
-are one line. When a site is harder (JavaScript, rate limits, thousands of
-pages), the same API scales up.
+Each line contains an author and a quote. For a repeatable test, serve a saved HTML fixture locally and change the URL to its local address.
+
+## Upgrading from 0.2 to 0.3
+
+- Remove the old `stealth` option and `Spider.fallback_session`. Use ordinary HTTP for static HTML and a browser for JavaScript-rendered content on pages you're authorized to access, not when a site refuses a request.
+- If you set `referer`, supply an actual referring URL or omit it if there is no referring page.
+- Respect robots.txt and slow down when a site asks you to.
+
+See the [0.3.0 changelog](CHANGELOG.md) and [responsible access guide](docs/responsible-access.md) for details.
 
 ## Why wintergrab
 
