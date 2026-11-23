@@ -1706,9 +1706,12 @@ class ConvertCurrency(Stage):
                     code = value.get("currency") or record_currency
                     if not self._same(code):
                         changes[field] = {**value, "amount": self._convert(value["amount"], code), "currency": self.to}
-                elif isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
-                    if not self._same(record_currency):
-                        changes[field] = self._convert(value, record_currency)
+                elif (
+                    isinstance(value, (int, float, Decimal))
+                    and not isinstance(value, bool)
+                    and not self._same(record_currency)
+                ):
+                    changes[field] = self._convert(value, record_currency)
         except (LookupError, InvalidOperation) as exc:
             self.error(str(exc))
             if self.on_error == "raise":
